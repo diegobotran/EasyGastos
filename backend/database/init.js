@@ -46,6 +46,13 @@ const expenseSchema = new mongoose.Schema({
   date: { type: String, required: true }, // Mantener como string para compatibilidad
   category: { type: String, required: true },
   status: { type: String, required: true, default: 'BORRADOR' },
+  expenseStatus: { 
+    type: String, 
+    required: true, 
+    enum: ['draft', 'in_liquidation', 'approved'],
+    default: 'draft'
+  },
+  liquidationId: { type: String, default: null }, // ID de la liquidación a la que pertenece
   supplier: { type: String, default: null },
   vat_number: { type: String, default: null },
   department: { type: String, default: null },
@@ -69,6 +76,29 @@ const expenseSchema = new mongoose.Schema({
 }, {
   timestamps: true,
   collection: 'expenses'
+});
+
+const liquidationSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true },
+  userId: { type: String, required: true }, // Email del empleado que creó la liquidación
+  employeeName: { type: String, required: true },
+  createdDate: { type: String, required: true }, // YYYY-MM-DD
+  expenseIds: { type: [String], required: true, default: [] }, // Array de IDs de gastos
+  totalAmount: { type: Number, required: true },
+  status: { 
+    type: String, 
+    required: true, 
+    enum: ['draft', 'submitted', 'approved', 'rejected'],
+    default: 'draft'
+  },
+  managerEmail: { type: String, default: null }, // Email del jefe que debe aprobar
+  managerComments: { type: String, default: null },
+  submittedDate: { type: String, default: null }, // YYYY-MM-DD
+  approvedDate: { type: String, default: null }, // YYYY-MM-DD
+  rejectedDate: { type: String, default: null } // YYYY-MM-DD
+}, {
+  timestamps: true, // createdAt y updatedAt
+  collection: 'liquidations'
 });
 
 const syncLogSchema = new mongoose.Schema({
@@ -105,6 +135,11 @@ expenseSchema.index({ managerEmail: 1 });
 expenseSchema.index({ date: 1 });
 expenseSchema.index({ userEmail: 1, date: -1 });
 
+liquidationSchema.index({ userId: 1 });
+liquidationSchema.index({ userId: 1, status: 1 });
+liquidationSchema.index({ managerEmail: 1, status: 1 });
+liquidationSchema.index({ createdDate: -1 });
+
 syncLogSchema.index({ userEmail: 1 });
 syncLogSchema.index({ createdAt: -1 });
 
@@ -115,6 +150,7 @@ const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 const User = mongoose.model('User', userSchema);
 const Category = mongoose.model('Category', categorySchema);
 const Expense = mongoose.model('Expense', expenseSchema);
+const Liquidation = mongoose.model('Liquidation', liquidationSchema);
 const SyncLog = mongoose.model('SyncLog', syncLogSchema);
 const Config = mongoose.model('Config', configSchema);
 
@@ -330,6 +366,7 @@ const getDatabaseStats = async () => {
       users: await User.countDocuments({ isActive: true }),
       categories: await Category.countDocuments({ isActive: true }),
       expenses: await Expense.countDocuments(),
+      liquidations: await Liquidation.countDocuments(),
       syncLogs: await SyncLog.countDocuments(),
       managerLinks: await ManagerEmployeeLink.countDocuments({ isActive: true })
     };
@@ -359,6 +396,7 @@ module.exports = {
     User,
     Category,
     Expense,
+    Liquidation,
     SyncLog,
     Config,
     ManagerEmployeeLink

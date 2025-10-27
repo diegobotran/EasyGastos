@@ -15,6 +15,7 @@ const categoryRoutes = require('./routes/categories');
 const expenseRoutes = require('./routes/expenses');
 const syncRoutes = require('./routes/sync');
 const managerLinksRoutes = require('./routes/manager-links');
+const liquidationsRoutes = require('./routes/liquidations');
 
 // Inicializar base de datos
 const { initDatabase } = require('./database/init');
@@ -66,7 +67,8 @@ app.get('/', (req, res) => {
       categories: '/api/categories',
       expenses: '/api/expenses',
       sync: '/api/sync',
-      managerLinks: '/api/manager-links'
+      managerLinks: '/api/manager-links',
+      liquidations: '/api/liquidations'
     },
     documentation: {
       health: 'GET /health - Health check',
@@ -98,6 +100,18 @@ app.get('/', (req, res) => {
         update: 'PUT /api/manager-links/:id',
         delete: 'DELETE /api/manager-links/:id',
         bulkAssign: 'POST /api/manager-links/bulk-assign'
+      },
+      liquidations: {
+        create: 'POST /api/liquidations',
+        getByUser: 'GET /api/liquidations/user/:userId',
+        getByManager: 'GET /api/liquidations/manager/:managerEmail',
+        getById: 'GET /api/liquidations/:id',
+        submit: 'PUT /api/liquidations/:id/submit',
+        approve: 'PUT /api/liquidations/:id/approve',
+        reject: 'PUT /api/liquidations/:id/reject',
+        delete: 'DELETE /api/liquidations/:id',
+        csv: 'GET /api/liquidations/:id/csv',
+        update: 'PUT /api/liquidations/:id'
       }
     }
   });
@@ -130,6 +144,7 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/manager-links', managerLinksRoutes);
+app.use('/api/liquidations', liquidationsRoutes);
 
 // Manejo de errores
 app.use((err, req, res, next) => {
