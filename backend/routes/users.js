@@ -1,0 +1,370 @@
+const express = require('express');
+const { body, validationResult } = require('express-validator');
+const bcrypt = require('bcrypt');
+const { models } = require('../database/init');
+const { authenticateToken, generateToken, canAccessUserData, optionalAuth, requireManager } = require('../middleware/auth');
+const router = express.Router();
+
+const { User, SyncLog } = models;
+
+// Middleware para validar datos de entrada
+const validateUserRegistration = [
+  body('email').isEmail().normalizeEmail(),
+  body('firstName').trim().isLength({ min: 1 }).escape(),
+  body('lastName').trim().isLength({ min: 1 }).escape(),
+  body('pin').isLength({ min: 4, max: 4 }).isNumeric(),
+  body('department').optional().trim().escape()
+];
+
+const validateUserProfile = [
+  body('email').isEmail().normalizeEmail(),
+  body('firstName').trim().isLength({ min: 1 }).escape(),
+  body('lastName').trim().isLength({ min: 1 }).escape(),
+  body('department').optional().trim().escape()
+];
+
+// Registrar nuevo usuario
+router.post('/register', validateUserRegistration, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, firstName, lastName, pin, department } = req.body;
+
+    // Verificar si el usuario ya existe
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({ error: 'El usuario ya existe' });
+    }
+
+    // Encriptar PIN
+    const hashedPin = await bcrypt.hash(pin, 10);
+
+    // Determinar manager basado en el departamento
+    let managerEmail = null;
+    if (department) {
+      const manager = await User.findOne({ 
+        department, 
+        isManager: true, 
+        isActive: true 
+      });
+      if (manager) {
+        managerEmail = manager.email;
+      }
+    }
+
+    // Crear usuario
+    const newUser = new User({
+      email,
+      firstName,
+      lastName,
+      pin: hashedPin,
+      department,
+      managerEmail,
+      lastLoginAt: new Date()
+    });
+
+    await newUser.save();
+
+    // Log de sincronización
+    const syncLog = new SyncLog({
+      userEmail: email,
+      entityType: 'USER',
+      entityId: email,
+      action: 'REGISTER',
+      success: true
+    });
+    await syncLog.save();
+
+    // Generar token JWT
+    const token = generateToken(newUser);
+
+    res.status(201).json({
+      message: 'Usuario registrado exitosamente',
+      token,
+      user: {
+        email,
+        firstName,
+        lastName,
+        department,
+        managerEmail
+      }
+    });
+  } catch (error) {
+    console.error('Error en registro de usuario:', error);
+    
+    // Log de error
+    if (req.body.email) {
+      const errorLog = new SyncLog({
+        userEmail: req.body.email,
+        entityType: 'USER',
+        entityId: req.body.email,
+        action: 'REGISTER',
+        success: false,
+        errorMessage: error.message
+      });
+      await errorLog.save().catch(() => {}); // No fallar si no se puede guardar el log
+    }
+    
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Login de usuario
+router.post('/login', [
+  body('email').isEmail().normalizeEmail(),
+  body('pin').isLength({ min: 4, max: 4 }).isNumeric()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, pin } = req.body;
+
+    // Buscar usuario
+    const user = await User.findOne({ email, isActive: true });
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    // Verificar PIN
+    const isValidPin = await bcrypt.compare(pin, user.pin);
+    if (!isValidPin) {
+      return res.status(401).json({ error: 'PIN incorrecto' });
+    }
+
+    // Actualizar último login
+    user.lastLoginAt = new Date();
+    await user.save();
+
+    // Generar token JWT
+    const token = generateToken(user);
+
+    // Log de sincronización
+    const syncLog = new SyncLog({
+      userEmail: email,
+      entityType: 'USER',
+      entityId: email,
+      action: 'LOGIN',
+      success: true
+    });
+    await syncLog.save();
+
+    res.json({
+      message: 'Login exitoso',
+      token,
+      user: {
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        department: user.department,
+        managerEmail: user.managerEmail,
+        isManager: user.isManager
+      }
+    });
+  } catch (error) {
+    console.error('Error en login:', error);
+    
+    // Log de error
+    if (req.body.email) {
+      const errorLog = new SyncLog({
+        userEmail: req.body.email,
+        entityType: 'USER',
+        entityId: req.body.email,
+        action: 'LOGIN',
+        success: false,
+        errorMessage: error.message
+      });
+      await errorLog.save().catch(() => {});
+    }
+    
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Actualizar perfil de usuario
+router.put('/profile', validateUserProfile, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, firstName, lastName, department } = req.body;
+
+    // Verificar si el usuario existe
+    const user = await User.findOne({ email, isActive: true });
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    // Actualizar usuario
+    user.firstName = firstName;
+    user.lastName = lastName;
+    user.department = department;
+    
+    await user.save();
+
+    // Log de sincronización
+    const syncLog = new SyncLog({
+      userEmail: email,
+      entityType: 'USER',
+      entityId: email,
+      action: 'UPDATE',
+      success: true
+    });
+    await syncLog.save();
+
+    res.json({
+      message: 'Perfil actualizado exitosamente',
+      user: {
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        department: user.department,
+        managerEmail: user.managerEmail
+      }
+    });
+  } catch (error) {
+    console.error('Error actualizando perfil:', error);
+    
+    // Log de error
+    const errorLog = new SyncLog({
+      userEmail: req.body.email,
+      entityType: 'USER',
+      entityId: req.body.email,
+      action: 'UPDATE',
+      success: false,
+      errorMessage: error.message
+    });
+    await errorLog.save().catch(() => {});
+    
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Autenticar usuario
+router.post('/login', [
+  body('email').isEmail().normalizeEmail(),
+  body('pin').isLength({ min: 4, max: 4 }).isNumeric()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, pin } = req.body;
+
+    const user = await User.findOne({ email, isActive: true });
+    if (!user) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    const pinMatch = await bcrypt.compare(pin, user.pin);
+    if (!pinMatch) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    // Actualizar último login
+    user.lastLoginAt = new Date();
+    await user.save();
+
+    // Log de sincronización
+    const syncLog = new SyncLog({
+      userEmail: email,
+      entityType: 'USER',
+      entityId: email,
+      action: 'LOGIN',
+      success: true
+    });
+    await syncLog.save();
+
+    res.json({
+      message: 'Autenticación exitosa',
+      user: {
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        department: user.department,
+        managerEmail: user.managerEmail,
+        isManager: user.isManager
+      }
+    });
+  } catch (error) {
+    console.error('Error en login:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Obtener información de usuario (requiere autenticación y autorización)
+router.get('/profile/:email', authenticateToken, canAccessUserData, async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    const user = await User.findOne({ email, isActive: true })
+      .select('-pin'); // No incluir el PIN en la respuesta
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    res.json({
+      user: {
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        department: user.department,
+        managerEmail: user.managerEmail,
+        isManager: user.isManager,
+        createdAt: user.createdAt,
+        lastLoginAt: user.lastLoginAt
+      }
+    });
+  } catch (error) {
+    console.error('Error obteniendo perfil:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Listar usuarios (solo para managers autenticados)
+router.get('/list', authenticateToken, requireManager, async (req, res) => {
+  try {
+    const { managerEmail, department } = req.query;
+
+    let query = { isActive: true };
+
+    if (managerEmail) {
+      query.managerEmail = managerEmail;
+    }
+
+    if (department) {
+      query.department = department;
+    }
+
+    const users = await User.find(query)
+      .select('-pin') // No incluir PINs
+      .sort({ lastName: 1, firstName: 1 });
+
+    const userList = users.map(user => ({
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      department: user.department,
+      isManager: user.isManager,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt
+    }));
+
+    res.json({ users: userList });
+  } catch (error) {
+    console.error('Error listando usuarios:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+module.exports = router;

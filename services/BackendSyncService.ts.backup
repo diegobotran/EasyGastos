@@ -1,0 +1,921 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAPI_BASE_URL } from '../config/backend';
+import { Category } from '../models/Category';
+import { Expense } from '../models/Expense';
+import { User } from '../models/User';
+import * as AuthService from './AuthService';
+import * as CategoryService from './CategoryService';
+import * as ExpenseService from './ExpenseService';
+
+/**
+ * Servicio para sincronización con el backend
+ * Maneja conexión, sincronización offline-first y detección de internet
+ */
+export class BackendSyncService {
+  private static readonly BACKEND_IP_KEY = 'backend_ip_address';
+  private static readonly BACKEND_PORT_KEY = 'backend_port';
+  private static readonly LAST_SYNC_KEY = 'last_sync_timestamp';
+  private static readonly SYNC_IN_PROGRESS_KEY = 'sync_in_progress';
+  private static readonly DEFAULT_IP = '200.6.231.237'; // IP por defecto para desarrollo
+  private static readonly DEFAULT_PORT = '7300';
+
+  /**
+   * Obtiene la URL base del backend según la configuración
+   */
+  private static getBackendBaseUrl(): string {
+    const url = getAPI_BASE_URL();
+    console.log('🌐 BackendSync: URL base obtenida de configuración:', url);
+    return url;
+  }
+
+  /**
+   * Configura la IP y puerto del backend
+   * En producción, esto podría no ser necesario si usas la configuración fija
+   */
+  static async setBackendConfig(ip: string, port: string = '3000'): Promise<void> {
+    try {
+      await AsyncStorage.setItem(this.BACKEND_IP_KEY, ip);
+      await AsyncStorage.setItem(this.BACKEND_PORT_KEY, port);
+      console.log(`Backend configurado: ${ip}:${port}`);
+    } catch (error) {
+      console.error('Error configurando backend:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene la configuración del backend
+   * Usa la configuración centralizada por defecto, pero permite override manual
+   */
+  static async getBackendConfig(): Promise<{ ip: string; port: string; url: string }> {
+    try {
+      console.log('🔧 BackendSync: Obteniendo configuración del backend...');
+      
+      // Usar la configuración centralizada como predeterminada
+      const baseUrl = this.getBackendBaseUrl();
+      console.log('🔧 BackendSync: URL base de configuración:', baseUrl);
+      
+      // Verificar si hay configuración manual almacenada (para casos especiales)
+      const customIp = await AsyncStorage.getItem(this.BACKEND_IP_KEY);
+      const customPort = await AsyncStorage.getItem(this.BACKEND_PORT_KEY);
+      console.log('🔧 BackendSync: Configuración manual - IP:', customIp, 'Puerto:', customPort);
+      
+      if (customIp && customPort) {
+        // Si hay configuración manual, usarla
+        const url = `http://${customIp}:${customPort}`;
+        console.log('🔧 BackendSync: Usando configuración manual:', url);
+        return { ip: customIp, port: customPort, url };
+      }
+      
+      // Usar configuración centralizada
+      const urlObj = new URL(baseUrl);
+      const ip = urlObj.hostname;
+      const port = urlObj.port || (urlObj.protocol === 'https:' ? '443' : '80');
+      
+      const finalConfig = { ip, port, url: baseUrl };
+      console.log('🔧 BackendSync: Configuración final:', finalConfig);
+      return finalConfig;
+    } catch (error) {
+      console.error('❌ BackendSync: Error obteniendo configuración backend:', error);
+      const defaultConfig = { 
+        ip: this.DEFAULT_IP, 
+        port: this.DEFAULT_PORT, 
+        url: `http://${this.DEFAULT_IP}:${this.DEFAULT_PORT}` 
+      };
+      console.log('🔧 BackendSync: Usando configuración por defecto:', defaultConfig);
+      return defaultConfig;
+    }
+  }
+
+  /**
+   * Verifica si hay conexión a internet
+   */
+  private static async checkInternetConnection(): Promise<boolean> {
+    try {
+      const { url } = await this.getBackendConfig();
+      const healthUrl = `${url}/health`;
+      console.log('🌐 BackendSync: Verificando conexión a:', healthUrl);
+      console.log('🌐 BackendSync: URL completa del health check:', healthUrl);
+
+      // Crear un AbortController para timeout manual
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ BackendSync: Timeout de 5 segundos alcanzado para health check');
+        controller.abort();
+      }, 5000);
+
+      console.log('📡 BackendSync: Iniciando petición GET a health endpoint...');
+      const response = await fetch(healthUrl, {
+        method: 'GET',
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      console.log('✅ BackendSync: Respuesta recibida del health check');
+      console.log('🌐 BackendSync: Health check - Status:', response.status, 'OK:', response.ok);
+      console.log('🌐 BackendSync: Health check - StatusText:', response.statusText);
+      console.log('🌐 BackendSync: Health check - URL era:', response.url);
+      
+      if (response.ok) {
+        console.log('✅ BackendSync: Health check EXITOSO - Backend disponible');
+      } else {
+        console.log('❌ BackendSync: Health check FALLÓ - Backend no disponible');
+      }
+      
+      return response.ok;
+    } catch (error) {
+      console.log('� BackendSync: EXCEPCIÓN en health check:', error);
+      if (error instanceof Error) {
+        console.log('📵 BackendSync: Error tipo:', error.name, 'Mensaje:', error.message);
+        console.log('📵 BackendSync: Stack trace:', error.stack);
+      }
+      console.log('❌ BackendSync: Health check terminó con error - considerando sin internet');
+      return false;
+    }
+  }
+
+  /**
+   * Obtiene headers con autenticación JWT
+   */
+  private static async getAuthenticatedHeaders(): Promise<{[key: string]: string}> {
+    try {
+      const { getAuthHeaders } = await import('./AuthService');
+      return await getAuthHeaders();
+    } catch (error) {
+      console.error('Error obteniendo headers de autenticación:', error);
+      return { 'Content-Type': 'application/json' };
+    }
+  }
+
+  /**
+   * Realiza una request autenticada al backend
+   */
+  private static async authenticatedFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
+    const { url } = await this.getBackendConfig();
+    const headers = await this.getAuthenticatedHeaders();
+    
+    const requestOptions: RequestInit = {
+      ...options,
+      headers: {
+        ...headers,
+        ...options.headers
+      }
+    };
+
+    const response = await fetch(`${url}${endpoint}`, requestOptions);
+    
+    // Si recibimos 401 Unauthorized, el token probablemente expiró
+    if (response.status === 401) {
+      console.log('Token expirado o inválido, limpiando...');
+      const { clearJWTToken } = await import('./AuthService');
+      await clearJWTToken();
+    }
+    
+    return response;
+  }
+
+  /**
+   * Configura la IP del backend (método legacy, usar setBackendConfig)
+   */
+  static async setBackendIp(ip: string): Promise<void> {
+    return this.setBackendConfig(ip);
+  }
+
+  /**
+   * SINCRONIZACIÓN DE USUARIOS
+   */
+
+  /**
+   * Registra un usuario en el backend (si hay internet)
+   */
+  static async syncUserRegistration(user: User): Promise<{ success: boolean; error?: string }> {
+    console.log('👤 BackendSync: ========== INICIO SINCRONIZACIÓN USUARIO ==========');
+    console.log('👤 BackendSync: Email:', user.email);
+    console.log('👤 BackendSync: Nombre:', user.firstName, user.lastName);
+    console.log('👤 BackendSync: Departamento:', user.department);
+    console.log('👤 BackendSync: Usuario necesita sync:', user.needsSync);
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const requestUrl = `${backendUrl}/api/users/register`;
+      console.log('👤 BackendSync: URL de registro:', requestUrl);
+
+      const userData = {
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        department: user.department
+      };
+      console.log('👤 BackendSync: Datos de usuario a enviar:', JSON.stringify(userData, null, 2));
+
+      // Crear timeout manual para petición
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ BackendSync: Timeout de 10 segundos para registro de usuario');
+        controller.abort();
+      }, 10000);
+
+      console.log('📡 BackendSync: Enviando petición POST de registro...');
+      const response = await fetch(requestUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(userData),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+      console.log('📡 BackendSync: Respuesta de registro - Status:', response.status);
+      console.log('📡 BackendSync: Respuesta de registro - OK:', response.ok);
+      console.log('📡 BackendSync: Respuesta de registro - StatusText:', response.statusText);
+
+      if (response.ok) {
+        const result = await response.text();
+        console.log('✅ BackendSync: Usuario registrado exitosamente:', result);
+        
+        // Marcar usuario como sincronizado
+        await AuthService.markUserAsSynced(user.email);
+        console.log('✅ BackendSync: Usuario marcado como sincronizado');
+        
+        return { success: true };
+      } else {
+        const errorText = await response.text();
+        console.log('❌ BackendSync: Error en registro de usuario - Status:', response.status, 'Error:', errorText);
+        
+        // Si el error es 409 (usuario ya existe), considerar como éxito
+        if (response.status === 409) {
+          console.log('ℹ️ BackendSync: Usuario ya existe en backend - marcando como sincronizado');
+          await AuthService.markUserAsSynced(user.email);
+          return { success: true };
+        }
+        
+        return { success: false, error: `Error ${response.status}: ${errorText}` };
+      }
+    } catch (error) {
+      console.error('🚨 BackendSync: Error registrando usuario:', error);
+      if (error instanceof Error) {
+        console.error('🚨 BackendSync: Error tipo:', error.name, 'Mensaje:', error.message);
+      }
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * Sincroniza el perfil del usuario con el backend
+   */
+  static async syncUserProfile(user: User): Promise<{ success: boolean; error?: string }> {
+    const hasInternet = await this.checkInternetConnection();
+    if (!hasInternet) {
+      console.log('Sin internet - Perfil será sincronizado más tarde');
+      return { success: true };
+    }
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const response = await fetch(`${backendUrl}/api/users/profile`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          department: user.department
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        
+        // Actualizar datos del usuario con información del backend
+        if (result.managerEmail) {
+          await AuthService.updateUserManager(user.email, result.managerEmail);
+        }
+
+        await AuthService.markUserAsSynced(user.email);
+        console.log('Perfil sincronizado exitosamente con el backend');
+        return { success: true };
+      } else {
+        const error = await response.text();
+        console.error('Error del backend al actualizar perfil:', error);
+        return { success: false, error };
+      }
+    } catch (error) {
+      console.error('Error sincronizando perfil de usuario:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * SINCRONIZACIÓN DE CATEGORÍAS
+   */
+
+  /**
+   * Sincroniza categorías del usuario con el backend
+   */
+  static async syncCategories(userEmail: string): Promise<{ success: boolean; error?: string }> {
+    console.log('🔄 BackendSync: Iniciando sincronización de categorías para:', userEmail);
+    
+    // Intentar sincronización directa sin health check estricto
+    console.log('� BackendSync: Saltando health check - intentando sincronización directa con timeout');
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      console.log('🌐 BackendSync: URL del backend:', backendUrl);
+      
+      // 1. Enviar categorías locales que necesiten sincronización
+      const localCategories = await CategoryService.getCategoriesNeedingSync(userEmail);
+      console.log('📂 BackendSync: Categorías locales que necesitan sincronización:', localCategories.length);
+      
+      let successCount = 0;
+      let errorCount = 0;
+      
+      for (const category of localCategories) {
+        console.log('📤 BackendSync: Enviando categoría al backend:', {
+          name: category.name,
+          id: category.id,
+          email: category.email,
+          centro: category.centro,
+          cuenta: category.cuenta,
+          ordenco: category.ordenco
+        });
+        
+        const requestUrl = `${backendUrl}/api/categories`;
+        console.log('🌐 BackendSync: URL completa de la petición:', requestUrl);
+        console.log('📦 BackendSync: Datos JSON que se envían:', JSON.stringify(category, null, 2));
+        
+        try {
+          // Crear timeout manual más largo para dar tiempo a la petición
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => {
+            console.log('⏰ BackendSync: Timeout de 10 segundos para envío de categoría:', category.name);
+            controller.abort();
+          }, 10000); // 10 segundos para cada petición
+          
+          const response = await fetch(requestUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(category),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+          console.log('📡 BackendSync: Respuesta del servidor - Status:', response.status, 'StatusText:', response.statusText);
+          console.log('📡 BackendSync: Headers de respuesta:', JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2));
+
+          if (response.ok) {
+            const responseData = await response.text();
+            console.log('📡 BackendSync: Datos de respuesta exitosa:', responseData);
+            await CategoryService.markCategoryAsSynced(category.id);
+            console.log('✅ BackendSync: Categoría marcada como sincronizada:', category.name);
+            successCount++;
+          } else {
+            const errorText = await response.text();
+            console.log('❌ BackendSync: Error del servidor - Status:', response.status, 'Error:', errorText);
+            console.log('❌ BackendSync: La categoría NO fue sincronizada:', category.name);
+            errorCount++;
+          }
+        } catch (fetchError) {
+          console.error('🚨 BackendSync: Error de red/fetch para categoría:', category.name, fetchError);
+          if (fetchError instanceof Error) {
+            console.error('🚨 BackendSync: Tipo de error:', fetchError.name, 'Mensaje:', fetchError.message);
+          }
+          errorCount++;
+        }
+      }
+
+      console.log('📊 BackendSync: Resumen - Exitosas:', successCount, 'Errores:', errorCount);
+
+      // 2. Solo intentar obtener categorías del backend si al menos una se envió correctamente
+      if (successCount > 0 || localCategories.length === 0) {
+        console.log('🔄 BackendSync: Intentando obtener categorías del servidor...');
+        
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => {
+            console.log('⏰ BackendSync: Timeout para obtener categorías del servidor');
+            controller.abort();
+          }, 8000);
+          
+          const response = await fetch(`${backendUrl}/api/categories?userEmail=${userEmail}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+
+          if (response.ok) {
+            const serverCategories: Category[] = await response.json();
+            console.log('📥 BackendSync: Categorías recibidas del servidor:', serverCategories.length);
+            
+            // Sincronizar categorías del servidor con base local
+            for (const serverCategory of serverCategories) {
+              await CategoryService.upsertCategoryFromServer(serverCategory);
+            }
+
+            console.log('✅ BackendSync: Categorías sincronizadas exitosamente');
+            return { success: true };
+          } else {
+            const error = await response.text();
+            console.error('❌ BackendSync: Error obteniendo categorías del backend:', error);
+            // Considerar exitoso si se enviaron categorías locales
+            return { 
+              success: successCount > 0, 
+              error: successCount > 0 ? undefined : `Error obteniendo del servidor: ${error}` 
+            };
+          }
+        } catch (downloadError) {
+          console.error('🚨 BackendSync: Error descargando categorías del servidor:', downloadError);
+          // Considerar exitoso si se enviaron categorías locales
+          return { 
+            success: successCount > 0, 
+            error: successCount > 0 ? undefined : 'Error descargando del servidor' 
+          };
+        }
+      } else {
+        return { 
+          success: false, 
+          error: `No se pudieron sincronizar ninguna de las ${localCategories.length} categorías` 
+        };
+      }
+    } catch (error) {
+      console.error('❌ BackendSync: Error general sincronizando categorías:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * SINCRONIZACIÓN DE GASTOS
+   */
+
+  /**
+   * Sincroniza gastos del usuario con el backend
+   */
+  static async syncExpenses(userEmail: string): Promise<{ success: boolean; error?: string }> {
+    const hasInternet = await this.checkInternetConnection();
+    if (!hasInternet) {
+      console.log('Sin internet - Gastos serán sincronizados más tarde');
+      return { success: true };
+    }
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      
+      // 1. Enviar gastos locales que necesiten sincronización
+      const localExpenses = await ExpenseService.getExpensesNeedingSync(userEmail);
+      
+      for (const expense of localExpenses) {
+        const response = await fetch(`${backendUrl}/api/expenses`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(expense)
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          
+          // Actualizar estado del gasto si el backend cambió algo
+          if (result.status && result.status !== expense.status) {
+            await ExpenseService.updateExpenseStatus(expense.id, result.status);
+          }
+          
+          await ExpenseService.markExpenseAsSynced(expense.id);
+        }
+      }
+
+      // 2. Obtener gastos del backend (actualizaciones de estado, etc.)
+      const response = await fetch(`${backendUrl}/api/expenses?userEmail=${userEmail}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (response.ok) {
+        const serverExpenses: Expense[] = await response.json();
+        
+        // Sincronizar gastos del servidor con base local
+        for (const serverExpense of serverExpenses) {
+          await ExpenseService.upsertExpenseFromServer(serverExpense);
+        }
+
+        console.log('Gastos sincronizados exitosamente');
+        return { success: true };
+      } else {
+        const error = await response.text();
+        console.error('Error obteniendo gastos del backend:', error);
+        return { success: false, error };
+      }
+    } catch (error) {
+      console.error('Error sincronizando gastos:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * SINCRONIZACIÓN PARA JEFES
+   */
+
+  /**
+   * Obtiene gastos pendientes de aprobación para un jefe
+   */
+  static async getExpensesForApproval(managerEmail: string): Promise<{ expenses: Expense[]; error?: string }> {
+    const hasInternet = await this.checkInternetConnection();
+    if (!hasInternet) {
+      console.log('Sin internet - No se pueden obtener gastos para aprobar');
+      return { expenses: [], error: 'Sin conexión a internet' };
+    }
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const response = await fetch(`${backendUrl}/api/expenses/pending-approval?managerEmail=${managerEmail}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (response.ok) {
+        const expenses: Expense[] = await response.json();
+        
+        // Guardar en base local para acceso offline
+        for (const expense of expenses) {
+          await ExpenseService.upsertExpenseFromServer(expense);
+        }
+
+        return { expenses };
+      } else {
+        const error = await response.text();
+        console.error('Error obteniendo gastos para aprobación:', error);
+        return { expenses: [], error };
+      }
+    } catch (error) {
+      console.error('Error obteniendo gastos para aprobación:', error);
+      return { expenses: [], error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * Alias para getExpensesForApproval (para compatibilidad con manager-approval.tsx)
+   */
+  static async getPendingExpensesForManager(managerEmail: string): Promise<{ expenses: Expense[]; error?: string }> {
+    return this.getExpensesForApproval(managerEmail);
+  }
+
+  /**
+   * Aprueba o rechaza un gasto
+   */
+  static async approveExpense(expenseId: string, approve: boolean, managerEmail: string, comments?: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      // 1. Actualizar localmente primero
+      const newStatus = approve ? 'APROBADO_JEFE' : 'RECHAZADO_JEFE';
+      await ExpenseService.updateExpenseStatus(expenseId, newStatus);
+      
+      // 2. Intentar sincronizar con backend si hay internet
+      const hasInternet = await this.checkInternetConnection();
+      if (!hasInternet) {
+        console.log('Sin internet - Aprobación será sincronizada más tarde');
+        return { success: true };
+      }
+
+      const { url: backendUrl } = await this.getBackendConfig();
+      const response = await fetch(`${backendUrl}/api/expenses/${expenseId}/approve`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          approve,
+          managerEmail,
+          comments
+        })
+      });
+
+      if (response.ok) {
+        await ExpenseService.markExpenseAsSynced(expenseId);
+        console.log('Aprobación sincronizada exitosamente');
+        return { success: true };
+      } else {
+        const error = await response.text();
+        console.error('Error sincronizando aprobación:', error);
+        return { success: false, error };
+      }
+    } catch (error) {
+      console.error('Error aprobando gasto:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * SINCRONIZACIÓN COMPLETA
+   */
+
+  /**
+   * Ejecuta sincronización completa de todos los datos del usuario
+   */
+  static async fullSync(userEmail: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Verificar si ya hay una sincronización en progreso
+      const syncInProgress = await AsyncStorage.getItem(this.SYNC_IN_PROGRESS_KEY);
+      if (syncInProgress === 'true') {
+        console.log('Sincronización ya en progreso');
+        return { success: false, error: 'Sincronización ya en progreso' };
+      }
+
+      // Marcar sincronización en progreso
+      await AsyncStorage.setItem(this.SYNC_IN_PROGRESS_KEY, 'true');
+
+      try {
+        console.log('🚀 BackendSync: Iniciando sincronización DIRECTA (sin health check estricto)');
+        
+        // Obtener configuración del backend
+        const { url: backendUrl } = await this.getBackendConfig();
+        console.log('🌐 BackendSync: URL configurada:', backendUrl);
+
+        let syncResults: { categories: boolean; expenses: boolean; user: boolean } = {
+          categories: false,
+          expenses: false,
+          user: false
+        };
+
+        // *** CAMBIO CRÍTICO: SINCRONIZAR USUARIO PRIMERO ***
+        console.log('👤 BackendSync: ========== PASO 1: SINCRONIZAR USUARIO ==========');
+        try {
+          const user = await AuthService.getLastLoggedInUser();
+          if (!user) {
+            console.error('❌ BackendSync: No se encontró usuario logueado');
+            return { success: false, error: 'No se encontró usuario logueado' };
+          }
+
+          console.log('� BackendSync: Usuario encontrado:', user.email, 'NeedsSync:', user.needsSync);
+          
+          // Siempre intentar registrar/sincronizar el usuario primero
+          console.log('👤 BackendSync: Registrando usuario en backend...');
+          const userResult = await this.syncUserRegistration(user);
+          syncResults.user = userResult.success;
+          console.log('� BackendSync: Resultado usuario:', userResult.success ? '✅' : '❌');
+          
+          if (!userResult.success) {
+            console.error('❌ BackendSync: FALLO CRÍTICO - Usuario no pudo sincronizarse:', userResult.error);
+            return { success: false, error: `Usuario no sincronizado: ${userResult.error}` };
+          }
+          
+          console.log('✅ BackendSync: Usuario sincronizado exitosamente - Continuando con datos...');
+        } catch (error) {
+          console.error('❌ BackendSync: Error crítico sincronizando usuario:', error);
+          return { success: false, error: 'Error crítico sincronizando usuario' };
+        }
+
+        // *** PASO 2: SINCRONIZAR CATEGORÍAS (ahora que el usuario está en backend) ***
+        console.log('📂 BackendSync: ========== PASO 2: SINCRONIZAR CATEGORÍAS ==========');
+        try {
+          const categoryResult = await this.syncCategories(userEmail);
+          syncResults.categories = categoryResult.success;
+          console.log('� BackendSync: Resultado categorías:', categoryResult.success ? '✅' : '❌');
+        } catch (error) {
+          console.error('❌ BackendSync: Error sincronizando categorías:', error);
+          syncResults.categories = false;
+        }
+
+        // *** PASO 3: SINCRONIZAR GASTOS ***
+        console.log('� BackendSync: ========== PASO 3: SINCRONIZAR GASTOS ==========');
+        try {
+          const expenseResult = await this.syncExpenses(userEmail);
+          syncResults.expenses = expenseResult.success;
+          console.log('� BackendSync: Resultado gastos:', expenseResult.success ? '✅' : '❌');
+        } catch (error) {
+          console.error('❌ BackendSync: Error sincronizando gastos:', error);
+          syncResults.expenses = false;
+        }
+            syncResults.user = true; // No necesita sync
+            console.log('👤 BackendSync: Usuario no necesita sincronización');
+          }
+        } catch (error) {
+          console.error('❌ BackendSync: Error sincronizando usuario:', error);
+          syncResults.user = false;
+        }
+
+        // 4. Evaluar resultado general
+        const totalSuccess = syncResults.categories || syncResults.expenses || syncResults.user;
+        const allSuccess = syncResults.categories && syncResults.expenses && syncResults.user;
+
+        if (totalSuccess) {
+          // Si al menos una sincronización fue exitosa, actualizar timestamp
+          await AsyncStorage.setItem(this.LAST_SYNC_KEY, Date.now().toString());
+          console.log('✅ BackendSync: Sincronización completada con al menos un éxito');
+          
+          const message = allSuccess 
+            ? 'Sincronización completada exitosamente'
+            : `Sincronización parcial: Categorías ${syncResults.categories ? '✅' : '❌'}, Gastos ${syncResults.expenses ? '✅' : '❌'}, Usuario ${syncResults.user ? '✅' : '❌'}`;
+          
+          return { success: true, error: allSuccess ? undefined : message };
+        } else {
+          console.log('❌ BackendSync: Todas las sincronizaciones fallaron');
+          return { success: false, error: 'No se pudo sincronizar ningún dato. Verifique su conexión.' };
+        }
+
+        console.log('Sincronización completa exitosa');
+        return { success: true };
+      } finally {
+        // Limpiar flag de sincronización en progreso
+        await AsyncStorage.removeItem(this.SYNC_IN_PROGRESS_KEY);
+      }
+    } catch (error) {
+      console.error('Error en sincronización completa:', error);
+      await AsyncStorage.removeItem(this.SYNC_IN_PROGRESS_KEY);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * Obtiene el timestamp de la última sincronización
+   */
+  static async getLastSyncTime(): Promise<number | null> {
+    try {
+      const timestamp = await AsyncStorage.getItem(this.LAST_SYNC_KEY);
+      return timestamp ? parseInt(timestamp) : null;
+    } catch (error) {
+      console.error('Error obteniendo timestamp de última sincronización:', error);
+      return null;
+    }
+  }
+
+  /**
+   * SINCRONIZACIÓN DE RELACIONES MANAGER-EMPLEADO
+   */
+
+  /**
+   * Crear relación manager-empleado en el backend
+   */
+  static async createManagerEmployeeLink(employeeEmail: string, managerEmail: string, department?: string): Promise<{ success: boolean; error?: string }> {
+    const hasInternet = await this.checkInternetConnection();
+    if (!hasInternet) {
+      console.log('Sin internet - Relación manager-empleado será sincronizada más tarde');
+      return { success: true };
+    }
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const response = await fetch(`${backendUrl}/api/manager-links`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          employeeEmail,
+          managerEmail,
+          department,
+          level: 1
+        })
+      });
+
+      if (response.ok) {
+        console.log('Relación manager-empleado creada exitosamente');
+        return { success: true };
+      } else {
+        const error = await response.text();
+        console.error('Error creando relación manager-empleado:', error);
+        return { success: false, error };
+      }
+    } catch (error) {
+      console.error('Error creando relación manager-empleado:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * Obtener el manager directo de un empleado
+   */
+  static async getDirectManager(employeeEmail: string): Promise<{ managerEmail: string | null; error?: string }> {
+    const hasInternet = await this.checkInternetConnection();
+    if (!hasInternet) {
+      return { managerEmail: null, error: 'Sin conexión a internet' };
+    }
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const response = await fetch(`${backendUrl}/api/manager-links/direct-manager/${employeeEmail}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (response.ok) {
+        const managerLink = await response.json();
+        return { managerEmail: managerLink?.managerEmail || null };
+      } else {
+        const error = await response.text();
+        return { managerEmail: null, error };
+      }
+    } catch (error) {
+      console.error('Error obteniendo manager directo:', error);
+      return { managerEmail: null, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * Obtener empleados de un manager
+   */
+  static async getEmployeesOfManager(managerEmail: string): Promise<{ employees: string[]; error?: string }> {
+    const hasInternet = await this.checkInternetConnection();
+    if (!hasInternet) {
+      return { employees: [], error: 'Sin conexión a internet' };
+    }
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const response = await fetch(`${backendUrl}/api/manager-links/manager/${managerEmail}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (response.ok) {
+        const links = await response.json();
+        const employees = links.map((link: any) => link.employeeEmail);
+        return { employees };
+      } else {
+        const error = await response.text();
+        return { employees: [], error };
+      }
+    } catch (error) {
+      console.error('Error obteniendo empleados del manager:', error);
+      return { employees: [], error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * Asignación masiva de empleados a un manager
+   */
+  static async bulkAssignEmployeesToManager(
+    employeeEmails: string[], 
+    managerEmail: string, 
+    department?: string
+  ): Promise<{ success: boolean; created: number; errors: any[]; error?: string }> {
+    const hasInternet = await this.checkInternetConnection();
+    if (!hasInternet) {
+      return { success: false, created: 0, errors: [], error: 'Sin conexión a internet' };
+    }
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const response = await fetch(`${backendUrl}/api/manager-links/bulk-assign`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          employeeEmails,
+          managerEmail,
+          department,
+          level: 1
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        return { 
+          success: true, 
+          created: result.created?.length || 0, 
+          errors: result.errors || [] 
+        };
+      } else {
+        const error = await response.text();
+        return { success: false, created: 0, errors: [], error };
+      }
+    } catch (error) {
+      console.error('Error en asignación masiva:', error);
+      return { 
+        success: false, 
+        created: 0, 
+        errors: [], 
+        error: error instanceof Error ? error.message : 'Error desconocido' 
+      };
+    }
+  }
+
+  /**
+   * Inicia sincronización automática en background (llamar al abrir la app)
+   */
+  static async startBackgroundSync(userEmail: string): Promise<void> {
+    // Ejecutar en background sin esperar
+    setTimeout(async () => {
+      try {
+        await this.fullSync(userEmail);
+      } catch (error) {
+        console.error('Error en sincronización automática:', error);
+      }
+    }, 1000); // Delay de 1 segundo para no bloquear la UI
+  }
+}
