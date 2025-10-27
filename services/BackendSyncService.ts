@@ -202,12 +202,12 @@ export class BackendSyncService {
         console.log('📤 BackendSync: ID:', category.id);
         console.log('📤 BackendSync: Email:', category.email);
 
-        // Construir el objeto con userEmail en vez de email
+        // Construir el objeto con userEmail en vez de email (desestructuración para remover email)
+        const { email, ...categoryWithoutEmail } = category;
         const categoryPayload = {
-          ...category,
-          userEmail: category.email,
+          ...categoryWithoutEmail,
+          userEmail: email,
         };
-        delete categoryPayload.email;
 
         const requestUrl = `${backendUrl}/api/categories`;
         console.log('🌐 BackendSync: URL COMPLETA de la petición POST:', requestUrl);
@@ -304,12 +304,12 @@ export class BackendSyncService {
         console.log('📤 BackendSync: Monto:', expense.amount);
         console.log('📤 BackendSync: Email:', expense.email);
 
-        // Construir el objeto con userEmail en vez de email
+        // Construir el objeto con userEmail en vez de email (desestructuración para remover email)
+        const { email, ...expenseWithoutEmail } = expense;
         const expensePayload = {
-          ...expense,
-          userEmail: expense.email,
+          ...expenseWithoutEmail,
+          userEmail: email,
         };
-        delete expensePayload.email;
 
         const requestUrl = `${backendUrl}/api/expenses`;
         console.log('🌐 BackendSync: URL COMPLETA de la petición POST:', requestUrl);
