@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { useExpensesViewModel } from '../../hooks/useExpensesViewModel';
-import { Expense, STATUSES } from '../../models/Expense';
+import { Expense, STATUSES, getExpenseStatusText, getExpenseStatusColor } from '../../models/Expense';
 import * as AuthService from '../../services/AuthService';
 import { createLiquidation } from '../../services/LiquidationService';
 
@@ -59,8 +59,8 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
     }
   };
 
-  // Determinar si el gasto puede ser seleccionado
-  const canBeSelected = !item.liquidationId;
+  // Determinar si el gasto puede ser seleccionado (solo si está en draft)
+  const canBeSelected = item.expenseStatus === 'draft';
 
   return (
     <TouchableOpacity 
@@ -97,10 +97,17 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
       <Text style={styles.expenseDetails}>Q{item.amount.toFixed(2)} • {item.supplier}</Text>
       <Text style={styles.expenseDetails}>{item.date} • {item.category} • {item.department}</Text>
       
+      {/* Badge del estado de liquidación del gasto */}
+      <View style={[styles.expenseStatusBadge, { backgroundColor: getExpenseStatusColor(item.expenseStatus) + '20' }]}>
+        <Text style={[styles.expenseStatusText, { color: getExpenseStatusColor(item.expenseStatus) }]}>
+          {getExpenseStatusText(item.expenseStatus)}
+        </Text>
+      </View>
+
       {item.liquidationId && (
         <View style={styles.liquidationBadge}>
           <Ionicons name="folder" size={12} color="#059669" />
-          <Text style={styles.liquidationBadgeText}>En liquidación</Text>
+          <Text style={styles.liquidationBadgeText}>En liquidación #{item.liquidationId.slice(-6)}</Text>
         </View>
       )}
 
@@ -141,8 +148,8 @@ export default function ExpensesScreen() {
   const filteredExpenses = expenses.filter(expense => {
     const matchesSearch = expense.description.toLowerCase().includes(searchQuery.toLowerCase()) || expense.supplier.toLowerCase().includes(searchQuery.toLowerCase());
     
-    // En modo liquidación, solo mostrar gastos que no estén en una liquidación
-    if (liquidationMode && expense.liquidationId) {
+    // En modo liquidación, solo mostrar gastos con expenseStatus='draft' (no in_liquidation ni approved)
+    if (liquidationMode && expense.expenseStatus !== 'draft') {
       return false;
     }
     
@@ -459,6 +466,17 @@ const styles = StyleSheet.create({
   expenseDetails: { fontSize: 14, color: '#64748b', marginBottom: 4 },
   statusBadge: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12 },
   statusText: { fontSize: 12, fontWeight: 'bold' },
+  expenseStatusBadge: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
+  expenseStatusText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
   liquidationBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -466,7 +484,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 6,
-    marginTop: 8,
+    marginTop: 6,
     alignSelf: 'flex-start',
     gap: 4,
   },

@@ -7,7 +7,7 @@
 
 import * as SQLite from 'expo-sqlite';
 import { Liquidation, LiquidationStatus, CreateLiquidationDTO } from '../models/Liquidation';
-import { getExpenseById } from './ExpenseService';
+import { getExpenseById, updateExpensesLiquidationStatus } from './ExpenseService';
 
 const db = SQLite.openDatabaseSync('easygastos.db');
 
@@ -90,7 +90,19 @@ export const createLiquidation = async (
       liquidation.status
     ]);
 
+    // Actualizar el estado de los gastos a 'in_liquidation'
+    await updateExpensesLiquidationStatus(dto.expenseIds, 'in_liquidation');
+    
+    // También actualizar el campo liquidationId de cada gasto
+    for (const expenseId of dto.expenseIds) {
+      const updateStmt = db.prepareSync(`
+        UPDATE expenses SET liquidationId = ?, needsSync = 1 WHERE id = ?
+      `);
+      updateStmt.executeSync([liquidation.id, expenseId]);
+    }
+
     console.log('✅ Liquidación creada:', liquidation.id);
+    console.log(`✅ ${dto.expenseIds.length} gasto(s) marcados como 'in_liquidation'`);
     return liquidation;
   } catch (error) {
     console.error('❌ Error creando liquidación:', error);
@@ -340,6 +352,20 @@ export const updateLiquidationStatus = async (
       `, [status, managerComments || null, liquidationId]);
     }
 
+    // Actualizar el estado de los gastos según la decisión del jefe
+    if (status === 'approved') {
+      // Si se aprueba → gastos pasan a 'approved'
+      await updateExpensesLiquidationStatus(liquidation.expenseIds, 'approved');
+      console.log(`✅ ${liquidation.expenseIds.length} gasto(s) marcados como 'approved'`);
+    } else if (status === 'rejected') {
+      // Si se rechaza → gastos vuelven a 'draft' y se limpia liquidationId
+      await updateExpensesLiquidationStatus(liquidation.expenseIds, 'draft');
+      for (const expenseId of liquidation.expenseIds) {
+        db.runSync(`UPDATE expenses SET liquidationId = NULL WHERE id = ?`, [expenseId]);
+      }
+      console.log(`✅ ${liquidation.expenseIds.length} gasto(s) regresados a 'draft'`);
+    }
+
     console.log(`✅ Liquidación actualizada a estado: ${status}`);
     return true;
   } catch (error) {
@@ -363,9 +389,16 @@ export const deleteLiquidation = async (liquidationId: string): Promise<boolean>
       throw new Error('Solo se pueden eliminar liquidaciones en borrador');
     }
 
+    // Regresar los gastos a estado 'draft' y limpiar liquidationId
+    await updateExpensesLiquidationStatus(liquidation.expenseIds, 'draft');
+    for (const expenseId of liquidation.expenseIds) {
+      db.runSync(`UPDATE expenses SET liquidationId = NULL WHERE id = ?`, [expenseId]);
+    }
+
     db.runSync(`DELETE FROM liquidations WHERE id = ?`, [liquidationId]);
 
     console.log('✅ Liquidación eliminada');
+    console.log(`✅ ${liquidation.expenseIds.length} gasto(s) regresados a 'draft'`);
     return true;
   } catch (error) {
     console.error('❌ Error eliminando liquidación:', error);

@@ -160,6 +160,7 @@ export default function AddExpenseScreen() {
         date: formatDate(date),
         category,
         status,
+        expenseStatus: 'draft', // Estado inicial en el flujo de liquidación
         supplier: supplier || 'Proveedor Desconocido',
         vat_number,
         department,

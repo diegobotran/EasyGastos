@@ -12,6 +12,9 @@ export const STATUSES = {
 // This creates a type from the keys of the STATUSES object, e.g., 'BORRADOR', 'ENVIADO_JEFE'
 type StatusCode = keyof typeof STATUSES;
 
+// Estados del gasto en el flujo de liquidación
+export type ExpenseStatus = 'draft' | 'in_liquidation' | 'approved';
+
 export interface Expense {
   id: string; // Will be a timestamp for uniqueness we need to review because the app will be in several device or uuid() that's unique
   description: string;
@@ -19,6 +22,7 @@ export interface Expense {
   date: string; // We'll store as YYYY-MM-DD for sorting
   category: string;
   status: StatusCode;
+  expenseStatus: ExpenseStatus;  // Estado en flujo de liquidación: draft, in_liquidation, approved
   supplier: string;
   vat_number: string;
   department: string;
@@ -37,4 +41,24 @@ export interface Expense {
   needsSync?: boolean;
   lastSync?: number;
   serverUpdatedAt?: number;
+}
+
+// Helper para obtener el texto del estado de liquidación
+export function getExpenseStatusText(expenseStatus: ExpenseStatus): string {
+  const statusTexts = {
+    draft: 'Borrador',
+    in_liquidation: 'En Liquidación',
+    approved: 'Autorizado',
+  };
+  return statusTexts[expenseStatus];
+}
+
+// Helper para obtener el color del estado de liquidación
+export function getExpenseStatusColor(expenseStatus: ExpenseStatus): string {
+  const statusColors = {
+    draft: '#64748b',       // Gris
+    in_liquidation: '#3b82f6',  // Azul
+    approved: '#10b981',    // Verde
+  };
+  return statusColors[expenseStatus];
 }

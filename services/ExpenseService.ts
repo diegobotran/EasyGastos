@@ -34,6 +34,7 @@ export const initDB = () => {
             date TEXT NOT NULL,
             category TEXT NOT NULL,
             status TEXT NOT NULL,
+            expenseStatus TEXT NOT NULL DEFAULT 'draft',
             supplier TEXT,
             vat_number TEXT,
             department TEXT,
@@ -90,10 +91,10 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
             db.transaction((tx: any) => {
                 tx.executeSql(
                     `INSERT INTO expenses 
-                     (id, userEmail, description, amount, date, category, status, supplier, vat_number, 
+                     (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, 
                       department, notes, noinvoice, serie, centro, cuenta, ordenco, managerEmail, 
                       needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?)`,
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?)`,
                     [
                         expense.id, 
                         userEmail, 
@@ -101,7 +102,8 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
                         expense.amount, 
                         expense.date, 
                         expense.category, 
-                        expense.status, 
+                        expense.status,
+                        expense.expenseStatus || 'draft',
                         expense.supplier || null, 
                         expense.vat_number || null, 
                         expense.department || null, 
@@ -255,6 +257,7 @@ export const getExpensesNeedingSync = async (userEmail: string): Promise<Expense
                 date: row.date,
                 category: row.category,
                 status: row.status as any,
+                expenseStatus: row.expenseStatus || 'draft',
                 supplier: row.supplier,
                 vat_number: row.vat_number,
                 department: row.department,
@@ -266,6 +269,7 @@ export const getExpensesNeedingSync = async (userEmail: string): Promise<Expense
                 ordenco: row.ordenco,
                 email: row.userEmail,
                 managerEmail: row.managerEmail,
+                liquidationId: row.liquidationId,
                 needsSync: Boolean(row.needsSync),
                 lastSync: row.lastSync,
                 serverUpdatedAt: row.serverUpdatedAt,
@@ -476,6 +480,7 @@ export const getExpensesForApproval = async (managerEmail: string): Promise<Expe
                 date: row.date,
                 category: row.category,
                 status: row.status as any,
+                expenseStatus: row.expenseStatus || 'draft',
                 supplier: row.supplier,
                 vat_number: row.vat_number,
                 department: row.department,
@@ -487,6 +492,7 @@ export const getExpensesForApproval = async (managerEmail: string): Promise<Expe
                 ordenco: row.ordenco,
                 email: row.userEmail,
                 managerEmail: row.managerEmail,
+                liquidationId: row.liquidationId,
                 needsSync: Boolean(row.needsSync),
                 lastSync: row.lastSync,
                 serverUpdatedAt: row.serverUpdatedAt,
@@ -499,6 +505,40 @@ export const getExpensesForApproval = async (managerEmail: string): Promise<Expe
           },
           (_: any, error: any): boolean => {
             console.error("Error al obtener gastos para aprobación", error);
+            reject(error);
+            return false;
+          }
+        );
+      });
+    });
+  }
+};
+
+/**
+ * Actualiza el estado de liquidación de uno o varios gastos
+ */
+export const updateExpensesLiquidationStatus = async (
+  expenseIds: string[], 
+  newExpenseStatus: 'draft' | 'in_liquidation' | 'approved'
+): Promise<void> => {
+  if (Platform.OS === 'web') {
+    // Para web, necesitaríamos iterar sobre todos los usuarios (no implementado completamente)
+    console.warn('updateExpenseStatus en web no está completamente implementado');
+    return;
+  } else {
+    if (!db) return Promise.reject("La base de datos no está inicializada.");
+    return new Promise((resolve, reject) => {
+      db.transaction((tx: any) => {
+        const placeholders = expenseIds.map(() => '?').join(',');
+        tx.executeSql(
+          `UPDATE expenses SET expenseStatus = ?, needsSync = 1 WHERE id IN (${placeholders})`,
+          [newExpenseStatus, ...expenseIds],
+          () => {
+            console.log(`✅ ${expenseIds.length} gasto(s) actualizados a estado: ${newExpenseStatus}`);
+            resolve();
+          },
+          (_: any, error: any): boolean => {
+            console.error(`Error al actualizar estado de gastos`, error);
             reject(error);
             return false;
           }
