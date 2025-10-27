@@ -110,7 +110,7 @@ export default function AddExpenseScreen() {
       result = await ImagePicker.launchCameraAsync({ 
         allowsEditing: true, 
         quality: 1,
-        cameraType: 'back' // Usar cámara trasera (string en lugar de enum)
+        cameraType: ImagePicker.CameraType.back // Usar cámara trasera
       });
     }
 
