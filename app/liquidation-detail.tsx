@@ -16,6 +16,7 @@ import { Expense } from '../models/Expense';
 import { getLiquidationById, submitLiquidation, deleteLiquidation } from '../services/LiquidationService';
 import { getExpenseById } from '../services/ExpenseService';
 import * as AuthService from '../services/AuthService';
+import { generateLiquidationCSV, generateDetailedLiquidationCSV } from '../services/ExportService';
 
 export default function LiquidationDetailScreen() {
   const params = useLocalSearchParams();
@@ -125,11 +126,58 @@ export default function LiquidationDetailScreen() {
   };
 
   const handleDownloadCSV = async () => {
-    if (!liquidation) return;
+    if (!liquidation || expenses.length === 0) {
+      Alert.alert('Error', 'No hay gastos para exportar');
+      return;
+    }
 
+    // Mostrar opciones de exportación
     Alert.alert(
-      'Descargar CSV',
-      'Esta funcionalidad estará disponible próximamente.\n\nSe generará un archivo CSV con todos los datos de los gastos aprobados.'
+      'Exportar Liquidación',
+      'Seleccione el formato de exportación:',
+      [
+        {
+          text: 'Cancelar',
+          style: 'cancel'
+        },
+        {
+          text: 'CSV Formato SAP',
+          onPress: async () => {
+            try {
+              await generateLiquidationCSV(liquidation, expenses);
+              Alert.alert(
+                'Éxito',
+                'Archivo CSV generado correctamente. Puede compartirlo por WhatsApp, email o guardarlo en su dispositivo.'
+              );
+            } catch (error) {
+              console.error('Error exportando CSV:', error);
+              Alert.alert(
+                'Error',
+                'No se pudo generar el archivo CSV. Por favor intente nuevamente.'
+              );
+            }
+          }
+        },
+        {
+          text: 'CSV Detallado',
+          onPress: async () => {
+            try {
+              await generateDetailedLiquidationCSV(liquidation, expenses);
+              Alert.alert(
+                'Éxito',
+                'Archivo CSV detallado generado correctamente. Incluye toda la información de la liquidación.'
+              );
+            } catch (error) {
+              console.error('Error exportando CSV detallado:', error);
+              Alert.alert(
+                'Error',
+                'No se pudo generar el archivo CSV detallado. Por favor intente nuevamente.'
+              );
+            }
+          }
+        }
+      ],
+      { cancelable: true }
     );
   };
 

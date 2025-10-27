@@ -185,7 +185,7 @@ export default function LiquidationsScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Mis Liquidaciones</Text>
+        <Text style={styles.headerTitle}>Liquidaciones</Text>
         <View style={styles.headerActions}>
           <TouchableOpacity 
             style={styles.filterButtonCompact}

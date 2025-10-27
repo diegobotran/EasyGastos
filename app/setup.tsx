@@ -1,6 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { 
+  ActivityIndicator, 
+  Alert, 
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView, 
+  StyleSheet, 
+  Text, 
+  TextInput, 
+  TouchableOpacity, 
+  View 
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSetupViewModel } from '../hooks/useSetupViewModel';
 
@@ -9,16 +20,22 @@ const SetupScreen = () => {
   const viewModel = useSetupViewModel();
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView 
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <KeyboardAvoidingView 
+        style={styles.keyboardView}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
-        <View style={styles.header}>
-          <Ionicons name="person-add" size={60} color="#2563eb" />
-          <Text style={styles.title}>Crear Perfil</Text>
-          <Text style={styles.subtitle}>Configura tu cuenta para comenzar</Text>
-        </View>
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.header}>
+            <Ionicons name="person-add" size={60} color="#2563eb" />
+            <Text style={styles.title}>Crear Perfil</Text>
+            <Text style={styles.subtitle}>Configura tu cuenta para comenzar</Text>
+          </View>
 
         {/* Sección de Información Personal */}
         <View style={styles.section}>
@@ -176,7 +193,11 @@ const SetupScreen = () => {
             </>
           )}
         </TouchableOpacity>
+
+        {/* Espacio adicional para el teclado */}
+        <View style={{ height: 100 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -186,39 +207,46 @@ const styles = StyleSheet.create({
     flex: 1, 
     backgroundColor: '#f8fafc',
   },
+  keyboardView: {
+    flex: 1,
+  },
   scrollContent: {
     flexGrow: 1,
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 40,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 32,
-    marginTop: 20,
+    marginBottom: 24,
+    marginTop: 10,
   },
   title: { 
-    fontSize: 32, 
+    fontSize: 28, 
     fontWeight: 'bold', 
     color: '#1e293b',
-    marginTop: 16,
+    marginTop: 12,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 15,
     color: '#64748b',
-    marginTop: 8,
+    marginTop: 6,
+    textAlign: 'center',
+    paddingHorizontal: 20,
   },
   section: {
-    marginBottom: 24,
+    marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '600',
     color: '#1e293b',
-    marginBottom: 4,
+    marginBottom: 3,
   },
   sectionSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#64748b',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   inputContainer: {
     flexDirection: 'row',
@@ -227,40 +255,40 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    marginBottom: 12,
-    paddingHorizontal: 16,
+    marginBottom: 10,
+    paddingHorizontal: 14,
   },
   inputIcon: {
-    marginRight: 12,
+    marginRight: 10,
   },
   input: { 
     flex: 1,
-    height: 50,
-    fontSize: 16,
+    height: 48,
+    fontSize: 15,
     color: '#1e293b',
   },
   validationWarning: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginTop: -6,
-    marginBottom: 12,
+    gap: 6,
+    marginTop: -4,
+    marginBottom: 10,
     marginLeft: 4,
   },
   validationWarningText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#dc2626',
   },
   validationSuccess: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginTop: -6,
-    marginBottom: 12,
+    gap: 6,
+    marginTop: -4,
+    marginBottom: 10,
     marginLeft: 4,
   },
   validationSuccessText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#059669',
   },
   errorContainer: {
@@ -268,9 +296,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fef2f2',
     borderRadius: 12,
-    padding: 16,
-    gap: 12,
-    marginBottom: 20,
+    padding: 14,
+    gap: 10,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: '#fecaca',
   },
