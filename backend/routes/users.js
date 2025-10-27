@@ -238,6 +238,70 @@ router.post('/login', [
   }
 });
 
+// Actualizar PIN del usuario
+router.put('/update-pin', authenticateToken, [
+  body('email').isEmail().normalizeEmail(),
+  body('pin').isLength({ min: 4, max: 4 }).isNumeric()
+], async (req, res) => {
+  try {
+    console.log('🔐 Backend: Solicitud de actualización de PIN recibida');
+    
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      console.log('❌ Backend: Errores de validación:', errors.array());
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, pin } = req.body;
+    console.log('🔐 Backend: Email del usuario:', email);
+    console.log('🔐 Backend: Usuario autenticado:', req.user.email);
+
+    // Verificar que el usuario solo puede actualizar su propio PIN
+    if (req.user.email !== email) {
+      console.log('❌ Backend: Usuario intenta actualizar PIN de otro usuario');
+      return res.status(403).json({ error: 'No autorizado para actualizar este PIN' });
+    }
+
+    // Buscar usuario
+    const user = await User.findOne({ email, isActive: true });
+    if (!user) {
+      console.log('❌ Backend: Usuario no encontrado:', email);
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    // Encriptar nuevo PIN
+    const hashedPin = await bcrypt.hash(pin, 10);
+    console.log('🔐 Backend: PIN encriptado exitosamente');
+
+    // Actualizar PIN
+    user.pin = hashedPin;
+    user.updatedAt = new Date();
+    await user.save();
+
+    console.log('✅ Backend: PIN actualizado en base de datos');
+
+    // Log de sincronización
+    const syncLog = new SyncLog({
+      userEmail: email,
+      entityType: 'USER',
+      entityId: email,
+      action: 'UPDATE_PIN',
+      success: true
+    });
+    await syncLog.save();
+
+    console.log('✅ Backend: Log de sincronización creado');
+
+    res.json({
+      message: 'PIN actualizado exitosamente',
+      success: true
+    });
+  } catch (error) {
+    console.error('❌ Backend: Error actualizando PIN:', error);
+    res.status(500).json({ error: 'Error en el servidor al actualizar PIN' });
+  }
+});
+
 // Actualizar perfil de usuario
 router.put('/profile', validateUserProfile, async (req, res) => {
   try {

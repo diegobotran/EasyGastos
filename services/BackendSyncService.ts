@@ -219,6 +219,61 @@ export class BackendSyncService {
   }
 
   /**
+   * Actualiza el PIN del usuario en el backend
+   */
+  static async updateUserPinInBackend(email: string, newPin: string, authToken: string): Promise<{ success: boolean; error?: string }> {
+    console.log('🔐 BackendSync: ========== ACTUALIZANDO PIN EN BACKEND ==========');
+    console.log('🔐 BackendSync: Email:', email);
+    console.log('🔐 BackendSync: Nuevo PIN: ****');
+    console.log('🔐 BackendSync: Token disponible:', authToken ? 'SÍ' : 'NO');
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const requestUrl = `${backendUrl}/api/users/update-pin`;
+      console.log('🔐 BackendSync: URL de actualización:', requestUrl);
+
+      const updateData = {
+        email: email,
+        pin: newPin
+      };
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ BackendSync: Timeout de 10 segundos para actualización de PIN');
+        controller.abort();
+      }, 10000);
+
+      console.log('📡 BackendSync: Enviando petición PUT de actualización de PIN...');
+      const response = await fetch(requestUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify(updateData),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+      console.log('📡 BackendSync: Respuesta de actualización - Status:', response.status);
+      console.log('📡 BackendSync: Respuesta de actualización - OK:', response.ok);
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ BackendSync: PIN actualizado exitosamente en backend:', result.message);
+        return { success: true };
+      } else {
+        const errorText = await response.text();
+        console.log('❌ BackendSync: Error actualizando PIN - Status:', response.status, 'Error:', errorText);
+        return { success: false, error: `Error ${response.status}: ${errorText}` };
+      }
+    } catch (error) {
+      console.error('🚨 BackendSync: Error actualizando PIN:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
    * Sincroniza categorías del usuario con el backend
    */
   static async syncCategories(userEmail: string, authToken: string): Promise<{ success: boolean; error?: string }> {
