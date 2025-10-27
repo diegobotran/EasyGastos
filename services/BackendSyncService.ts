@@ -6,6 +6,7 @@ import { User } from '../models/User';
 import * as AuthService from './AuthService';
 import * as CategoryService from './CategoryService';
 import * as ExpenseService from './ExpenseService';
+import * as LiquidationService from './LiquidationService';
 
 /**
  * Servicio para sincronización con el backend
@@ -375,6 +376,101 @@ export class BackendSyncService {
   }
 
   /**
+   * Sincroniza liquidaciones del usuario con el backend
+   */
+  static async syncLiquidations(userEmail: string, authToken: string): Promise<{ success: boolean; error?: string }> {
+    console.log('📁 BackendSync: ============ INICIO SINCRONIZACIÓN LIQUIDACIONES ============');
+    console.log('📁 BackendSync: Usuario:', userEmail);
+    console.log('📁 BackendSync: Token disponible:', authToken ? 'SÍ' : 'NO');
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      console.log('🌐 BackendSync: URL del backend obtenida:', backendUrl);
+      
+      const localLiquidations = await LiquidationService.getLiquidationsNeedingSync(userEmail);
+      console.log('📁 BackendSync: Liquidaciones que necesitan sincronización:', localLiquidations.length);
+      
+      if (localLiquidations.length === 0) {
+        console.log('✅ BackendSync: No hay liquidaciones pendientes de sincronización');
+        return { success: true };
+      }
+      
+      let successCount = 0;
+      let errorCount = 0;
+      
+      for (const liquidation of localLiquidations) {
+        console.log('📤 BackendSync: ========== PROCESANDO LIQUIDACIÓN ==========');
+        console.log('📤 BackendSync: ID:', liquidation.id);
+        console.log('📤 BackendSync: Empleado:', liquidation.employeeName);
+        console.log('📤 BackendSync: Total:', liquidation.totalAmount);
+        console.log('📤 BackendSync: Status:', liquidation.status);
+        console.log('📤 BackendSync: Gastos incluidos:', liquidation.expenseIds.length);
+
+        const requestUrl = `${backendUrl}/api/liquidations`;
+        console.log('🌐 BackendSync: URL COMPLETA de la petición POST:', requestUrl);
+        console.log('📦 BackendSync: JSON que se va a enviar:', JSON.stringify(liquidation, null, 2));
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => {
+            console.log('⏰ BackendSync: TIMEOUT de 10 segundos para liquidación:', liquidation.id);
+            controller.abort();
+          }, 10000);
+
+          console.log('📡 BackendSync: Iniciando petición fetch POST...');
+          const response = await fetch(requestUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify(liquidation),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+          console.log('📡 BackendSync: ========== RESPUESTA RECIBIDA ==========');
+          console.log('📡 BackendSync: Status Code:', response.status);
+          console.log('📡 BackendSync: Status Text:', response.statusText);
+          console.log('📡 BackendSync: Response OK:', response.ok);
+
+          if (response.ok) {
+            const responseData = await response.text();
+            console.log('✅ BackendSync: ÉXITO - Datos de respuesta:', responseData);
+            await LiquidationService.markLiquidationAsSynced(liquidation.id);
+            console.log('✅ BackendSync: Liquidación marcada como sincronizada:', liquidation.id);
+            successCount++;
+          } else {
+            const errorText = await response.text();
+            console.log('❌ BackendSync: ERROR DEL SERVIDOR');
+            console.log('❌ BackendSync: Status:', response.status);
+            console.log('❌ BackendSync: Error:', errorText);
+            errorCount++;
+          }
+        } catch (fetchError) {
+          console.error('❌ BackendSync: Error en fetch de liquidación:', fetchError);
+          errorCount++;
+        }
+      }
+
+      console.log('🔄 BackendSync: ========== RESUMEN SINCRONIZACIÓN LIQUIDACIONES ==========');
+      console.log('✅ BackendSync: Liquidaciones sincronizadas:', successCount);
+      console.log('❌ BackendSync: Liquidaciones con error:', errorCount);
+
+      if (successCount > 0 && errorCount === 0) {
+        return { success: true };
+      } else if (successCount > 0 && errorCount > 0) {
+        return { success: true, error: `${errorCount} liquidaciones no se pudieron sincronizar` };
+      } else {
+        return { success: false, error: 'No se pudo sincronizar ninguna liquidación' };
+      }
+    } catch (error) {
+      console.error('🚨 BackendSync: Error general en sincronización de liquidaciones:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
    * Ejecuta sincronización completa de todos los datos del usuario
    */
   static async fullSync(userEmail: string): Promise<{ success: boolean; error?: string }> {
@@ -438,8 +534,13 @@ export class BackendSyncService {
         const expenseResult = await this.syncExpenses(userEmail, loginResult.token);
         console.log('💰 BackendSync: Resultado gastos:', expenseResult.success ? '✅ ÉXITO' : '❌ FALLO');
 
+        // PASO 5: SINCRONIZAR LIQUIDACIONES
+        console.log('📁 BackendSync: ========== PASO 5: SINCRONIZAR LIQUIDACIONES ==========');
+        const liquidationResult = await this.syncLiquidations(userEmail, loginResult.token);
+        console.log('📁 BackendSync: Resultado liquidaciones:', liquidationResult.success ? '✅ ÉXITO' : '❌ FALLO');
+
         // EVALUAR RESULTADOS
-        const anySuccess = userResult.success || categoryResult.success || expenseResult.success;
+        const anySuccess = userResult.success || categoryResult.success || expenseResult.success || liquidationResult.success;
         
         if (anySuccess) {
           await AsyncStorage.setItem(this.LAST_SYNC_KEY, Date.now().toString());
@@ -471,6 +572,128 @@ export class BackendSyncService {
     } catch (error) {
       console.error('Error obteniendo última sincronización:', error);
       return null;
+    }
+  }
+
+  /**
+   * Obtiene las liquidaciones pendientes para un manager desde el backend
+   */
+  static async getPendingLiquidationsForManager(managerEmail: string, authToken: string): Promise<any[]> {
+    console.log('👔 BackendSync: ============ OBTENER LIQUIDACIONES PARA MANAGER ============');
+    console.log('👔 BackendSync: Manager:', managerEmail);
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const requestUrl = `${backendUrl}/api/liquidations/manager/${encodeURIComponent(managerEmail)}`;
+      console.log('🌐 BackendSync: URL de consulta:', requestUrl);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ BackendSync: TIMEOUT de 10 segundos para obtener liquidaciones');
+        controller.abort();
+      }, 10000);
+
+      const response = await fetch(requestUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const liquidations = await response.json();
+        console.log('✅ BackendSync: Liquidaciones obtenidas:', liquidations.length);
+        return liquidations;
+      } else {
+        const errorText = await response.text();
+        console.error('❌ BackendSync: Error obteniendo liquidaciones:', errorText);
+        return [];
+      }
+    } catch (error) {
+      console.error('🚨 BackendSync: Error en getPendingLiquidationsForManager:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Aprueba una liquidación en el backend
+   */
+  static async approveLiquidation(
+    liquidationId: string, 
+    managerComments: string, 
+    authToken: string
+  ): Promise<{ success: boolean; error?: string }> {
+    console.log('✅ BackendSync: ============ APROBAR LIQUIDACIÓN ============');
+    console.log('✅ BackendSync: Liquidación ID:', liquidationId);
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const requestUrl = `${backendUrl}/api/liquidations/${liquidationId}/approve`;
+      console.log('🌐 BackendSync: URL de aprobación:', requestUrl);
+
+      const response = await fetch(requestUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ managerComments })
+      });
+
+      if (response.ok) {
+        console.log('✅ BackendSync: Liquidación aprobada exitosamente');
+        return { success: true };
+      } else {
+        const errorText = await response.text();
+        console.error('❌ BackendSync: Error aprobando liquidación:', errorText);
+        return { success: false, error: errorText };
+      }
+    } catch (error) {
+      console.error('🚨 BackendSync: Error en approveLiquidation:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
+   * Rechaza una liquidación en el backend
+   */
+  static async rejectLiquidation(
+    liquidationId: string, 
+    managerComments: string, 
+    authToken: string
+  ): Promise<{ success: boolean; error?: string }> {
+    console.log('❌ BackendSync: ============ RECHAZAR LIQUIDACIÓN ============');
+    console.log('❌ BackendSync: Liquidación ID:', liquidationId);
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const requestUrl = `${backendUrl}/api/liquidations/${liquidationId}/reject`;
+      console.log('🌐 BackendSync: URL de rechazo:', requestUrl);
+
+      const response = await fetch(requestUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ managerComments })
+      });
+
+      if (response.ok) {
+        console.log('✅ BackendSync: Liquidación rechazada exitosamente');
+        return { success: true };
+      } else {
+        const errorText = await response.text();
+        console.error('❌ BackendSync: Error rechazando liquidación:', errorText);
+        return { success: false, error: errorText };
+      }
+    } catch (error) {
+      console.error('🚨 BackendSync: Error en rejectLiquidation:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
     }
   }
 }
