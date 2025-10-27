@@ -5,11 +5,21 @@
  * con soporte offline-first y sincronización con backend
  */
 
-import * as SQLite from 'expo-sqlite';
+import { Platform } from 'react-native';
 import { Liquidation, LiquidationStatus, CreateLiquidationDTO } from '../models/Liquidation';
 import { getExpenseById, updateExpensesLiquidationStatus } from './ExpenseService';
 
-const db = SQLite.openDatabaseSync('easygastos.db');
+// Carga condicional de expo-sqlite para evitar errores en web
+let SQLite: any;
+if (Platform.OS !== 'web') {
+  try {
+    SQLite = require('expo-sqlite');
+  } catch (e) {
+    console.error("Error al cargar expo-sqlite. La base de datos no funcionará en móvil.", e);
+  }
+}
+
+const db = SQLite?.openDatabaseSync('easygastos.db');
 
 /**
  * Inicializa la tabla de liquidaciones en SQLite
