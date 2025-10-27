@@ -16,6 +16,7 @@ const expenseRoutes = require('./routes/expenses');
 const syncRoutes = require('./routes/sync');
 const managerLinksRoutes = require('./routes/manager-links');
 const liquidationsRoutes = require('./routes/liquidations');
+const uploadsRoutes = require('./routes/uploads');
 
 // Inicializar base de datos
 const { initDatabase } = require('./database/init');
@@ -145,6 +146,8 @@ app.use('/api/expenses', expenseRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/manager-links', managerLinksRoutes);
 app.use('/api/liquidations', liquidationsRoutes);
+// Rutas para subir archivos (imágenes de comprobantes)
+app.use('/api/uploads', uploadsRoutes);
 
 // Manejo de errores
 app.use((err, req, res, next) => {

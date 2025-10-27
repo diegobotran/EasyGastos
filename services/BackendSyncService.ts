@@ -274,6 +274,90 @@ export class BackendSyncService {
   }
 
   /**
+   * Sube una imagen de gasto al backend
+   * @param expenseId ID del gasto (se usa para nombrar la imagen)
+   * @param localUri URI local de la imagen (file://)
+   * @param authToken Token de autenticación
+   * @returns URL del servidor donde quedó la imagen
+   */
+  static async uploadExpenseImage(
+    expenseId: string, 
+    localUri: string, 
+    authToken: string
+  ): Promise<{ success: boolean; url?: string; error?: string }> {
+    console.log('📸 BackendSync: ========== SUBIENDO IMAGEN DE GASTO ==========');
+    console.log('📸 BackendSync: Expense ID:', expenseId);
+    console.log('📸 BackendSync: Local URI:', localUri);
+
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      
+      // Crear FormData para multipart/form-data
+      const formData = new FormData();
+      
+      // Extraer nombre del archivo y extensión
+      const uriParts = localUri.split('/');
+      const fileName = uriParts[uriParts.length - 1];
+      const fileExtension = fileName.split('.').pop() || 'jpg';
+      
+      // Nombre del archivo en el servidor: {expenseId}.{extension}
+      const serverFileName = `${expenseId}.${fileExtension}`;
+      
+      // Agregar archivo al FormData
+      formData.append('image', {
+        uri: localUri,
+        type: `image/${fileExtension}`,
+        name: serverFileName
+      } as any);
+      
+      formData.append('expenseId', expenseId);
+      
+      const requestUrl = `${backendUrl}/api/uploads/expense-image`;
+      console.log('🌐 BackendSync: POST', requestUrl);
+      console.log('📦 BackendSync: Subiendo archivo:', serverFileName);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ BackendSync: TIMEOUT de 30 segundos para upload de imagen');
+        controller.abort();
+      }, 30000); // 30 segundos para upload
+
+      const response = await fetch(requestUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          // NO enviar Content-Type, fetch lo detecta automáticamente con FormData
+        },
+        body: formData,
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+      
+      console.log('📡 BackendSync: Respuesta de upload:', response.status);
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ BackendSync: Imagen subida:', result);
+        
+        // El backend debe responder con { success: true, url: "/uploads/expenses/{expenseId}.jpg" }
+        if (result.url) {
+          return { success: true, url: result.url };
+        } else {
+          return { success: false, error: 'Respuesta del servidor sin URL' };
+        }
+      } else {
+        const errorText = await response.text();
+        console.error('❌ BackendSync: Error subiendo imagen:', errorText);
+        return { success: false, error: `Error ${response.status}: ${errorText}` };
+      }
+    } catch (error) {
+      console.error('🚨 BackendSync: Error en upload de imagen:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Error desconocido' };
+    }
+  }
+
+  /**
    * Sincroniza categorías del usuario con el backend
    */
   static async syncCategories(userEmail: string, authToken: string): Promise<{ success: boolean; error?: string }> {
@@ -399,12 +483,38 @@ export class BackendSyncService {
         console.log('📤 BackendSync: ID:', expense.id);
         console.log('📤 BackendSync: Monto:', expense.amount);
         console.log('📤 BackendSync: Email:', expense.email);
+        console.log('📤 BackendSync: Imagen URI:', expense.imageuri);
 
-        // Construir el objeto con userEmail en vez de email (desestructuración para remover email)
+        // PASO 1: SUBIR IMAGEN SI EXISTE (y es un archivo local file://)
+        let serverImageUrl = expense.imageuri || '';
+        
+        if (expense.imageuri && expense.imageuri.startsWith('file://')) {
+          console.log('📸 BackendSync: Detectada imagen local, subiendo al servidor...');
+          try {
+            const uploadResult = await this.uploadExpenseImage(expense.id, expense.imageuri, authToken);
+            if (uploadResult.success && uploadResult.url) {
+              serverImageUrl = uploadResult.url;
+              console.log('✅ BackendSync: Imagen subida exitosamente:', serverImageUrl);
+            } else {
+              console.warn('⚠️ BackendSync: No se pudo subir la imagen:', uploadResult.error);
+              // Continuar sin imagen (no es crítico)
+            }
+          } catch (uploadError) {
+            console.error('❌ BackendSync: Error subiendo imagen:', uploadError);
+            // Continuar sin imagen
+          }
+        } else if (expense.imageuri) {
+          console.log('📸 BackendSync: Imagen ya es URL del servidor:', expense.imageuri);
+        } else {
+          console.log('📸 BackendSync: Sin imagen adjunta');
+        }
+
+        // PASO 2: Construir el objeto con userEmail y la URL del servidor
         const { email, ...expenseWithoutEmail } = expense;
         const expensePayload = {
           ...expenseWithoutEmail,
           userEmail: email,
+          imageuri: serverImageUrl, // URL del servidor o vacío
         };
 
         const requestUrl = `${backendUrl}/api/expenses`;
@@ -575,7 +685,7 @@ export class BackendSyncService {
 
     try {
       const { url: backendUrl } = await this.getBackendConfig();
-      const requestUrl = `${backendUrl}/api/categories`;
+      const requestUrl = `${backendUrl}/api/categories?userEmail=${encodeURIComponent(userEmail)}`;
       console.log('🌐 BackendSync: GET', requestUrl);
 
       const response = await fetch(requestUrl, {

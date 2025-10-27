@@ -135,8 +135,27 @@ export default function AddExpenseScreen() {
   };
 
   const handleSave = async (status: keyof typeof STATUSES) => {
+    console.log('🔍 AddExpense: Validando campos...');
+    console.log('📝 Description:', description);
+    console.log('💰 Amount:', amount);
+    console.log('📂 Category:', category);
+    console.log('🏢 Department:', department);
+    
     if (!description || !amount || !category || !department) {
-      alert('Por favor, llene todos los campos requeridos.');
+      const missingFields = [];
+      if (!description) missingFields.push('Descripción');
+      if (!amount) missingFields.push('Monto');
+      if (!category) missingFields.push('Categoría');
+      if (!department) missingFields.push('Departamento');
+      
+      alert(`Por favor, llene todos los campos requeridos:\n- ${missingFields.join('\n- ')}`);
+      return;
+    }
+    
+    // Validar que el monto sea un número válido
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      alert('Por favor, ingrese un monto válido mayor a 0');
       return;
     }
     
@@ -162,24 +181,31 @@ export default function AddExpenseScreen() {
         status,
         expenseStatus: 'draft', // Estado inicial en el flujo de liquidación
         supplier: supplier || 'Proveedor Desconocido',
-        vat_number,
+        vat_number: vat_number || '',
         department,
-        notes,
-        noinvoice,
-        serie,
-        centro,
-        cuenta,
-        ordenco,
+        notes: notes || '',
+        noinvoice: noinvoice || '',
+        serie: serie || '',
+        centro: centro || '',
+        cuenta: cuenta || '',
+        ordenco: ordenco || '',
         imageuri: file?.uri || '',
         totiva: parseFloat(totiva) || 0,
-        currency,
+        currency: currency || 'GTQ',
         email: user.email
       };
 
+      console.log('📋 AddExpense: Objeto del gasto creado');
+
       // PASO 1: GUARDAR LOCALMENTE (RÁPIDO - OFFLINE FIRST)
-      console.log('� AddExpense: Guardando gasto localmente...');
-      await ExpenseService.addExpense(newExpense, user.email);
-      console.log('✅ AddExpense: Gasto guardado localmente exitosamente');
+      console.log('📱 AddExpense: Guardando gasto localmente...');
+      try {
+        await ExpenseService.addExpense(newExpense, user.email);
+        console.log('✅ AddExpense: Gasto guardado localmente exitosamente');
+      } catch (dbError: any) {
+        console.error('❌ AddExpense: Error al guardar en base de datos:', dbError);
+        throw new Error(`Error al guardar en base de datos: ${dbError.message || dbError}`);
+      }
 
       // PASO 2: NOTIFICAR AL USUARIO INMEDIATAMENTE
       alert('✅ Gasto guardado exitosamente!');

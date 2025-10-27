@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as AuthService from '../../services/AuthService';
 import { BackendSyncService } from '../../services/BackendSyncService';
 import * as CategoryService from '../../services/CategoryService';
@@ -324,7 +324,7 @@ export default function SettingsScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <Text style={styles.title}>Configuración de Seguridad</Text>
       <Text style={styles.userName}>{userName} </Text>
 
@@ -455,16 +455,23 @@ export default function SettingsScreen() {
           </Text>
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: 'white' },
+  container: { 
+    flex: 1, 
+    backgroundColor: 'white' 
+  },
+  contentContainer: {
+    padding: 20,
+    paddingBottom: 40,
+  },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  title: { fontSize: 28, fontWeight: 'bold', marginBottom: 20, color: '#1e293b' },
-  userName: { fontSize: 16, color: '#64748b', marginBottom: 30 },
-  label: { fontSize: 18, fontWeight: '600', marginBottom: 5, color: '#1e293b' },
+  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 10, color: '#1e293b' },
+  userName: { fontSize: 14, color: '#64748b', marginBottom: 20 },
+  label: { fontSize: 16, fontWeight: '600', marginBottom: 5, color: '#1e293b' },
   input: { 
     borderWidth: 1, 
     borderColor: '#ddd', 
@@ -485,45 +492,53 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 10,
+    marginBottom: 8,
     marginLeft: 4,
   },
   validationWarningText: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#dc2626',
   },
   validationSuccess: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 10,
+    marginBottom: 8,
     marginLeft: 4,
   },
   validationSuccessText: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#059669',
     fontWeight: '600',
   },
-  subtitle: { fontSize: 14, color: '#64748b', marginBottom: 20 },
+  subtitle: { fontSize: 13, color: '#64748b', marginBottom: 15 },
   toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
   picker: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, marginBottom: 5 },
   updateButton: { 
     flexDirection: 'row', 
     backgroundColor: '#2563eb', 
-    padding: 15, 
+    padding: 14, 
     borderRadius: 8, 
     alignItems: 'center', 
     justifyContent: 'center', 
-    marginBottom: 20 
+    marginBottom: 15 
   },
   updateButtonDisabled: {
     backgroundColor: '#94a3b8',
   },
-  syncButton: { flexDirection: 'row', backgroundColor: '#2563eb', padding: 15, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  syncButton: { 
+    flexDirection: 'row', 
+    backgroundColor: '#10b981', 
+    padding: 14, 
+    borderRadius: 8, 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    marginBottom: 10 
+  },
   syncButtonDisabled: { backgroundColor: '#94a3b8' },
-  buttonText: { color: 'white', fontWeight: 'bold', marginLeft: 5 },
-  syncStatusContainer: { backgroundColor: '#f1f5f9', padding: 12, borderRadius: 8, marginBottom: 10 },
-  syncStatusText: { fontSize: 14, color: '#334155', textAlign: 'center' },
-  lastSyncContainer: { backgroundColor: '#f0fdf4', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#dcfce7' },
-  lastSyncText: { fontSize: 12, color: '#166534', textAlign: 'center' },
+  buttonText: { color: 'white', fontWeight: 'bold', marginLeft: 5, fontSize: 15 },
+  syncStatusContainer: { backgroundColor: '#f1f5f9', padding: 10, borderRadius: 8, marginBottom: 10 },
+  syncStatusText: { fontSize: 13, color: '#334155', textAlign: 'center' },
+  lastSyncContainer: { backgroundColor: '#f0fdf4', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#dcfce7' },
+  lastSyncText: { fontSize: 11, color: '#166534', textAlign: 'center' },
 });

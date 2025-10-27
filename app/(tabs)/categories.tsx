@@ -100,35 +100,35 @@ export default function CategoryScreen() {
       console.log('💾 Categories: Agregando categoría localmente...');
       addCategory(name, centro, cuenta, ordenco);
       
-      // Limpiar el formulario
+      // Limpiar el formulario inmediatamente
       setName('');
       setCentro('');
       setCuenta('');
       setOrdenco('');
 
-      // Notificar al usuario inmediatamente (no esperar sincronización)
-      Alert.alert('Éxito', '✅ Categoría agregada exitosamente!');
+      // Notificar al usuario de inmediato (sin esperar backend)
+      Alert.alert('Éxito', '✅ Categoría agregada localmente');
 
-      // STEP 4: SINCRONIZAR EN SEGUNDO PLANO (NO BLOQUEAR AL USUARIO)
+      // STEP 4: SINCRONIZAR EN SEGUNDO PLANO (NO BLOQUEAR UI)
       console.log('🔄 Categories: Iniciando sincronización en segundo plano...');
       
-      // Ejecutar sincronización de forma asíncrona sin esperar (background sync)
+      // Ejecutar sin await para no bloquear
       (async () => {
         try {
-          console.log('🔄 Categories: Sincronizando categoría con backend (segundo plano)...');
+          console.log('🔄 Categories (BG): Sincronizando categoría con backend...');
           const syncResult = await BackendSyncService.syncCategories(user.email, authToken);
           
           if (syncResult.success) {
-            console.log('✅ Categories: Categoría sincronizada exitosamente en segundo plano');
+            console.log('✅ Categories (BG): Categoría sincronizada exitosamente con backend');
           } else {
-            console.log('⚠️ Categories: No se pudo sincronizar - quedará pendiente:', syncResult.error);
+            console.warn('⚠️ Categories (BG): Error en sincronización:', syncResult.error);
           }
-        } catch (bgError) {
-          console.log('⚠️ Categories: Error en sincronización de segundo plano (no crítico):', bgError);
+        } catch (syncError) {
+          console.error('❌ Categories (BG): Error en sincronización:', syncError);
         }
       })();
       
-      console.log('✅ Categories: Proceso completado exitosamente');
+      console.log('✅ Categories: Proceso completado (sincronización en curso en segundo plano)');
       
     } catch (error) {
       console.error('❌ Categories: Error en handleAddCategory:', error);
