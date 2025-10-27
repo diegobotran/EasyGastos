@@ -23,7 +23,7 @@ const validateUserProfile = [
   body('department').optional().trim().escape()
 ];
 
-// Registrar nuevo usuario
+// Registrar nuevo usuario O actualizar usuario existente
 router.post('/register', validateUserRegistration, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -35,12 +35,63 @@ router.post('/register', validateUserRegistration, async (req, res) => {
 
     // Verificar si el usuario ya existe
     const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ error: 'El usuario ya existe' });
-    }
-
+    
     // Encriptar PIN
     const hashedPin = await bcrypt.hash(pin, 10);
+
+    if (existingUser) {
+      // ===== USUARIO EXISTE: ACTUALIZAR DATOS Y PIN =====
+      console.log(`🔄 Usuario ${email} ya existe - Actualizando datos y PIN`);
+      
+      existingUser.firstName = firstName;
+      existingUser.lastName = lastName;
+      existingUser.pin = hashedPin; // Actualizar PIN
+      existingUser.department = department;
+      existingUser.lastLoginAt = new Date();
+
+      // Determinar manager basado en el departamento
+      if (department) {
+        const manager = await User.findOne({ 
+          department, 
+          isManager: true, 
+          isActive: true 
+        });
+        if (manager) {
+          existingUser.managerEmail = manager.email;
+        }
+      }
+
+      await existingUser.save();
+
+      // Log de sincronización
+      const syncLog = new SyncLog({
+        userEmail: email,
+        entityType: 'USER',
+        entityId: email,
+        action: 'UPDATE',
+        success: true
+      });
+      await syncLog.save();
+
+      // Generar token JWT
+      const token = generateToken(existingUser);
+
+      return res.status(200).json({
+        message: 'Usuario actualizado exitosamente',
+        updated: true,
+        token,
+        user: {
+          email,
+          firstName,
+          lastName,
+          department,
+          managerEmail: existingUser.managerEmail
+        }
+      });
+    }
+
+    // ===== USUARIO NUEVO: REGISTRAR =====
+    console.log(`📝 Registrando nuevo usuario: ${email}`);
 
     // Determinar manager basado en el departamento
     let managerEmail = null;
@@ -83,6 +134,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
 
     res.status(201).json({
       message: 'Usuario registrado exitosamente',
+      updated: false,
       token,
       user: {
         email,
@@ -93,7 +145,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error en registro de usuario:', error);
+    console.error('Error en registro/actualización de usuario:', error);
     
     // Log de error
     if (req.body.email) {
