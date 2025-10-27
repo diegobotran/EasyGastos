@@ -1,96 +1,302 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { ActivityIndicator, Alert, Button, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useSetupViewModel } from '../hooks/useSetupViewModel'; // Assuming this hook is in hooks/
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSetupViewModel } from '../hooks/useSetupViewModel';
 
 const SetupScreen = () => {
   const router = useRouter();
-  
-  // This function will be called from the ViewModel on success
-  const onSaveSuccess = () => {
-    Alert.alert("Perfil Guardado", "Tu perfil ha sido guardado localmente.");
-    router.replace('/unlock'
-    ); // Navigate to the unlock screen
-  };
-
   const viewModel = useSetupViewModel();
 
   return (
-    <View style={styles.container}>
-      <Text  style={styles.title}>Crear Perfil Local</Text>
-      
-      <TextInput
-        style={styles.input}
-        placeholder="Nombre" 
-        placeholderTextColor="#888888"
-        value={viewModel.profile.firstName}
-        onChangeText={(text) => viewModel.updateProfileField('firstName', text)}
-        autoCapitalize="words"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Apellido"
-        placeholderTextColor="#888888"
-        value={viewModel.profile.lastName}
-        onChangeText={(text) => viewModel.updateProfileField('lastName', text)}
-        autoCapitalize="words"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Correo Electrónico"
-        placeholderTextColor="#888888"
-        value={viewModel.profile.email}
-        onChangeText={(text) => viewModel.updateProfileField('email', text)}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Confirmar Correo Electrónico"
-        placeholderTextColor="#888888"
-        value={viewModel.confirmEmail}
-        onChangeText={viewModel.setConfirmEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="PIN de 4 dígitos"
-        placeholderTextColor="#888888"
-        value={viewModel.pin}
-        onChangeText={viewModel.setPin}
-        keyboardType="number-pad"
-        secureTextEntry
-        maxLength={4}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Confirmar PIN"
-        placeholderTextColor="#888888"
-        value={viewModel.confirmPin}
-        onChangeText={viewModel.setConfirmPin}
-        keyboardType="number-pad"
-        secureTextEntry
-        maxLength={4}
-      />
+    <SafeAreaView style={styles.container}>
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.header}>
+          <Ionicons name="person-add" size={60} color="#2563eb" />
+          <Text style={styles.title}>Crear Perfil</Text>
+          <Text style={styles.subtitle}>Configura tu cuenta para comenzar</Text>
+        </View>
 
-      
-      {viewModel.isLoading ? (
-        <ActivityIndicator size="large" color="#0000ff" />
-      ) : (
-        <Button title="Guardar y Continuar" onPress={viewModel.handleSaveProfile} />
-      )}
-      
-      {viewModel.error && <Text style={styles.errorText}>{viewModel.error}</Text>}
-    </View>
+        {/* Sección de Información Personal */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Información Personal</Text>
+          
+          <View style={styles.inputContainer}>
+            <Ionicons name="person-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Nombre" 
+              placeholderTextColor="#94a3b8"
+              value={viewModel.profile.firstName}
+              onChangeText={(text) => viewModel.updateProfileField('firstName', text)}
+              autoCapitalize="words"
+              editable={!viewModel.isLoading}
+            />
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Ionicons name="person-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Apellido"
+              placeholderTextColor="#94a3b8"
+              value={viewModel.profile.lastName}
+              onChangeText={(text) => viewModel.updateProfileField('lastName', text)}
+              autoCapitalize="words"
+              editable={!viewModel.isLoading}
+            />
+          </View>
+        </View>
+
+        {/* Sección de Correo Electrónico */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Correo Electrónico</Text>
+          
+          <View style={styles.inputContainer}>
+            <Ionicons name="mail-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="correo@ejemplo.com"
+              placeholderTextColor="#94a3b8"
+              value={viewModel.profile.email}
+              onChangeText={(text) => viewModel.updateProfileField('email', text.toLowerCase())}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+              editable={!viewModel.isLoading}
+            />
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Ionicons name="mail-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Confirmar correo electrónico"
+              placeholderTextColor="#94a3b8"
+              value={viewModel.confirmEmail}
+              onChangeText={(text) => viewModel.setConfirmEmail(text.toLowerCase())}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+              editable={!viewModel.isLoading}
+            />
+          </View>
+          
+          {viewModel.confirmEmail && viewModel.profile.email !== viewModel.confirmEmail && (
+            <View style={styles.validationWarning}>
+              <Ionicons name="alert-circle" size={16} color="#dc2626" />
+              <Text style={styles.validationWarningText}>Los correos no coinciden</Text>
+            </View>
+          )}
+          
+          {viewModel.confirmEmail && viewModel.profile.email === viewModel.confirmEmail && (
+            <View style={styles.validationSuccess}>
+              <Ionicons name="checkmark-circle" size={16} color="#059669" />
+              <Text style={styles.validationSuccessText}>Los correos coinciden</Text>
+            </View>
+          )}
+        </View>
+
+        {/* Sección de PIN de Seguridad */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>PIN de Seguridad</Text>
+          <Text style={styles.sectionSubtitle}>Crea un PIN de 4 dígitos para proteger tu cuenta</Text>
+          
+          <View style={styles.inputContainer}>
+            <Ionicons name="lock-closed-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="PIN de 4 dígitos"
+              placeholderTextColor="#94a3b8"
+              value={viewModel.pin}
+              onChangeText={viewModel.setPin}
+              keyboardType="number-pad"
+              secureTextEntry
+              maxLength={4}
+              editable={!viewModel.isLoading}
+            />
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Ionicons name="lock-closed-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Confirmar PIN"
+              placeholderTextColor="#94a3b8"
+              value={viewModel.confirmPin}
+              onChangeText={viewModel.setConfirmPin}
+              keyboardType="number-pad"
+              secureTextEntry
+              maxLength={4}
+              editable={!viewModel.isLoading}
+            />
+          </View>
+
+          {viewModel.confirmPin && viewModel.pin !== viewModel.confirmPin && (
+            <View style={styles.validationWarning}>
+              <Ionicons name="alert-circle" size={16} color="#dc2626" />
+              <Text style={styles.validationWarningText}>Los PINs no coinciden</Text>
+            </View>
+          )}
+          
+          {viewModel.confirmPin && viewModel.pin === viewModel.confirmPin && viewModel.pin.length === 4 && (
+            <View style={styles.validationSuccess}>
+              <Ionicons name="checkmark-circle" size={16} color="#059669" />
+              <Text style={styles.validationSuccessText}>Los PINs coinciden</Text>
+            </View>
+          )}
+        </View>
+
+        {/* Mensaje de Error */}
+        {viewModel.error && (
+          <View style={styles.errorContainer}>
+            <Ionicons name="alert-circle" size={20} color="#dc2626" />
+            <Text style={styles.errorText}>{viewModel.error}</Text>
+          </View>
+        )}
+
+        {/* Botón de Guardar */}
+        <TouchableOpacity 
+          style={[styles.saveButton, viewModel.isLoading && styles.saveButtonDisabled]}
+          onPress={viewModel.handleSaveProfile}
+          disabled={viewModel.isLoading}
+        >
+          {viewModel.isLoading ? (
+            <>
+              <ActivityIndicator size="small" color="white" />
+              <Text style={styles.saveButtonText}>Guardando...</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="checkmark-circle" size={20} color="white" />
+              <Text style={styles.saveButtonText}>Guardar y Continuar</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
   );
 };
 
-// Add your styles here
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: '#f5f5f5' },
-  title: { fontSize: 24, fontWeight: 'bold', textAlign: 'center', marginBottom: 20, color: '#333333' },
-  input: { height: 40, borderColor: 'gray', borderWidth: 1, borderRadius: 5, marginBottom: 15, paddingHorizontal: 10, backgroundColor: 'white', color:'#333333' },
-  errorText: { color: 'red', textAlign: 'center', marginTop: 10 },
+  container: { 
+    flex: 1, 
+    backgroundColor: '#f8fafc',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    padding: 20,
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: 32,
+    marginTop: 20,
+  },
+  title: { 
+    fontSize: 32, 
+    fontWeight: 'bold', 
+    color: '#1e293b',
+    marginTop: 16,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#64748b',
+    marginTop: 8,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 4,
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 12,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 12,
+    paddingHorizontal: 16,
+  },
+  inputIcon: {
+    marginRight: 12,
+  },
+  input: { 
+    flex: 1,
+    height: 50,
+    fontSize: 16,
+    color: '#1e293b',
+  },
+  validationWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: -6,
+    marginBottom: 12,
+    marginLeft: 4,
+  },
+  validationWarningText: {
+    fontSize: 14,
+    color: '#dc2626',
+  },
+  validationSuccess: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: -6,
+    marginBottom: 12,
+    marginLeft: 4,
+  },
+  validationSuccessText: {
+    fontSize: 14,
+    color: '#059669',
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    padding: 16,
+    gap: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  errorText: { 
+    flex: 1,
+    fontSize: 14,
+    color: '#dc2626',
+  },
+  saveButton: {
+    flexDirection: 'row',
+    backgroundColor: '#2563eb',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
+  saveButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
 });
 
 export default SetupScreen;
