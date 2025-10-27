@@ -14,107 +14,105 @@ import {
     View
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
-import { ManagerSummary, PendingExpense } from '../models/ManagerModels';
+import { Liquidation, getLiquidationStatusColor, getLiquidationStatusText } from '../models/Liquidation';
 import { BackendSyncService } from '../services/BackendSyncService';
+import { getExpenseById } from '../services/ExpenseService';
+
+interface ManagerSummary {
+  pendingCount: number;
+  totalAmount: number;
+  employeeCount: number;
+  departmentName?: string;
+}
 
 export default function ManagerApprovalScreen() {
   const { user } = useAuth();
-  const [pendingExpenses, setPendingExpenses] = useState<PendingExpense[]>([]);
+  const [pendingLiquidations, setPendingLiquidations] = useState<Liquidation[]>([]);
   const [summary, setSummary] = useState<ManagerSummary>({ pendingCount: 0, totalAmount: 0, employeeCount: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
-  const [selectedExpense, setSelectedExpense] = useState<PendingExpense | null>(null);
+  const [selectedLiquidation, setSelectedLiquidation] = useState<Liquidation | null>(null);
   const [approvalAction, setApprovalAction] = useState<boolean>(true);
   const [comments, setComments] = useState('');
 
-  const loadPendingExpenses = async () => {
+  const loadPendingLiquidations = async () => {
     if (!user?.email) return;
 
     try {
       setIsLoading(true);
       
-      // Intentar obtener gastos pendientes con timeout corto para no bloquear en offline
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Timeout')), 3000)
-      );
+      // Primero obtener el token de autenticación
+      const loginResult = await BackendSyncService.loginAndGetToken(user.email, user.pin || '');
       
-      const fetchPromise = BackendSyncService.getPendingExpensesForManager(user.email);
+      if (!loginResult.success || !loginResult.token) {
+        console.error('Error obteniendo token:', loginResult.error);
+        setIsOffline(true);
+        setPendingLiquidations([]);
+        setSummary({ pendingCount: 0, totalAmount: 0, employeeCount: 0 });
+        setIsLoading(false);
+        setIsRefreshing(false);
+        return;
+      }
+
+      // Obtener liquidaciones pendientes para este manager
+      const liquidations = await BackendSyncService.getPendingLiquidationsForManager(user.email, loginResult.token);
       
-      const result = await Promise.race([fetchPromise, timeoutPromise]) as any;
-      
-      if (result.expenses) {
+      if (liquidations && liquidations.length >= 0) {
         // Conectado exitosamente
         setIsOffline(false);
-        
-        // Convertir Expense[] a PendingExpense[]
-        const pendingExpenses: PendingExpense[] = result.expenses.map((expense: any) => ({
-          id: expense.id,
-          userEmail: expense.email, // Expense usa 'email', PendingExpense usa 'userEmail'
-          description: expense.description,
-          amount: expense.amount,
-          date: new Date(expense.date),
-          category: expense.category,
-          status: expense.status as 'ENVIADO_JEFE' | 'APROBADO_JEFE' | 'RECHAZADO_JEFE',
-          supplier: expense.supplier,
-          department: expense.department,
-          notes: expense.notes,
-          currency: expense.currency,
-          totalIva: expense.totiva,
-          centro: expense.centro,
-          cuenta: expense.cuenta,
-          ordenco: expense.ordenco
-        }));
-        
-        setPendingExpenses(pendingExpenses);
+        setPendingLiquidations(liquidations);
         
         // Calcular resumen
-        const totalAmount = pendingExpenses.reduce((sum: number, expense: PendingExpense) => sum + expense.amount, 0);
-        const uniqueEmployees = new Set(pendingExpenses.map((e: PendingExpense) => e.userEmail)).size;
+        const totalAmount = liquidations.reduce((sum: number, liq: Liquidation) => sum + liq.totalAmount, 0);
+        const uniqueEmployees = new Set(liquidations.map((liq: Liquidation) => liq.userId)).size;
         
         setSummary({
-          pendingCount: result.expenses.length,
+          pendingCount: liquidations.length,
           totalAmount,
           employeeCount: uniqueEmployees,
           departmentName: user.department
         });
-      } else if (result.error) {
-        console.error('Error cargando gastos pendientes:', result.error);
-        // En modo offline, no mostrar alert - simplemente dejar vacío
+      } else {
+        console.error('Error obteniendo liquidaciones');
         setIsOffline(true);
-        setPendingExpenses([]);
+        setPendingLiquidations([]);
         setSummary({ pendingCount: 0, totalAmount: 0, employeeCount: 0 });
       }
     } catch (error) {
-      // Error de timeout o conexión - modo offline
+      // Error de conexión - modo offline
       console.log('Modo offline o sin conexión al backend:', error);
       setIsOffline(true);
-      setPendingExpenses([]);
+      setPendingLiquidations([]);
       setSummary({ pendingCount: 0, totalAmount: 0, employeeCount: 0 });
-      // No mostrar alert en modo offline para no interrumpir al usuario
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
   };
 
-  const handleApproval = async (expenseId: string, approve: boolean, comments?: string) => {
+  const handleApproval = async (liquidationId: string, approve: boolean, comments?: string) => {
     if (!user?.email) return;
 
     try {
-      const result = await BackendSyncService.approveExpense(
-        expenseId,
-        approve,
-        user.email,
-        comments
-      );
+      // Obtener token de autenticación
+      const loginResult = await BackendSyncService.loginAndGetToken(user.email, user.pin || '');
+      
+      if (!loginResult.success || !loginResult.token) {
+        Alert.alert('Error', 'No se pudo autenticar. Por favor, intente de nuevo.');
+        return;
+      }
+
+      const result = approve 
+        ? await BackendSyncService.approveLiquidation(liquidationId, comments || '', loginResult.token)
+        : await BackendSyncService.rejectLiquidation(liquidationId, comments || '', loginResult.token);
 
       if (result.success) {
         Alert.alert(
           'Éxito', 
-          `Gasto ${approve ? 'aprobado' : 'rechazado'} correctamente`,
-          [{ text: 'OK', onPress: loadPendingExpenses }]
+          `Liquidación ${approve ? 'aprobada' : 'rechazada'} correctamente`,
+          [{ text: 'OK', onPress: loadPendingLiquidations }]
         );
       } else {
         Alert.alert('Error', result.error || 'Error procesando la solicitud');
@@ -125,55 +123,62 @@ export default function ManagerApprovalScreen() {
     }
   };
 
-  const promptApproval = (expense: PendingExpense, approve: boolean) => {
-    setSelectedExpense(expense);
+  const promptApproval = (liquidation: Liquidation, approve: boolean) => {
+    setSelectedLiquidation(liquidation);
     setApprovalAction(approve);
     setComments('');
     setModalVisible(true);
   };
 
   const confirmApproval = () => {
-    if (selectedExpense) {
-      handleApproval(selectedExpense.id, approvalAction, comments);
+    if (selectedLiquidation) {
+      handleApproval(selectedLiquidation.id, approvalAction, comments);
       setModalVisible(false);
-      setSelectedExpense(null);
+      setSelectedLiquidation(null);
       setComments('');
     }
   };
 
   const onRefresh = useCallback(() => {
     setIsRefreshing(true);
-    loadPendingExpenses();
+    loadPendingLiquidations();
   }, [user?.email]);
 
   useFocusEffect(
     useCallback(() => {
-      loadPendingExpenses();
+      loadPendingLiquidations();
     }, [user?.email])
   );
 
-  const renderExpenseItem = ({ item }: { item: PendingExpense }) => (
+  const renderLiquidationItem = ({ item }: { item: Liquidation }) => (
     <View style={styles.expenseCard}>
       <View style={styles.expenseHeader}>
-        <Text style={styles.employeeName}>{item.userEmail}</Text>
-        <Text style={styles.amount}>{item.amount.toFixed(2)}€</Text>
+        <View>
+          <Text style={styles.employeeName}>{item.employeeName}</Text>
+          <Text style={styles.liquidationId}>ID: {item.id}</Text>
+        </View>
+        <Text style={styles.amount}>{item.totalAmount.toFixed(2)}€</Text>
       </View>
       
-      <Text style={styles.description}>{item.description}</Text>
-      
-      <View style={styles.expenseDetails}>
-        <Text style={styles.category}>{item.category}</Text>
-        <Text style={styles.date}>
-          {new Date(item.date).toLocaleDateString('es-ES')}
+      <View style={[styles.statusBadge, { backgroundColor: getLiquidationStatusColor(item.status) + '20' }]}>
+        <Text style={[styles.statusText, { color: getLiquidationStatusColor(item.status) }]}>
+          {getLiquidationStatusText(item.status)}
         </Text>
       </View>
       
-      {item.supplier && (
-        <Text style={styles.supplier}>Proveedor: {item.supplier}</Text>
-      )}
+      <View style={styles.expenseDetails}>
+        <Text style={styles.category}>
+          <Ionicons name="receipt" size={14} color="#666" /> {item.expenseIds.length} gasto(s)
+        </Text>
+        <Text style={styles.date}>
+          {new Date(item.createdDate).toLocaleDateString('es-ES')}
+        </Text>
+      </View>
       
-      {item.notes && (
-        <Text style={styles.notes}>Notas: {item.notes}</Text>
+      {item.submittedDate && (
+        <Text style={styles.notes}>
+          Enviado: {new Date(item.submittedDate).toLocaleDateString('es-ES')}
+        </Text>
       )}
       
       <View style={styles.actionButtons}>
@@ -203,7 +208,7 @@ export default function ManagerApprovalScreen() {
       <View style={styles.summaryRow}>
         <View style={styles.summaryItem}>
           <Text style={styles.summaryValue}>{summary.pendingCount}</Text>
-          <Text style={styles.summaryLabel}>Gastos Pendientes</Text>
+          <Text style={styles.summaryLabel}>Liquidaciones</Text>
         </View>
         
         <View style={styles.summaryItem}>
@@ -235,8 +240,8 @@ export default function ManagerApprovalScreen() {
   return (
     <View style={styles.container}>
       <FlatList
-        data={pendingExpenses}
-        renderItem={renderExpenseItem}
+        data={pendingLiquidations}
+        renderItem={renderLiquidationItem}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={renderSummaryCard}
         ListEmptyComponent={
@@ -247,7 +252,7 @@ export default function ManagerApprovalScreen() {
                 <Text style={styles.emptyTitle}>Modo Offline</Text>
                 <Text style={styles.emptyMessage}>
                   La funcionalidad de aprobaciones requiere conexión al servidor.
-                  {'\n'}Conéctese a internet para ver gastos pendientes.
+                  {'\n'}Conéctese a internet para ver liquidaciones pendientes.
                 </Text>
               </>
             ) : (
@@ -255,7 +260,7 @@ export default function ManagerApprovalScreen() {
                 <Ionicons name="checkmark-circle-outline" size={80} color="#10b981" />
                 <Text style={styles.emptyTitle}>¡Todo al día!</Text>
                 <Text style={styles.emptyMessage}>
-                  No hay gastos pendientes de aprobación
+                  No hay liquidaciones pendientes de aprobación
                 </Text>
               </>
             )}
@@ -278,18 +283,25 @@ export default function ManagerApprovalScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>
-              {approvalAction ? 'Aprobar Gasto' : 'Rechazar Gasto'}
+              {approvalAction ? 'Aprobar Liquidación' : 'Rechazar Liquidación'}
             </Text>
             
-            {selectedExpense && (
+            {selectedLiquidation && (
               <View style={styles.expenseInfo}>
-                <Text style={styles.expenseAmount}>{selectedExpense.amount.toFixed(2)}€</Text>
-                <Text style={styles.expenseDescription}>{selectedExpense.description}</Text>
-                <Text style={styles.expenseEmployee}>Empleado: {selectedExpense.userEmail}</Text>
+                <Text style={styles.expenseAmount}>{selectedLiquidation.totalAmount.toFixed(2)}€</Text>
+                <Text style={styles.expenseDescription}>
+                  Liquidación ID: {selectedLiquidation.id}
+                </Text>
+                <Text style={styles.expenseEmployee}>
+                  Empleado: {selectedLiquidation.employeeName}
+                </Text>
+                <Text style={styles.expenseEmployee}>
+                  {selectedLiquidation.expenseIds.length} gasto(s) incluido(s)
+                </Text>
               </View>
             )}
             
-            <Text style={styles.commentsLabel}>Comentarios (opcional):</Text>
+            <Text style={styles.commentsLabel}>Comentarios{!approvalAction ? ' (requerido)' : ' (opcional)'}:</Text>
             <TextInput
               style={styles.commentsInput}
               multiline
@@ -583,5 +595,21 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: '600',
     fontSize: 16,
+  },
+  liquidationId: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  statusBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginTop: 8,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
