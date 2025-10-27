@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   FlatList,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -171,14 +172,23 @@ export default function LiquidationsScreen() {
       </View>
 
       {/* Filters */}
-      <View style={styles.filtersContainer}>
+      <ScrollView 
+        horizontal 
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.filtersContainer}
+      >
         <TouchableOpacity 
           style={[styles.filterButton, filter === 'all' && styles.filterButtonActive]}
           onPress={() => setFilter('all')}
         >
           <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>
-            Todas ({liquidations.length})
+            Todas
           </Text>
+          <View style={[styles.filterBadge, filter === 'all' && styles.filterBadgeActive]}>
+            <Text style={[styles.filterBadgeText, filter === 'all' && styles.filterBadgeTextActive]}>
+              {liquidations.length}
+            </Text>
+          </View>
         </TouchableOpacity>
 
         <TouchableOpacity 
@@ -186,8 +196,13 @@ export default function LiquidationsScreen() {
           onPress={() => setFilter('draft')}
         >
           <Text style={[styles.filterText, filter === 'draft' && styles.filterTextActive]}>
-            Borradores ({liquidations.filter(l => l.status === 'draft').length})
+            Borradores
           </Text>
+          <View style={[styles.filterBadge, filter === 'draft' && styles.filterBadgeActive]}>
+            <Text style={[styles.filterBadgeText, filter === 'draft' && styles.filterBadgeTextActive]}>
+              {liquidations.filter(l => l.status === 'draft').length}
+            </Text>
+          </View>
         </TouchableOpacity>
 
         <TouchableOpacity 
@@ -195,8 +210,13 @@ export default function LiquidationsScreen() {
           onPress={() => setFilter('submitted')}
         >
           <Text style={[styles.filterText, filter === 'submitted' && styles.filterTextActive]}>
-            Enviadas ({liquidations.filter(l => l.status === 'submitted').length})
+            Enviadas
           </Text>
+          <View style={[styles.filterBadge, filter === 'submitted' && styles.filterBadgeActive]}>
+            <Text style={[styles.filterBadgeText, filter === 'submitted' && styles.filterBadgeTextActive]}>
+              {liquidations.filter(l => l.status === 'submitted').length}
+            </Text>
+          </View>
         </TouchableOpacity>
 
         <TouchableOpacity 
@@ -204,10 +224,15 @@ export default function LiquidationsScreen() {
           onPress={() => setFilter('approved')}
         >
           <Text style={[styles.filterText, filter === 'approved' && styles.filterTextActive]}>
-            Aprobadas ({liquidations.filter(l => l.status === 'approved').length})
+            Aprobadas
           </Text>
+          <View style={[styles.filterBadge, filter === 'approved' && styles.filterBadgeActive]}>
+            <Text style={[styles.filterBadgeText, filter === 'approved' && styles.filterBadgeTextActive]}>
+              {liquidations.filter(l => l.status === 'approved').length}
+            </Text>
+          </View>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
 
       {/* Lista de Liquidaciones */}
       {filteredLiquidations.length === 0 ? (
@@ -261,27 +286,51 @@ const styles = StyleSheet.create({
   },
   filtersContainer: {
     flexDirection: 'row',
-    padding: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
-    gap: 8,
+    gap: 10,
   },
   filterButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 24,
     backgroundColor: '#f1f5f9',
+    gap: 8,
   },
   filterButtonActive: {
     backgroundColor: '#2563eb',
   },
   filterText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
     color: '#475569',
   },
   filterTextActive: {
+    color: 'white',
+  },
+  filterBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  filterBadgeActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+  },
+  filterBadgeText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#475569',
+  },
+  filterBadgeTextActive: {
     color: 'white',
   },
   listContent: {
