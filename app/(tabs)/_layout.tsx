@@ -25,6 +25,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="liquidations"
+        options={{
+          title: 'Liquidaciones',
+          tabBarIcon: ({ color, size }) => <Ionicons name="folder-outline" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="categories"
         options={{
           title: 'Categorías',
