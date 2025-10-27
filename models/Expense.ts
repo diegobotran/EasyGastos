@@ -33,6 +33,7 @@ export interface Expense {
   currency: string;
   email: string;
   managerEmail?: string;
+  liquidationId?: string;  // ID de la liquidación a la que pertenece (si aplica)
   needsSync?: boolean;
   lastSync?: number;
   serverUpdatedAt?: number;

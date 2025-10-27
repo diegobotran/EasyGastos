@@ -44,6 +44,7 @@ export const initDB = () => {
             cuenta TEXT,
             ordenco TEXT,
             managerEmail TEXT,
+            liquidationId TEXT,
             needsSync BOOLEAN NOT NULL DEFAULT 1,
             lastSync INTEGER,
             serverUpdatedAt INTEGER,

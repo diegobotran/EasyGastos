@@ -28,7 +28,11 @@ export default function RootLayoutNav() {
           await Promise.race([
             Promise.all([
               CategoryService.initDB(),
-              ExpenseService.initDB()
+              ExpenseService.initDB(),
+              (async () => {
+                const { initLiquidationsTable } = await import('../services/LiquidationService');
+                initLiquidationsTable();
+              })()
             ]),
             new Promise((_, reject) => 
               setTimeout(() => reject(new Error('SQLite timeout')), 5000)
