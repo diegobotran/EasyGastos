@@ -5,7 +5,8 @@ import {
   ActivityIndicator,
   FlatList,
   RefreshControl,
-  ScrollView,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -21,6 +22,7 @@ export default function LiquidationsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'draft' | 'submitted' | 'approved' | 'rejected'>('all');
+  const [showFilterModal, setShowFilterModal] = useState(false);
 
   useEffect(() => {
     loadLiquidations();
@@ -58,6 +60,27 @@ export default function LiquidationsScreen() {
       pathname: '../liquidation-detail', 
       params: { liquidationId } 
     });
+  };
+
+  const getFilterText = () => {
+    switch (filter) {
+      case 'all': return 'Todas';
+      case 'draft': return 'Borradores';
+      case 'submitted': return 'Enviadas';
+      case 'approved': return 'Aprobadas';
+      case 'rejected': return 'Rechazadas';
+      default: return 'Todas';
+    }
+  };
+
+  const getFilterCount = (filterType: typeof filter) => {
+    if (filterType === 'all') return liquidations.length;
+    return liquidations.filter(l => l.status === filterType).length;
+  };
+
+  const handleSelectFilter = (selectedFilter: typeof filter) => {
+    setFilter(selectedFilter);
+    setShowFilterModal(false);
   };
 
   const filteredLiquidations = liquidations.filter(liq => {
@@ -163,76 +186,90 @@ export default function LiquidationsScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Mis Liquidaciones</Text>
-        <TouchableOpacity 
-          style={styles.refreshButton}
-          onPress={handleRefresh}
-        >
-          <Ionicons name="refresh" size={24} color="#2563eb" />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity 
+            style={styles.filterButtonCompact}
+            onPress={() => setShowFilterModal(true)}
+          >
+            <Ionicons name="filter" size={20} color="#2563eb" />
+            <Text style={styles.filterButtonText}>{getFilterText()}</Text>
+            <View style={styles.filterCount}>
+              <Text style={styles.filterCountText}>{getFilterCount(filter)}</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.refreshButton}
+            onPress={handleRefresh}
+          >
+            <Ionicons name="refresh" size={24} color="#2563eb" />
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Filters */}
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filtersContainer}
+      {/* Filter Modal */}
+      <Modal
+        visible={showFilterModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowFilterModal(false)}
       >
-        <TouchableOpacity 
-          style={[styles.filterButton, filter === 'all' && styles.filterButtonActive]}
-          onPress={() => setFilter('all')}
+        <Pressable 
+          style={styles.modalOverlay}
+          onPress={() => setShowFilterModal(false)}
         >
-          <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>
-            Todas
-          </Text>
-          <View style={[styles.filterBadge, filter === 'all' && styles.filterBadgeActive]}>
-            <Text style={[styles.filterBadgeText, filter === 'all' && styles.filterBadgeTextActive]}>
-              {liquidations.length}
-            </Text>
-          </View>
-        </TouchableOpacity>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Filtrar Liquidaciones</Text>
+              <TouchableOpacity onPress={() => setShowFilterModal(false)}>
+                <Ionicons name="close" size={24} color="#64748b" />
+              </TouchableOpacity>
+            </View>
 
-        <TouchableOpacity 
-          style={[styles.filterButton, filter === 'draft' && styles.filterButtonActive]}
-          onPress={() => setFilter('draft')}
-        >
-          <Text style={[styles.filterText, filter === 'draft' && styles.filterTextActive]}>
-            Borradores
-          </Text>
-          <View style={[styles.filterBadge, filter === 'draft' && styles.filterBadgeActive]}>
-            <Text style={[styles.filterBadgeText, filter === 'draft' && styles.filterBadgeTextActive]}>
-              {liquidations.filter(l => l.status === 'draft').length}
-            </Text>
+            {/* Filter Options */}
+            {[
+              { key: 'all' as const, label: 'Todas', icon: 'list' as const },
+              { key: 'draft' as const, label: 'Borradores', icon: 'create-outline' as const },
+              { key: 'submitted' as const, label: 'Enviadas', icon: 'send' as const },
+              { key: 'approved' as const, label: 'Aprobadas', icon: 'checkmark-circle' as const },
+              { key: 'rejected' as const, label: 'Rechazadas', icon: 'close-circle' as const },
+            ].map((option) => (
+              <TouchableOpacity
+                key={option.key}
+                style={[
+                  styles.filterOption,
+                  filter === option.key && styles.filterOptionActive
+                ]}
+                onPress={() => handleSelectFilter(option.key)}
+              >
+                <View style={styles.filterOptionLeft}>
+                  <Ionicons 
+                    name={option.icon} 
+                    size={24} 
+                    color={filter === option.key ? '#2563eb' : '#64748b'} 
+                  />
+                  <Text style={[
+                    styles.filterOptionText,
+                    filter === option.key && styles.filterOptionTextActive
+                  ]}>
+                    {option.label}
+                  </Text>
+                </View>
+                <View style={[
+                  styles.filterOptionBadge,
+                  filter === option.key && styles.filterOptionBadgeActive
+                ]}>
+                  <Text style={[
+                    styles.filterOptionBadgeText,
+                    filter === option.key && styles.filterOptionBadgeTextActive
+                  ]}>
+                    {getFilterCount(option.key)}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
           </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.filterButton, filter === 'submitted' && styles.filterButtonActive]}
-          onPress={() => setFilter('submitted')}
-        >
-          <Text style={[styles.filterText, filter === 'submitted' && styles.filterTextActive]}>
-            Enviadas
-          </Text>
-          <View style={[styles.filterBadge, filter === 'submitted' && styles.filterBadgeActive]}>
-            <Text style={[styles.filterBadgeText, filter === 'submitted' && styles.filterBadgeTextActive]}>
-              {liquidations.filter(l => l.status === 'submitted').length}
-            </Text>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.filterButton, filter === 'approved' && styles.filterButtonActive]}
-          onPress={() => setFilter('approved')}
-        >
-          <Text style={[styles.filterText, filter === 'approved' && styles.filterTextActive]}>
-            Aprobadas
-          </Text>
-          <View style={[styles.filterBadge, filter === 'approved' && styles.filterBadgeActive]}>
-            <Text style={[styles.filterBadgeText, filter === 'approved' && styles.filterBadgeTextActive]}>
-              {liquidations.filter(l => l.status === 'approved').length}
-            </Text>
-          </View>
-        </TouchableOpacity>
-      </ScrollView>
+        </Pressable>
+      </Modal>
 
       {/* Lista de Liquidaciones */}
       {filteredLiquidations.length === 0 ? (
@@ -284,53 +321,117 @@ const styles = StyleSheet.create({
   refreshButton: {
     padding: 8,
   },
-  filtersContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    gap: 10,
-  },
-  filterButton: {
+  headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 24,
-    backgroundColor: '#f1f5f9',
-    gap: 8,
+    gap: 12,
   },
-  filterButtonActive: {
-    backgroundColor: '#2563eb',
+  filterButtonCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+    gap: 6,
   },
-  filterText: {
+  filterButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#475569',
+    color: '#2563eb',
   },
-  filterTextActive: {
-    color: 'white',
-  },
-  filterBadge: {
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#e2e8f0',
+  filterCount: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#2563eb',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 6,
   },
-  filterBadgeActive: {
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
-  },
-  filterBadgeText: {
-    fontSize: 12,
+  filterCountText: {
+    fontSize: 11,
     fontWeight: 'bold',
+    color: 'white',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    width: '85%',
+    maxWidth: 400,
+    paddingVertical: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  filterOption: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  filterOptionActive: {
+    backgroundColor: '#eff6ff',
+  },
+  filterOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  filterOptionText: {
+    fontSize: 16,
+    fontWeight: '500',
     color: '#475569',
   },
-  filterBadgeTextActive: {
+  filterOptionTextActive: {
+    color: '#2563eb',
+    fontWeight: '600',
+  },
+  filterOptionBadge: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  filterOptionBadgeActive: {
+    backgroundColor: '#2563eb',
+  },
+  filterOptionBadgeText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#64748b',
+  },
+  filterOptionBadgeTextActive: {
     color: 'white',
   },
   listContent: {

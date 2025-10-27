@@ -1,9 +1,17 @@
 import { Ionicons } from '@expo/vector-icons'; // A popular icon library
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { useManagerSync } from '../../hooks/useManagerSync';
 
 
 export default function TabLayout() {
+  // Activar sincronización automática de liquidaciones para managers
+  // Se ejecuta cada 5 minutos en background sin afectar el performance
+  useManagerSync({
+    enabled: true,
+    intervalMinutes: 5  // Cada 5 minutos
+  });
+
   return (
     <Tabs
       screenOptions={{

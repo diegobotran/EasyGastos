@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 import { Link, useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { useExpensesViewModel } from '../../hooks/useExpensesViewModel';
-import { Expense, STATUSES, getExpenseStatusText, getExpenseStatusColor } from '../../models/Expense';
+import { Expense, STATUSES, getExpenseStatusColor, getExpenseStatusText } from '../../models/Expense';
 import * as AuthService from '../../services/AuthService';
 import { createLiquidation } from '../../services/LiquidationService';
 
@@ -247,7 +247,7 @@ export default function ExpensesScreen() {
               <Link href="/add-expense" asChild>
                 <TouchableOpacity style={styles.addButton}>
                   <Ionicons name="add" size={20} color="white" />
-                  <Text style={styles.addButtonText}>Nuevo Gasto</Text>
+                  <Text style={styles.addButtonText}>Gasto</Text>
                 </TouchableOpacity>
               </Link>
             </>

@@ -71,13 +71,15 @@ export const useSetupViewModel = () => {
       // PASO 1: Verificar si el usuario ya existe en el backend
       console.log('🔍 Setup: Verificando si usuario existe en backend...');
       let userExists = false;
+      let authToken = '';
       
       try {
         // Intentar login para verificar si el usuario ya existe
         const loginResult = await BackendSyncService.loginAndGetToken(profile.email, pin);
-        if (loginResult.success) {
+        if (loginResult.success && loginResult.token) {
           userExists = true;
-          console.log('✅ Setup: Usuario YA EXISTE en backend - Se actualizará el PIN');
+          authToken = loginResult.token;
+          console.log('✅ Setup: Usuario YA EXISTE en backend - Se descargará su información');
         }
       } catch (err) {
         // Si falla el login, el usuario no existe
@@ -112,6 +114,61 @@ export const useSetupViewModel = () => {
           console.log('⚠️ Setup: Error actualizando PIN (no crítico):', result.error);
           // No bloqueamos el flujo, el usuario puede usar la app offline
         }
+
+        // PASO 3.1: DESCARGAR DATOS EN BACKGROUND (sin bloquear)
+        console.log('📥 Setup: Iniciando descarga de datos en background...');
+        
+        // Ejecutar descarga en background usando Promise sin await
+        Promise.all([
+          BackendSyncService.downloadCategoriesFromBackend(profile.email, authToken),
+          BackendSyncService.downloadExpensesFromBackend(profile.email, authToken),
+          BackendSyncService.downloadLiquidationsFromBackend(profile.email, authToken)
+        ]).then(async ([categoriesResult, expensesResult, liquidationsResult]) => {
+          console.log('✅ Setup: ========== DESCARGA EN BACKGROUND COMPLETADA ==========');
+          console.log('📂 Categorías:', categoriesResult.success ? `${categoriesResult.count} descargadas` : `Error: ${categoriesResult.error}`);
+          console.log('💰 Gastos:', expensesResult.success ? `${expensesResult.count} descargados` : `Error: ${expensesResult.error}`);
+          console.log('📁 Liquidaciones:', liquidationsResult.success ? `${liquidationsResult.count} descargadas` : `Error: ${liquidationsResult.error}`);
+          
+          // PASO 3.2: VERIFICAR SI ES MANAGER Y DESCARGAR LIQUIDACIONES PENDIENTES
+          console.log('👔 Setup: Verificando si usuario es manager...');
+          const managerCheck = await BackendSyncService.checkIfUserIsManager(profile.email, authToken);
+          
+          if (managerCheck.isManager) {
+            console.log('✅ Setup: Usuario ES MANAGER de', managerCheck.employeeCount, 'empleados');
+            console.log('📥 Setup: Descargando datos pendientes de aprobación...');
+            
+            // Descargar liquidaciones pendientes
+            const pendingLiquidationsResult = await BackendSyncService.downloadPendingLiquidationsForManager(
+              profile.email, 
+              authToken
+            );
+            
+            if (pendingLiquidationsResult.success) {
+              console.log('✅ Setup: Liquidaciones pendientes descargadas:', pendingLiquidationsResult.count);
+            } else {
+              console.log('⚠️ Setup: Error descargando liquidaciones pendientes:', pendingLiquidationsResult.error);
+            }
+
+            // Descargar gastos individuales pendientes de aprobación
+            const pendingExpensesResult = await BackendSyncService.downloadPendingExpensesForManager(
+              profile.email,
+              authToken
+            );
+
+            if (pendingExpensesResult.success) {
+              console.log('✅ Setup: Gastos pendientes descargados:', pendingExpensesResult.count);
+            } else {
+              console.log('⚠️ Setup: Error descargando gastos pendientes:', pendingExpensesResult.error);
+            }
+          } else {
+            console.log('ℹ️ Setup: Usuario NO es manager - No hay liquidaciones para aprobar');
+          }
+        }).catch((error) => {
+          console.error('⚠️ Setup: Error en descarga background (no crítico):', error);
+        });
+        
+        console.log('📥 Setup: Descarga en progreso en background (el usuario puede continuar)');
+        
       } else {
         console.log('📝 Setup: Usuario nuevo - Registrando en backend...');
         // El usuario no existe, se registrará por primera vez

@@ -37,6 +37,35 @@ router.get('/manager/:email', authenticateToken, requireManager, async (req, res
 });
 
 /**
+ * @route   GET /api/manager-links/is-manager/:email
+ * @desc    Verificar si un usuario es manager de alguien
+ * @access  Private
+ */
+router.get('/is-manager/:email', authenticateToken, async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    // Verificar si este email aparece como managerEmail en alguna relación activa
+    const count = await ManagerEmployeeLink.countDocuments({
+      managerEmail: email,
+      isActive: true
+    });
+    
+    const isManager = count > 0;
+    const employeeCount = count;
+    
+    res.json({ 
+      isManager, 
+      employeeCount,
+      email 
+    });
+  } catch (error) {
+    console.error('Error verificando si es manager:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+/**
  * @route   GET /api/manager-links/direct-manager/:email
  * @desc    Obtener el manager directo de un empleado
  * @access  Public
