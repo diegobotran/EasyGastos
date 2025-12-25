@@ -58,14 +58,14 @@ export class BackendSyncService {
   private static readonly BACKEND_PORT_KEY = 'backend_port';
   private static readonly LAST_SYNC_KEY = 'last_sync_timestamp';
   private static readonly SYNC_IN_PROGRESS_KEY = 'sync_in_progress';
-  private static readonly DEFAULT_IP = '200.6.231.237';
-  private static readonly DEFAULT_PORT = '7300';
+  private static readonly DEFAULT_IP = '3.82.200.97';
+  private static readonly DEFAULT_PORT = '3000';
 
   /**
    * Obtiene la URL base del backend según la configuración
    */
-  private static getBackendBaseUrl(): string {
-    const url = getAPI_BASE_URL();
+  private static async getBackendBaseUrl(): Promise<string> {
+    const url = await getAPI_BASE_URL();
     console.log('🌐 BackendSync: URL base obtenida de configuración:', url);
     return url;
   }
@@ -77,13 +77,16 @@ export class BackendSyncService {
     try {
       console.log('🔧 BackendSync: Obteniendo configuración del backend...');
       
-      // USAR DIRECTAMENTE LA IP Y PUERTO SIN COMPLICACIONES
-      const finalConfig = { 
-        ip: this.DEFAULT_IP, 
-        port: this.DEFAULT_PORT, 
-        url: `http://${this.DEFAULT_IP}:${this.DEFAULT_PORT}` 
-      };
-      console.log('🔧 BackendSync: Configuración directa (sin cache):', finalConfig);
+      // Obtener URL desde configuración (puede ser personalizada por el usuario)
+      const url = await getAPI_BASE_URL();
+      
+      // Extraer IP y puerto de la URL
+      const urlObj = new URL(url);
+      const ip = urlObj.hostname;
+      const port = urlObj.port || '7300';
+      
+      const finalConfig = { ip, port, url };
+      console.log('🔧 BackendSync: Configuración obtenida:', finalConfig);
       return finalConfig;
     } catch (error) {
       console.error('❌ BackendSync: Error obteniendo configuración backend:', error);
@@ -94,6 +97,46 @@ export class BackendSyncService {
       };
       console.log('🔧 BackendSync: Usando configuración por defecto:', defaultConfig);
       return defaultConfig;
+    }
+  }
+
+  /**
+   * Verifica si hay conexión con el backend
+   */
+  static async checkConnection(): Promise<boolean> {
+    console.log('🌐 BackendSync: Verificando conexión al backend...');
+    const startTime = Date.now();
+    
+    try {
+      const { url: backendUrl } = await this.getBackendConfig();
+      const healthCheckUrl = `${backendUrl}/health`;
+      console.log('🌐 BackendSync: URL de health check:', healthCheckUrl);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ BackendSync: Timeout de 15 segundos para health check');
+        controller.abort();
+      }, 15000);
+
+      const response = await fetch(healthCheckUrl, {
+        method: 'GET',
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+      const latency = Date.now() - startTime;
+
+      if (response.ok) {
+        console.log(`✅ BackendSync: Conexión OK (${latency}ms)`);
+        return true;
+      } else {
+        console.log(`⚠️ BackendSync: Backend respondió con status ${response.status}`);
+        return false;
+      }
+    } catch (error) {
+      const latency = Date.now() - startTime;
+      console.log(`❌ BackendSync: Sin conexión (${latency}ms) -`, error);
+      return false;
     }
   }
 
@@ -547,10 +590,49 @@ export class BackendSyncService {
 
           if (response.ok) {
             const responseData = await response.text();
-            console.log('� BackendSync: ÉXITO - Datos de respuesta:', responseData);
+            console.log('✅ BackendSync: ÉXITO - Datos de respuesta:', responseData);
             await ExpenseService.markExpenseAsSynced(expense.id);
             console.log('✅ BackendSync: Gasto marcado como sincronizado:', expense.description);
             successCount++;
+          } else if (response.status === 409) {
+            // Error 409 = Conflict, el gasto ya existe en el servidor
+            const errorText = await response.text();
+            console.log('⚠️ BackendSync: Gasto ya existe en el servidor (409 Conflict)');
+            console.log('⚠️ BackendSync: Detalles:', errorText);
+            
+            // Si el gasto está anulado o tiene cambios importantes, usar PATCH para actualizar
+            if (expense.expenseStatus === 'voided' || expense.voidedAt) {
+              console.log('🔄 BackendSync: Gasto anulado localmente, usando PATCH para actualizar...');
+              try {
+                const patchUrl = `${backendUrl}/api/expenses/${expense.id}`;
+                const patchResponse = await fetch(patchUrl, {
+                  method: 'PATCH',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`
+                  },
+                  body: JSON.stringify(expensePayload)
+                });
+                
+                if (patchResponse.ok) {
+                  console.log('✅ BackendSync: Gasto actualizado con PATCH exitosamente');
+                  await ExpenseService.markExpenseAsSynced(expense.id);
+                  successCount++;
+                } else {
+                  const patchError = await patchResponse.text();
+                  console.error('❌ BackendSync: Error en PATCH:', patchError);
+                  errorCount++;
+                }
+              } catch (patchError) {
+                console.error('❌ BackendSync: Error ejecutando PATCH:', patchError);
+                errorCount++;
+              }
+            } else {
+              // Gasto ya existe y no está anulado, marcar como sincronizado
+              await ExpenseService.markExpenseAsSynced(expense.id);
+              console.log('✅ BackendSync: Gasto marcado como sincronizado (ya existía):', expense.description);
+              successCount++;
+            }
           } else {
             const errorText = await response.text();
             console.log('❌ BackendSync: ERROR DEL SERVIDOR');
@@ -564,9 +646,23 @@ export class BackendSyncService {
         }
       }
 
-      console.log('🔄 BackendSync: ========== RESUMEN SINCRONIZACIÓN GASTOS ==========');
-      console.log('✅ BackendSync: Gastos sincronizados:', successCount);
-      console.log('❌ BackendSync: Gastos con error:', errorCount);
+      console.log('🔄 BackendSync: ========== RESUMEN SUBIDA GASTOS ==========');
+      console.log('✅ BackendSync: Gastos subidos:', successCount);
+      console.log('❌ BackendSync: Gastos con error en subida:', errorCount);
+
+      // IMPORTANTE: Ahora descargar datos actualizados del servidor
+      // Esto asegura que tengamos estados actualizados, aprobaciones de manager, etc.
+      console.log('📥 BackendSync: ========== DESCARGANDO GASTOS ACTUALIZADOS ==========');
+      try {
+        const downloadResult = await this.downloadExpensesFromBackend(userEmail, authToken);
+        if (downloadResult.success) {
+          console.log('✅ BackendSync: Gastos actualizados descargados:', downloadResult.count);
+        } else {
+          console.warn('⚠️ BackendSync: No se pudieron descargar gastos actualizados:', downloadResult.error);
+        }
+      } catch (downloadError) {
+        console.error('❌ BackendSync: Error descargando gastos actualizados:', downloadError);
+      }
 
       if (successCount > 0 && errorCount === 0) {
         return { success: true };
@@ -646,6 +742,27 @@ export class BackendSyncService {
             await LiquidationService.markLiquidationAsSynced(liquidation.id);
             console.log('✅ BackendSync: Liquidación marcada como sincronizada:', liquidation.id);
             successCount++;
+          } else if (response.status === 400 || response.status === 409) {
+            // Error 400/409 = Conflict, la liquidación ya existe en el servidor
+            const errorText = await response.text();
+            console.log('⚠️ BackendSync: ========== ERROR 400/409 DETECTADO ==========');
+            console.log('⚠️ BackendSync: Status:', response.status);
+            console.log('⚠️ BackendSync: Error texto completo:', errorText);
+            console.log('⚠️ BackendSync: Contiene "ya existe"?:', errorText.includes('ya existe'));
+            console.log('⚠️ BackendSync: Contiene "already exists"?:', errorText.includes('already exists'));
+            console.log('⚠️ BackendSync: Tipo de errorText:', typeof errorText);
+            console.log('⚠️ BackendSync: Liquidación ID:', liquidation.id);
+            
+            // Si el error es "ya existe", marcar como sincronizada
+            if (errorText.includes('ya existe') || errorText.includes('already exists')) {
+              console.log('✅ BackendSync: ENTRANDO A MARCAR COMO SINCRONIZADA');
+              await LiquidationService.markLiquidationAsSynced(liquidation.id);
+              console.log('✅ BackendSync: Liquidación marcada como sincronizada (ya existía):', liquidation.id);
+              successCount++;
+            } else {
+              console.log('❌ BackendSync: Error de validación (no duplicado) - NO SE MARCARÁ COMO SINCRONIZADA');
+              errorCount++;
+            }
           } else {
             const errorText = await response.text();
             console.log('❌ BackendSync: ERROR DEL SERVIDOR');
@@ -659,9 +776,23 @@ export class BackendSyncService {
         }
       }
 
-      console.log('🔄 BackendSync: ========== RESUMEN SINCRONIZACIÓN LIQUIDACIONES ==========');
-      console.log('✅ BackendSync: Liquidaciones sincronizadas:', successCount);
-      console.log('❌ BackendSync: Liquidaciones con error:', errorCount);
+      console.log('🔄 BackendSync: ========== RESUMEN SUBIDA LIQUIDACIONES ==========');
+      console.log('✅ BackendSync: Liquidaciones subidas:', successCount);
+      console.log('❌ BackendSync: Liquidaciones con error en subida:', errorCount);
+
+      // IMPORTANTE: Ahora descargar liquidaciones actualizadas del servidor
+      // Esto asegura que tengamos estados actualizados (aprobadas/rechazadas por manager)
+      console.log('📥 BackendSync: ========== DESCARGANDO LIQUIDACIONES ACTUALIZADAS ==========');
+      try {
+        const downloadResult = await this.downloadLiquidationsFromBackend(userEmail, authToken);
+        if (downloadResult.success) {
+          console.log('✅ BackendSync: Liquidaciones actualizadas descargadas:', downloadResult.count);
+        } else {
+          console.warn('⚠️ BackendSync: No se pudieron descargar liquidaciones actualizadas:', downloadResult.error);
+        }
+      } catch (downloadError) {
+        console.error('❌ BackendSync: Error descargando liquidaciones actualizadas:', downloadError);
+      }
 
       if (successCount > 0 && errorCount === 0) {
         return { success: true };
@@ -682,8 +813,14 @@ export class BackendSyncService {
   static async downloadCategoriesFromBackend(userEmail: string, authToken: string): Promise<{ success: boolean; count: number; error?: string }> {
     console.log('📥 BackendSync: ============ DESCARGANDO CATEGORÍAS DESDE BACKEND ============');
     console.log('📥 BackendSync: Usuario:', userEmail);
+    console.log('📥 BackendSync: Token disponible:', authToken ? `SÍ (${authToken.substring(0, 20)}...)` : 'NO');
 
     try {
+      if (!authToken) {
+        console.error('❌ BackendSync: No hay token de autenticación disponible');
+        return { success: false, count: 0, error: 'Token de autenticación requerido' };
+      }
+
       const { url: backendUrl } = await this.getBackendConfig();
       const requestUrl = `${backendUrl}/api/categories?userEmail=${encodeURIComponent(userEmail)}`;
       console.log('🌐 BackendSync: GET', requestUrl);
@@ -696,9 +833,23 @@ export class BackendSyncService {
         }
       });
 
+      console.log('📡 BackendSync: Status de respuesta:', response.status);
+
+      // HTTP 304 Not Modified - el contenido no ha cambiado, esto NO es un error
+      if (response.status === 304) {
+        console.log('ℹ️ BackendSync: Categorías sin cambios (304 Not Modified)');
+        return { success: true, count: 0 };
+      }
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error('❌ BackendSync: Error descargando categorías:', errorText);
+        
+        // Si el token expiró (401), retornar error específico
+        if (response.status === 401) {
+          return { success: false, count: 0, error: 'Token expirado o inválido. Por favor, cierra sesión y vuelve a entrar.' };
+        }
+        
         return { success: false, count: 0, error: `Error ${response.status}: ${errorText}` };
       }
 
@@ -736,8 +887,14 @@ export class BackendSyncService {
   static async downloadExpensesFromBackend(userEmail: string, authToken: string): Promise<{ success: boolean; count: number; error?: string }> {
     console.log('📥 BackendSync: ============ DESCARGANDO GASTOS DESDE BACKEND ============');
     console.log('📥 BackendSync: Usuario:', userEmail);
+    console.log('📥 BackendSync: Token disponible:', authToken ? `SÍ (${authToken.substring(0, 20)}...)` : 'NO');
 
     try {
+      if (!authToken) {
+        console.error('❌ BackendSync: No hay token de autenticación disponible');
+        return { success: false, count: 0, error: 'Token de autenticación requerido' };
+      }
+
       const { url: backendUrl } = await this.getBackendConfig();
       // IMPORTANTE: Agregar userEmail como query parameter
       const requestUrl = `${backendUrl}/api/expenses?userEmail=${encodeURIComponent(userEmail)}`;
@@ -751,9 +908,23 @@ export class BackendSyncService {
         }
       });
 
+      console.log('📡 BackendSync: Status de respuesta:', response.status);
+
+      // HTTP 304 Not Modified - el contenido no ha cambiado, esto NO es un error
+      if (response.status === 304) {
+        console.log('ℹ️ BackendSync: Gastos sin cambios (304 Not Modified)');
+        return { success: true, count: 0 };
+      }
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error('❌ BackendSync: Error descargando gastos:', errorText);
+        
+        // Si el token expiró (401), retornar error específico
+        if (response.status === 401) {
+          return { success: false, count: 0, error: 'Token expirado o inválido. Por favor, cierra sesión y vuelve a entrar.' };
+        }
+        
         return { success: false, count: 0, error: `Error ${response.status}: ${errorText}` };
       }
 
@@ -771,10 +942,20 @@ export class BackendSyncService {
       let savedCount = 0;
       for (const expense of expenses) {
         try {
+          // Normalizar la fecha si viene como objeto Date desde MongoDB
+          let normalizedDate = expense.date;
+          if (expense.date && typeof expense.date === 'object') {
+            // Viene como objeto Date, convertir a YYYY-MM-DD
+            normalizedDate = new Date(expense.date).toISOString().split('T')[0];
+            console.log('📅 BackendSync: Fecha normalizada de objeto Date a:', normalizedDate);
+          }
+          
           // Usar upsertExpenseFromServer para insertar/actualizar
-          // Esto actualiza campos como status, approvalComments, approvedBy, etc.
+          // Esto actualiza campos como status, expenseStatus, voidedAt, approvalComments, approvedBy, etc.
+          console.log('💾 BackendSync: Guardando gasto:', expense.id, 'expenseStatus:', expense.expenseStatus, 'voidedAt:', expense.voidedAt);
           await ExpenseService.upsertExpenseFromServer({
             ...expense,
+            date: normalizedDate, // Usar fecha normalizada
             email: userEmail,
             needsSync: false,
             lastSync: Date.now()
@@ -799,8 +980,14 @@ export class BackendSyncService {
   static async downloadLiquidationsFromBackend(userEmail: string, authToken: string): Promise<{ success: boolean; count: number; error?: string }> {
     console.log('📥 BackendSync: ============ DESCARGANDO LIQUIDACIONES DESDE BACKEND ============');
     console.log('📥 BackendSync: Usuario:', userEmail);
+    console.log('📥 BackendSync: Token disponible:', authToken ? `SÍ (${authToken.substring(0, 20)}...)` : 'NO');
 
     try {
+      if (!authToken) {
+        console.error('❌ BackendSync: No hay token de autenticación disponible');
+        return { success: false, count: 0, error: 'Token de autenticación requerido' };
+      }
+
       const { url: backendUrl } = await this.getBackendConfig();
       // IMPORTANTE: Usar endpoint correcto para obtener liquidaciones del usuario
       const requestUrl = `${backendUrl}/api/liquidations/user/${encodeURIComponent(userEmail)}`;
@@ -814,9 +1001,23 @@ export class BackendSyncService {
         }
       });
 
+      console.log('📡 BackendSync: Status de respuesta:', response.status);
+
+      // HTTP 304 Not Modified - el contenido no ha cambiado, esto NO es un error
+      if (response.status === 304) {
+        console.log('ℹ️ BackendSync: Liquidaciones sin cambios (304 Not Modified)');
+        return { success: true, count: 0 };
+      }
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error('❌ BackendSync: Error descargando liquidaciones:', errorText);
+        
+        // Si el token expiró (401), retornar error específico
+        if (response.status === 401) {
+          return { success: false, count: 0, error: 'Token expirado o inválido. Por favor, cierra sesión y vuelve a entrar.' };
+        }
+        
         return { success: false, count: 0, error: `Error ${response.status}: ${errorText}` };
       }
 
@@ -833,11 +1034,15 @@ export class BackendSyncService {
       for (const liquidation of liquidations) {
         try {
           // Verificar si la liquidación ya existe localmente
-          const existingLiquidation = await LiquidationService.getLiquidationById(liquidation.id);
+          const existingLiquidation = await LiquidationService.getLiquidationById(liquidation.id, userEmail);
           
           if (existingLiquidation) {
             // La liquidación existe, ACTUALIZAR su estado
             console.log(`🔄 BackendSync: Actualizando liquidación existente ${liquidation.id} - Estado: ${liquidation.status}`);
+            
+            // Detectar cambio de estado para notificar al usuario
+            const previousStatus = existingLiquidation.status;
+            const newStatus = liquidation.status;
             
             // Actualizar el estado de la liquidación usando los parámetros correctos
             await LiquidationService.updateLiquidationStatus(
@@ -846,18 +1051,68 @@ export class BackendSyncService {
               liquidation.managerComments || undefined
             );
             
+            // NOTIFICACIÓN: Si cambió a 'approved' o 'rejected', notificar al usuario
+            const { notifyLiquidationApproved, notifyLiquidationRejected } = await import('./NotificationService');
+            
+            if (previousStatus === 'submitted' && newStatus === 'approved') {
+              console.log(`✅ BackendSync: Liquidación ${liquidation.id} APROBADA - Enviando notificación`);
+              await notifyLiquidationApproved(
+                liquidation.id,
+                liquidation.totalAmount,
+                liquidation.approverEmail
+              );
+            } else if (previousStatus === 'submitted' && newStatus === 'rejected') {
+              console.log(`❌ BackendSync: Liquidación ${liquidation.id} RECHAZADA - Enviando notificación`);
+              await notifyLiquidationRejected(
+                liquidation.id,
+                liquidation.totalAmount,
+                liquidation.managerComments
+              );
+            }
+            
             savedCount++;
           } else {
-            // La liquidación NO existe, crear nueva
+            // La liquidación NO existe, crear nueva directamente en la BD
             console.log(`➕ BackendSync: Creando nueva liquidación ${liquidation.id}`);
-            const dto = {
-              userId: liquidation.userId || userEmail,
-              employeeName: liquidation.employeeName,
-              expenseIds: liquidation.expenseIds || []
-            };
             
-            await LiquidationService.createLiquidation(dto);
-            savedCount++;
+            // Insertar directamente usando el servicio de liquidaciones
+            // Pero primero verificar que db está disponible
+            try {
+              await LiquidationService.initLiquidationsTable();
+              const db = await LiquidationService.getDB();
+              
+              if (!db) {
+                console.error('❌ BackendSync: No se pudo obtener la base de datos');
+                continue;
+              }
+              
+              // Insertar la liquidación tal como viene del servidor
+              await db.runAsync(
+                `INSERT OR REPLACE INTO liquidations (
+                  id, userId, employeeName, createdDate, expenseIds, 
+                  totalAmount, status, managerComments, submittedDate,
+                  approvedDate, rejectedDate, synced
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+                [
+                  liquidation.id,
+                  liquidation.userId,
+                  liquidation.employeeName,
+                  liquidation.createdDate,
+                  JSON.stringify(liquidation.expenseIds || []),
+                  liquidation.totalAmount,
+                  liquidation.status,
+                  liquidation.managerComments || null,
+                  liquidation.submittedDate || null,
+                  liquidation.approvedDate || null,
+                  liquidation.rejectedDate || null
+                ]
+              );
+              
+              console.log(`✅ BackendSync: Liquidación ${liquidation.id} guardada localmente`);
+              savedCount++;
+            } catch (insertError) {
+              console.error('❌ BackendSync: Error insertando liquidación:', insertError);
+            }
           }
         } catch (saveError) {
           console.error('❌ BackendSync: Error guardando/actualizando liquidación:', liquidation.id, saveError);
@@ -1040,7 +1295,7 @@ export class BackendSyncService {
       for (const liquidation of liquidations) {
         try {
           // Verificar si la liquidación ya existe localmente
-          const existingLiquidation = await LiquidationService.getLiquidationById(liquidation.id);
+          const existingLiquidation = await LiquidationService.getLiquidationById(liquidation.id, liquidation.userId || managerEmail);
           
           if (existingLiquidation) {
             // Ya existe - solo actualizar si el estado cambió
