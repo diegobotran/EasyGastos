@@ -126,7 +126,7 @@ const canAccessUserData = async (req, res, next) => {
       return res.status(401).json({ error: 'Autenticación requerida' });
     }
 
-    const targetEmail = req.params.email || req.body.userEmail || req.query.userEmail;
+    const targetEmail = req.params.email || req.params.userId || req.body.userEmail || req.query.userEmail;
     
     // El usuario puede acceder a sus propios datos
     if (req.user.email === targetEmail) {

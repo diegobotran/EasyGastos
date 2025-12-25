@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -14,7 +14,9 @@ import {
 } from 'react-native';
 import { Liquidation, getLiquidationStatusColor, getLiquidationStatusText } from '../../models/Liquidation';
 import { getLiquidations } from '../../services/LiquidationService';
+import { BackendSyncService } from '../../services/BackendSyncService';
 import * as AuthService from '../../services/AuthService';
+import { formatDateToSpanish } from '../../utils/dateUtils';
 
 export default function LiquidationsScreen() {
   const router = useRouter();
@@ -23,36 +25,87 @@ export default function LiquidationsScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'draft' | 'submitted' | 'approved' | 'rejected'>('all');
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const isFirstLoad = useRef(true);
 
+  // Cargar al montar
   useEffect(() => {
     loadLiquidations();
+    syncLiquidationsFromBackend();
   }, []);
+
+  // Recargar SOLO cuando la pantalla obtiene foco (cambias de tab)
+  // Pero NO en la primera carga para evitar doble carga
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstLoad.current) {
+        isFirstLoad.current = false;
+        return;
+      }
+      console.log('📋 Liquidations: Tab enfocado, recargando...');
+      loadLiquidations();
+    }, [])
+  );
 
   const loadLiquidations = async () => {
     try {
-      console.log('📋 Cargando liquidaciones...');
+      console.log('📋 Liquidations: Cargando liquidaciones...');
       const user = await AuthService.getLastLoggedInUser();
       
       if (!user) {
-        console.log('⚠️ No hay usuario logueado');
+        console.log('⚠️ Liquidations: No hay usuario logueado');
         setLiquidations([]);
         return;
       }
 
       const userLiquidations = await getLiquidations(user.email);
       setLiquidations(userLiquidations);
-      console.log('✅ Liquidaciones cargadas:', userLiquidations.length);
+      console.log('✅ Liquidations: Liquidaciones cargadas:', userLiquidations.length);
     } catch (error) {
-      console.error('❌ Error cargando liquidaciones:', error);
+      console.error('❌ Liquidations: Error cargando liquidaciones:', error);
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
   };
 
+  // Sincronizar liquidaciones desde el backend (para recibir actualizaciones del jefe)
+  const syncLiquidationsFromBackend = async () => {
+    try {
+      console.log('🔄 Liquidations: Sincronizando desde backend...');
+      const user = await AuthService.getLastLoggedInUser();
+      if (!user) return;
+
+      // Verificar conexión
+      const isConnected = await BackendSyncService.checkConnection();
+      if (!isConnected) {
+        console.log('⚠️ Liquidations: Sin conexión - skip sync');
+        return;
+      }
+
+      // Obtener token
+      const pin = await AuthService.getPIN();
+      if (!pin) return;
+
+      const loginResult = await BackendSyncService.loginAndGetToken(user.email, pin);
+      if (!loginResult.success || !loginResult.token) return;
+
+      // Descargar liquidaciones desde el backend (incluye actualizaciones)
+      const result = await BackendSyncService.downloadLiquidationsFromBackend(user.email, loginResult.token);
+      
+      if (result.success) {
+        console.log(`✅ Liquidations: Sincronizadas ${result.count || 0} liquidaciones desde el backend`);
+        // Recargar la lista local después de sincronizar
+        loadLiquidations();
+      }
+    } catch (error) {
+      console.log('⚠️ Liquidations: Error en sincronización (no crítico):', error);
+    }
+  };
+
   const handleRefresh = () => {
     setIsRefreshing(true);
-    loadLiquidations();
+    // Al hacer refresh, sincronizar primero y luego cargar
+    syncLiquidationsFromBackend().then(() => loadLiquidations());
   };
 
   const handleViewDetails = (liquidationId: string) => {
@@ -97,57 +150,62 @@ export default function LiquidationsScreen() {
         style={styles.liquidationItem}
         onPress={() => handleViewDetails(item.id)}
       >
+        {/* Header: ID + Monto */}
         <View style={styles.itemHeader}>
           <View style={styles.itemTitleContainer}>
-            <Ionicons name="folder" size={24} color="#2563eb" />
-            <View style={styles.itemTitleText}>
-              <Text style={styles.itemTitle}>Liquidación #{item.id.slice(-6)}</Text>
-              <Text style={styles.itemDate}>{item.createdDate}</Text>
-            </View>
+            <Ionicons name="folder" size={20} color="#2563eb" />
+            <Text style={styles.itemTitle}>#{item.id.slice(-6)}</Text>
           </View>
+          <Text style={styles.itemAmount}>Q{item.totalAmount.toFixed(2)}</Text>
+        </View>
+
+        {/* Info Row: Fecha, Cantidad de gastos */}
+        <View style={styles.itemInfoRow}>
+          <View style={styles.infoItem}>
+            <Ionicons name="calendar-outline" size={14} color="#64748b" />
+            <Text style={styles.infoText}>{formatDateToSpanish(item.createdDate)}</Text>
+          </View>
+          <View style={styles.infoItem}>
+            <Ionicons name="receipt-outline" size={14} color="#64748b" />
+            <Text style={styles.infoText}>{item.expenseIds.length} gastos</Text>
+          </View>
+        </View>
+
+        {/* Footer: Estado y fechas adicionales */}
+        <View style={styles.itemFooter}>
           <View style={[styles.statusBadge, { backgroundColor: statusColor + '20' }]}>
+            {/* Icono según estado */}
+            {item.status === 'draft' && <Ionicons name="create-outline" size={14} color={statusColor} />}
+            {item.status === 'submitted' && <Ionicons name="time-outline" size={14} color={statusColor} />}
+            {item.status === 'approved' && <Ionicons name="checkmark-circle" size={14} color={statusColor} />}
+            {item.status === 'rejected' && <Ionicons name="close-circle" size={14} color={statusColor} />}
             <Text style={[styles.statusText, { color: statusColor }]}>{statusText}</Text>
           </View>
+
+          {item.submittedDate && (
+            <View style={styles.dateBadge}>
+              <Ionicons name="send" size={10} color="#64748b" />
+              <Text style={styles.dateBadgeText}>Enviada {formatDateToSpanish(item.submittedDate)}</Text>
+            </View>
+          )}
+
+          {item.approvedDate && (
+            <View style={styles.approvedBadge}>
+              <Ionicons name="checkmark-circle" size={10} color="#059669" />
+              <Text style={styles.approvedBadgeText}>{item.approvedDate}</Text>
+            </View>
+          )}
         </View>
 
-        <View style={styles.itemDetails}>
-          <View style={styles.detailRow}>
-            <Ionicons name="receipt-outline" size={16} color="#64748b" />
-            <Text style={styles.detailText}>{item.expenseIds.length} gastos</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Ionicons name="cash-outline" size={16} color="#64748b" />
-            <Text style={styles.detailAmount}>Q{item.totalAmount.toFixed(2)}</Text>
-          </View>
-        </View>
-
-        {item.submittedDate && (
-          <View style={styles.submittedInfo}>
-            <Ionicons name="send" size={14} color="#64748b" />
-            <Text style={styles.submittedText}>Enviada: {item.submittedDate}</Text>
-          </View>
-        )}
-
-        {item.approvedDate && (
-          <View style={styles.approvedInfo}>
-            <Ionicons name="checkmark-circle" size={14} color="#059669" />
-            <Text style={styles.approvedText}>Aprobada: {item.approvedDate}</Text>
-          </View>
-        )}
-
+        {/* Comentarios del jefe (si existen) */}
         {item.managerComments && (
           <View style={styles.commentsPreview}>
-            <Ionicons name="chatbox-outline" size={14} color="#64748b" />
+            <Ionicons name="chatbox" size={12} color="#f59e0b" />
             <Text style={styles.commentsText} numberOfLines={2}>
               {item.managerComments}
             </Text>
           </View>
         )}
-
-        <View style={styles.itemFooter}>
-          <Text style={styles.viewDetailsText}>Ver detalles</Text>
-          <Ionicons name="chevron-forward" size={20} color="#2563eb" />
-        </View>
       </TouchableOpacity>
     );
   };
@@ -444,109 +502,110 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   itemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
+    alignItems: 'center',
+    marginBottom: 10,
   },
   itemTitleContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    flex: 1,
-  },
-  itemTitleText: {
-    flex: 1,
+    gap: 8,
   },
   itemTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: '#1e293b',
   },
-  itemDate: {
+  itemAmount: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  itemInfoRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 10,
+  },
+  infoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  infoText: {
     fontSize: 13,
     color: '#64748b',
-    marginTop: 2,
+    fontWeight: '500',
+  },
+  itemFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
   },
   statusBadge: {
-    paddingVertical: 4,
-    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 12,
   },
   statusText: {
-    fontSize: 12,
-    fontWeight: 'bold',
+    fontSize: 13,
+    fontWeight: '700',
   },
-  itemDetails: {
-    flexDirection: 'row',
-    gap: 16,
-    marginBottom: 8,
-  },
-  detailRow: {
+  dateBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    gap: 4,
   },
-  detailText: {
-    fontSize: 14,
+  dateBadgeText: {
+    fontSize: 10,
     color: '#64748b',
-  },
-  detailAmount: {
-    fontSize: 14,
     fontWeight: '600',
-    color: '#059669',
   },
-  submittedInfo: {
+  approvedBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
+    backgroundColor: '#d1fae5',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    gap: 4,
   },
-  submittedText: {
-    fontSize: 12,
-    color: '#64748b',
-  },
-  approvedInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-  },
-  approvedText: {
-    fontSize: 12,
+  approvedBadgeText: {
+    fontSize: 10,
     color: '#059669',
-    fontWeight: '600',
+    fontWeight: '700',
   },
   commentsPreview: {
     flexDirection: 'row',
     gap: 6,
     marginTop: 8,
-    padding: 8,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 6,
+    padding: 10,
+    backgroundColor: '#fef3c7',
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#f59e0b',
   },
   commentsText: {
     flex: 1,
     fontSize: 12,
-    color: '#475569',
-    fontStyle: 'italic',
-  },
-  itemFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-    gap: 4,
-  },
-  viewDetailsText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#2563eb',
+    color: '#92400e',
+    fontWeight: '500',
   },
   emptyContainer: {
     flex: 1,

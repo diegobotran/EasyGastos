@@ -1,12 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as AuthService from '../../services/AuthService';
 import { BackendSyncService } from '../../services/BackendSyncService';
 import * as CategoryService from '../../services/CategoryService';
+import * as ExpenseService from '../../services/ExpenseService';
+import * as UpdateService from '../../services/UpdateService';
+import * as SettingsService from '../../services/SettingsService';
+import { SETTINGS_CONSTRAINTS } from '../../models/Settings';
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const [userName] = useState('');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -17,6 +23,30 @@ export default function SettingsScreen() {
   const [isUpdatingSecurity, setIsUpdatingSecurity] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [showAdminPasswordModal, setShowAdminPasswordModal] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [maxExpenseAmount, setMaxExpenseAmount] = useState('3500.00');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  
+  const ADMIN_PASSWORD = '101104';
+
+  const handleBackendConfigAccess = () => {
+    setAdminPassword('');
+    setShowAdminPasswordModal(true);
+  };
+
+  const verifyAdminPassword = () => {
+    if (adminPassword === ADMIN_PASSWORD) {
+      setShowAdminPasswordModal(false);
+      setAdminPassword('');
+      router.push('../backend-config' as any);
+    } else {
+      Alert.alert('Acceso Denegado', 'Contraseña incorrecta. Solo los administradores pueden cambiar la configuración del servidor.');
+      setAdminPassword('');
+    }
+  };
 
   const loadUserData = async () => {
     setIsLoading(true);
@@ -27,8 +57,18 @@ export default function SettingsScreen() {
         
         // Cargar información de sincronización
         const categoriesNeedingSync = await CategoryService.getCategoriesNeedingSync(user.email);
+        const expensesNeedingSync = await ExpenseService.getExpensesNeedingSync(user.email);
+        
+        let statusMsg = '';
         if (categoriesNeedingSync.length > 0) {
-          setSyncStatus(`📂 ${categoriesNeedingSync.length} categorías pendientes de sincronización`);
+          statusMsg += `📂 ${categoriesNeedingSync.length} categorías`;
+        }
+        if (expensesNeedingSync.length > 0) {
+          if (statusMsg) statusMsg += ', ';
+          statusMsg += `💰 ${expensesNeedingSync.length} gastos`;
+        }
+        if (statusMsg) {
+          setSyncStatus(`${statusMsg} pendientes de sincronización`);
         }
         
         // Cargar última fecha de sincronización desde AsyncStorage
@@ -38,6 +78,10 @@ export default function SettingsScreen() {
           setLastSyncTime(new Date(parseInt(lastSync)).toLocaleString());
         }
       }
+
+      // Cargar configuraciones de la app
+      const maxAmount = await SettingsService.getMaxExpenseAmount();
+      setMaxExpenseAmount(maxAmount.toFixed(2));
     } catch (error) {
       console.error('Error cargando datos de usuario:', error);
     }
@@ -71,9 +115,7 @@ export default function SettingsScreen() {
     if (pin !== confirmPin) {
       Alert.alert('Error', 'Los PINs no coinciden. Por favor verifique.');
       return;
-    }
-
-    // Validar que sea numérico
+    }    // Validar que sea numérico
     if (!/^\d{4}$/.test(pin)) {
       Alert.alert('Error', 'El PIN debe contener solo números.');
       return;
@@ -165,6 +207,100 @@ export default function SettingsScreen() {
       Alert.alert('Error', 'No se pudo actualizar la configuración. Por favor intente nuevamente.');
     } finally {
       setIsUpdatingSecurity(false);
+    }
+  };
+
+  const syncAllData = async (userEmail: string, token: string) => {
+    console.log('🔄 Settings: ========== SINCRONIZANDO TODOS LOS DATOS ==========');
+    
+    try {
+      let syncedItems = 0;
+      let errors = 0;
+      
+      // 1. Sincronizar categorías
+      setSyncStatus('📂 Sincronizando categorías...');
+      try {
+        const categoryResult = await BackendSyncService.syncCategories(userEmail, token);
+        if (categoryResult.success) {
+          console.log('✅ Settings: Categorías sincronizadas');
+          syncedItems++;
+        } else {
+          console.error('❌ Settings: Error en categorías:', categoryResult.error);
+          errors++;
+        }
+      } catch (error) {
+        console.error('❌ Settings: Error sincronizando categorías:', error);
+        errors++;
+      }
+      
+      // 2. Sincronizar gastos
+      setSyncStatus('💰 Sincronizando gastos...');
+      try {
+        const expenseResult = await BackendSyncService.syncExpenses(userEmail, token);
+        if (expenseResult.success) {
+          console.log('✅ Settings: Gastos sincronizados');
+          syncedItems++;
+        } else {
+          console.error('❌ Settings: Error en gastos:', expenseResult.error);
+          errors++;
+        }
+      } catch (error) {
+        console.error('❌ Settings: Error sincronizando gastos:', error);
+        errors++;
+      }
+      
+      // 3. Sincronizar liquidaciones
+      setSyncStatus('📁 Sincronizando liquidaciones...');
+      try {
+        const liquidationResult = await BackendSyncService.syncLiquidations(userEmail, token);
+        if (liquidationResult.success) {
+          console.log('✅ Settings: Liquidaciones sincronizadas');
+          syncedItems++;
+        } else {
+          console.error('❌ Settings: Error en liquidaciones:', liquidationResult.error);
+          errors++;
+        }
+      } catch (error) {
+        console.error('❌ Settings: Error sincronizando liquidaciones:', error);
+        errors++;
+      }
+      
+      // Actualizar última sincronización
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      await AsyncStorage.setItem('last_sync_timestamp', Date.now().toString());
+      setLastSyncTime(new Date().toLocaleString());
+      
+      // Mostrar resultado
+      if (errors === 0) {
+        setSyncStatus('✅ Sincronización completada');
+        Alert.alert(
+          '✅ Sincronización Exitosa',
+          `Datos sincronizados correctamente:\n\n` +
+          `📂 Categorías\n` +
+          `💰 Gastos\n` +
+          `📁 Liquidaciones\n\n` +
+          `⏰ ${new Date().toLocaleTimeString()}`
+        );
+      } else if (syncedItems > 0) {
+        setSyncStatus('⚠️ Sincronización parcial');
+        Alert.alert(
+          '⚠️ Sincronización Parcial',
+          `Se sincronizaron ${syncedItems} de 3 elementos.\n\n` +
+          `Algunos datos no se pudieron sincronizar. Intente nuevamente más tarde.`
+        );
+      } else {
+        setSyncStatus('❌ Error en sincronización');
+        Alert.alert(
+          '❌ Error de Sincronización',
+          `No se pudo sincronizar ningún dato.\n\n` +
+          `Verifique su conexión e intente nuevamente.`
+        );
+      }
+      
+    } catch (error) {
+      console.error('🚨 Settings: Error general en sincronización:', error);
+      setSyncStatus('❌ Error inesperado');
+      Alert.alert('Error', 'Error inesperado durante la sincronización');
     }
   };
 
@@ -261,50 +397,101 @@ export default function SettingsScreen() {
         
         if (loginResult.success && loginResult.token) {
           console.log('✅ Settings: Login exitoso - usuario ya existe');
-          setSyncStatus('✅ Usuario verificado - sincronizando categorías...');
-          Alert.alert('Usuario Verificado', `✅ Login exitoso para ${userEmail}`);
+          setSyncStatus('✅ Usuario verificado - sincronizando...');
           
-          // Proceder con sincronización de categorías usando el email de prueba
-          await syncCategoriesWithToken(userEmail, loginResult.token);
+          // Proceder con sincronización de datos
+          await syncAllData(userEmail, loginResult.token);
           
         } else {
-          console.log('❌ Settings: Login falló - usuario no existe, registrando...');
-          setSyncStatus('📝 Usuario no existe - registrando...');
-          Alert.alert('Registrando Usuario', `📝 Creando usuario ${userEmail} en el backend`);
+          console.log('⚠️ Settings: Login falló - usuario no existe en backend');
+          console.log('📝 Settings: Registrando usuario con PIN local almacenado');
+          setSyncStatus('📝 Registrando usuario en el servidor...');
           
-          // STEP 2: Registrar usuario si no existe
+          // STEP 2: Registrar usuario con el PIN almacenado localmente
+          console.log('📝 Settings: Usuario a registrar:', userEmail);
+          console.log('📝 Settings: PIN a usar (local):', userPIN ? 'Disponible' : 'NO DISPONIBLE');
+          console.log('📝 Settings: Datos del usuario:', {
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            department: user.department
+          });
+          
           const registerResult = await BackendSyncService.syncUserRegistration(user, userPIN);
           console.log('📝 Settings: Resultado de registro:', registerResult);
           
           if (registerResult.success) {
-            console.log('✅ Settings: Usuario registrado - haciendo login...');
+            console.log('✅ Settings: Usuario registrado exitosamente en el backend');
+            console.log('✅ Settings: PIN registrado correctamente:', userPIN ? 'SÍ' : 'NO');
             setSyncStatus('✅ Usuario registrado - obteniendo token...');
             
-            // STEP 3: Login después del registro
+            // STEP 3: Login después del registro para obtener token
+            console.log('🔐 Settings: Intentando login con el PIN recién registrado');
             const newLoginResult = await BackendSyncService.loginAndGetToken(userEmail, userPIN);
             console.log('🔐 Settings: Login después de registro:', newLoginResult);
             
             if (newLoginResult.success && newLoginResult.token) {
-              console.log('✅ Settings: Token obtenido - sincronizando categorías...');
-              Alert.alert('Token Obtenido', `🎫 Procediendo a sincronizar categorías`);
+              console.log('✅ Settings: Token obtenido exitosamente');
+              console.log('✅ Settings: Usuario y PIN correctamente sincronizados con el backend');
               
-              // Proceder con sincronización de categorías usando el email de prueba
-              await syncCategoriesWithToken(userEmail, newLoginResult.token);
+              Alert.alert(
+                '✅ Registro Exitoso',
+                `Usuario registrado en el servidor con su PIN.\n\n` +
+                `Ahora sincronizando sus datos...`
+              );
+              
+              // Sincronizar todos los datos
+              await syncAllData(userEmail, newLoginResult.token);
             } else {
               console.error('❌ Settings: No se pudo obtener token después del registro');
+              console.error('❌ Settings: Esto indica un problema con el PIN registrado');
               setSyncStatus('❌ Error obteniendo token');
-              Alert.alert('Error', 'No se pudo obtener token después del registro');
+              Alert.alert(
+                'Error de Autenticación', 
+                '⚠️ Usuario registrado pero no se pudo autenticar.\n\n' +
+                'Esto puede indicar un problema con el PIN. Intente:\n' +
+                '1. Cerrar sesión y volver a iniciar\n' +
+                '2. Contactar al administrador si el problema persiste'
+              );
             }
           } else {
-            console.error('❌ Settings: Error registrando usuario:', registerResult.error);
-            setSyncStatus('❌ Error registrando usuario');
-            Alert.alert('Error', `No se pudo registrar usuario: ${registerResult.error}`);
+            // Analizar el error de registro
+            const errorMsg = registerResult.error || 'Error desconocido';
+            console.error('❌ Settings: Error registrando usuario:', errorMsg);
+            
+            if (errorMsg.toLowerCase().includes('ya existe') || errorMsg.toLowerCase().includes('already exists')) {
+              // El usuario ya existe pero el PIN es incorrecto
+              setSyncStatus('❌ Credenciales incorrectas');
+              Alert.alert(
+                'Error de Autenticación',
+                '⚠️ Usuario ya existe en el servidor pero las credenciales no coinciden.\n\n' +
+                'Posibles soluciones:\n' +
+                '1. Verifique que su PIN sea correcto\n' +
+                '2. Si olvidó su PIN, contacte al administrador\n' +
+                '3. Puede continuar trabajando offline'
+              );
+            } else {
+              // Otro tipo de error
+              setSyncStatus('❌ Error de conexión');
+              Alert.alert(
+                'Error de Sincronización',
+                `⚠️ No se pudo conectar con el servidor.\n\n` +
+                `Error: ${errorMsg}\n\n` +
+                `Puede continuar trabajando offline y los datos se sincronizarán automáticamente cuando haya conexión.`
+              );
+            }
           }
         }
-      } catch (loginError) {
-        console.error('🚨 Settings: Error en proceso de login:', loginError);
-        setSyncStatus('❌ Error en autenticación');
-        Alert.alert('Error', 'Error durante la autenticación');
+      } catch (loginError: any) {
+        console.error('🚨 Settings: Error en proceso de autenticación:', loginError);
+        const errorMsg = loginError.message || 'Error de conexión';
+        setSyncStatus('❌ Error de conexión');
+        Alert.alert(
+          'Error de Conexión',
+          `⚠️ No se pudo conectar con el servidor.\n\n` +
+          `${errorMsg}\n\n` +
+          `Verifique su conexión a internet e intente nuevamente.`
+        );
       }
       
     } catch (error) {
@@ -316,6 +503,60 @@ export default function SettingsScreen() {
       console.log('🔄 Settings: Sincronización finalizada - limpiando estado');
       // Limpiar el estado después de 5 segundos
       setTimeout(() => setSyncStatus(''), 5000);
+    }
+  };
+
+  const handleSaveMaxExpenseAmount = async () => {
+    const amount = parseFloat(maxExpenseAmount);
+    const constraints = SETTINGS_CONSTRAINTS.maxExpenseAmount;
+
+    // Validaciones
+    if (isNaN(amount)) {
+      Alert.alert('Error', 'Por favor, ingrese un monto válido');
+      return;
+    }
+
+    if (amount < constraints.min) {
+      Alert.alert('Error', `El monto mínimo es Q${constraints.min.toFixed(2)}`);
+      return;
+    }
+
+    if (amount > constraints.max) {
+      Alert.alert('Error', `El monto máximo es Q${constraints.max.toFixed(2)}`);
+      return;
+    }
+
+    try {
+      setIsSavingSettings(true);
+      await SettingsService.setMaxExpenseAmount(amount);
+      Alert.alert(
+        '✅ Guardado',
+        `Límite de gasto actualizado a Q${amount.toFixed(2)}`
+      );
+    } catch (error) {
+      console.error('Error al guardar configuración:', error);
+      Alert.alert('Error', (error as Error).message);
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const handleCheckUpdate = async () => {
+    if (isCheckingUpdate) return;
+    
+    setIsCheckingUpdate(true);
+    setUpdateProgress(0);
+    
+    try {
+      await UpdateService.checkAndUpdate((progress, status) => {
+        setUpdateProgress(progress);
+        console.log(`📱 Actualización: ${status} - ${progress.toFixed(0)}%`);
+      });
+    } catch (error) {
+      console.error('❌ Error verificando actualización:', error);
+    } finally {
+      setIsCheckingUpdate(false);
+      setUpdateProgress(0);
     }
   };
 
@@ -425,6 +666,69 @@ export default function SettingsScreen() {
         )}
       </TouchableOpacity>
 
+      {/* SEPARADOR */}
+      <View style={styles.separator} />
+
+      {/* SECCIÓN: Límites de Gastos */}
+      <Text style={styles.sectionTitle}>💰 Límites de Gastos</Text>
+      
+      <View style={styles.settingCard}>
+        <View style={styles.settingHeader}>
+          <Ionicons name="cash-outline" size={20} color="#059669" />
+          <Text style={styles.settingLabelGreen}>Monto Máximo por Gasto Individual</Text>
+        </View>
+        
+        <Text style={styles.settingDescription}>
+          Define el límite máximo que puede tener cada gasto. Las liquidaciones pueden superar este límite 
+          (ya que son la suma de múltiples gastos), pero cada gasto individual debe estar dentro del rango.
+        </Text>
+
+        <View style={styles.expenseAmountInputContainer}>
+          <Text style={styles.currencyPrefix}>Q</Text>
+          <TextInput
+            style={styles.expenseAmountInput}
+            value={maxExpenseAmount}
+            onChangeText={setMaxExpenseAmount}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+            editable={!isSavingSettings}
+          />
+        </View>
+
+        <View style={styles.constraintsRow}>
+          <Text style={styles.constraintText}>
+            ✓ Mínimo: Q{SETTINGS_CONSTRAINTS.maxExpenseAmount.min.toFixed(2)}
+          </Text>
+          <Text style={styles.constraintText}>
+            ✓ Máximo: Q{SETTINGS_CONSTRAINTS.maxExpenseAmount.max.toLocaleString('es-GT', { minimumFractionDigits: 2 })}
+          </Text>
+        </View>
+
+        <TouchableOpacity 
+          style={[styles.saveSettingsButton, isSavingSettings && styles.saveSettingsButtonDisabled]}
+          onPress={handleSaveMaxExpenseAmount}
+          disabled={isSavingSettings}
+        >
+          {isSavingSettings ? (
+            <>
+              <ActivityIndicator size="small" color="white" />
+              <Text style={styles.saveSettingsButtonText}>Guardando...</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="checkmark-circle" size={18} color="white" />
+              <Text style={styles.saveSettingsButtonText}>Guardar Límite</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* SEPARADOR */}
+      <View style={styles.separator} />
+
+      {/* SECCIÓN: Sincronización */}
+      <Text style={styles.sectionTitle}>🔄 Sincronización</Text>
+
       <TouchableOpacity 
         style={[styles.syncButton, isSyncing && styles.syncButtonDisabled]} 
         onPress={handleSynchronize}
@@ -446,6 +750,40 @@ export default function SettingsScreen() {
           <Text style={styles.syncStatusText}>{syncStatus}</Text>
         </View>
       )}
+      
+      {/* Botón de configuración del backend */}
+      <TouchableOpacity 
+        style={styles.backendConfigButton}
+        onPress={handleBackendConfigAccess}
+      >
+        <Ionicons name="server-outline" size={20} color="#2563eb" />
+        <Text style={styles.backendConfigText}>Configurar Servidor Backend</Text>
+        <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
+      </TouchableOpacity>
+
+      {/* BOTÓN DE ACTUALIZACIÓN - DESACTIVADO TEMPORALMENTE
+      <TouchableOpacity 
+        styotón de actualización de app */}
+      <TouchableOpacity 
+        style={[styles.updateAppButton, isCheckingUpdate && styles.updateAppButtonDisabled]}
+        onPress={handleCheckUpdate}
+        disabled={isCheckingUpdate}
+      >
+        {isCheckingUpdate ? (
+          <>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.updateAppText}>
+              {updateProgress > 0 ? `Descargando ${updateProgress.toFixed(0)}%` : 'Verificando...'}
+            </Text>
+          </>
+        ) : (
+          <>
+            <Ionicons name="download-outline" size={20} color="#2563eb" />
+            <Text style={styles.updateAppText}>Buscar Actualización</Text>
+            <Text style={styles.updateAppVersion}>v{UpdateService.getCurrentVersion()}</Text>
+          </>
+        )}
+      </TouchableOpacity>
 
       {/* Última sincronización */}
       {lastSyncTime && (
@@ -455,6 +793,58 @@ export default function SettingsScreen() {
           </Text>
         </View>
       )}
+
+      {/* Modal de Contraseña de Administrador */}
+      <Modal
+        visible={showAdminPasswordModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowAdminPasswordModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.adminModalContent}>
+            <View style={styles.adminModalHeader}>
+              <Ionicons name="shield-checkmark" size={40} color="#2563eb" />
+              <Text style={styles.adminModalTitle}>Acceso de Administrador</Text>
+            </View>
+            
+            <Text style={styles.adminModalDescription}>
+              Ingrese la contraseña de administrador para acceder a la configuración del servidor:
+            </Text>
+            
+            <TextInput
+              style={styles.adminPasswordInput}
+              placeholder="Contraseña"
+              value={adminPassword}
+              onChangeText={setAdminPassword}
+              secureTextEntry={true}
+              keyboardType="numeric"
+              maxLength={6}
+              autoFocus={true}
+              placeholderTextColor="#94a3b8"
+            />
+            
+            <View style={styles.adminModalButtons}>
+              <TouchableOpacity
+                style={styles.adminModalCancelButton}
+                onPress={() => {
+                  setShowAdminPasswordModal(false);
+                  setAdminPassword('');
+                }}
+              >
+                <Text style={styles.adminModalCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={styles.adminModalConfirmButton}
+                onPress={verifyAdminPassword}
+              >
+                <Text style={styles.adminModalConfirmText}>Aceptar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -533,12 +923,241 @@ const styles = StyleSheet.create({
     borderRadius: 8, 
     alignItems: 'center', 
     justifyContent: 'center', 
-    marginBottom: 10 
+    marginBottom: 15 
   },
-  syncButtonDisabled: { backgroundColor: '#94a3b8' },
-  buttonText: { color: 'white', fontWeight: 'bold', marginLeft: 5, fontSize: 15 },
-  syncStatusContainer: { backgroundColor: '#f1f5f9', padding: 10, borderRadius: 8, marginBottom: 10 },
-  syncStatusText: { fontSize: 13, color: '#334155', textAlign: 'center' },
-  lastSyncContainer: { backgroundColor: '#f0fdf4', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#dcfce7' },
-  lastSyncText: { fontSize: 11, color: '#166534', textAlign: 'center' },
+  syncButtonDisabled: {
+    backgroundColor: '#6ee7b7',
+  },
+  buttonText: { color: 'white', marginLeft: 10, fontSize: 16, fontWeight: 'bold' },
+  syncStatusContainer: {
+    padding: 12,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    marginTop: 10,
+    marginBottom: 15,
+  },
+  syncStatusText: {
+    fontSize: 14,
+    color: '#475569',
+    textAlign: 'center',
+  },
+  backendConfigButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  backendConfigText: {
+    flex: 1,
+    fontSize: 15,
+    color: '#2563eb',
+    fontWeight: '600',
+    marginLeft: 12,
+  },
+  updateAppButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#eff6ff',
+    borderWidth: 2,
+    borderColor: '#2563eb',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+  },
+  updateAppButtonDisabled: {
+    backgroundColor: '#f1f5f9',
+    borderColor: '#94a3b8',
+  },
+  updateAppText: {
+    flex: 1,
+    fontSize: 15,
+    color: '#2563eb',
+    fontWeight: '600',
+    marginLeft: 12,
+  },
+  updateAppVersion: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+  lastSyncContainer: {
+    backgroundColor: '#f0fdf4',
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    marginTop: 10,
+  },
+  lastSyncText: {
+    fontSize: 11,
+    color: '#166534',
+    textAlign: 'center',
+  },
+  separator: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 16,
+  },
+  settingCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  settingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  settingLabelGreen: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  settingDescription: {
+    fontSize: 13,
+    color: '#64748b',
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  expenseAmountInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  currencyPrefix: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#64748b',
+    marginRight: 8,
+  },
+  expenseAmountInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  constraintsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  constraintText: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  saveSettingsButton: {
+    flexDirection: 'row',
+    backgroundColor: '#059669',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  saveSettingsButtonDisabled: {
+    opacity: 0.5,
+  },
+  saveSettingsButtonText: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  adminModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    width: '85%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  adminModalHeader: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  adminModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1e293b',
+    marginTop: 12,
+  },
+  adminModalDescription: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  adminPasswordInput: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 20,
+    textAlign: 'center',
+    letterSpacing: 4,
+    color: '#1e293b',
+  },
+  adminModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  adminModalCancelButton: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  adminModalCancelText: {
+    color: '#64748b',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  adminModalConfirmButton: {
+    flex: 1,
+    backgroundColor: '#2563eb',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  adminModalConfirmText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });

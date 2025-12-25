@@ -44,12 +44,12 @@ export const usePinUnlockViewModel = ({ onUnlockSuccess, email }: UsePinUnlockVi
     const isValid = await AuthService.verifyPin(email, pin);
     
     if (isValid) {
-      // ✅ PIN CORRECTO - Ejecutar verificación de manager en background
-      console.log('🔓 Unlock: PIN correcto - Verificando datos en background...');
+      // ✅ PIN CORRECTO - Sincronizar datos del usuario en background
+      console.log('🔓 Unlock: PIN correcto - Sincronizando datos en background...');
       
-      // Verificar si es manager y descargar liquidaciones pendientes SIN BLOQUEAR
-      checkManagerAndDownloadPendingLiquidations(email).catch(err => {
-        console.error('⚠️ Unlock: Error en verificación de manager (no crítico):', err);
+      // Ejecutar sincronización completa en background (NO BLOQUEA el UI)
+      syncUserDataInBackground(email).catch(err => {
+        console.error('⚠️ Unlock: Error en sincronización de datos (no crítico):', err);
       });
       
       onUnlockSuccess();
@@ -61,7 +61,101 @@ export const usePinUnlockViewModel = ({ onUnlockSuccess, email }: UsePinUnlockVi
   };
 
   /**
-   * Verifica si el usuario es manager y descarga liquidaciones pendientes en background
+   * 🔄 SINCRONIZACIÓN COMPLETA DE DATOS DEL USUARIO
+   * Descarga TODOS los datos del backend: categorías, gastos, liquidaciones
+   * Esto es CRÍTICO cuando:
+   * - El usuario reinstala la app (se pierden datos locales)
+   * - El usuario hace login en un nuevo dispositivo
+   * - Se necesita recuperar datos del servidor
+   */
+  const syncUserDataInBackground = async (userEmail: string) => {
+    try {
+      console.log('🔄 Unlock: ========== SINCRONIZACIÓN COMPLETA DE DATOS ==========');
+      console.log('📧 Unlock: Usuario:', userEmail);
+      
+      // Paso 1: Obtener token de autenticación
+      console.log('🔐 Unlock: Obteniendo token de autenticación...');
+      const loginResult = await BackendSyncService.loginAndGetToken(userEmail, pin);
+      if (!loginResult.success || !loginResult.token) {
+        console.warn('⚠️ Unlock: No se pudo obtener token - Sincronización abortada');
+        return;
+      }
+
+      const authToken = loginResult.token;
+      console.log('✅ Unlock: Token obtenido');
+
+      // Paso 2: Descargar CATEGORÍAS del backend
+      console.log('📂 Unlock: Descargando categorías del backend...');
+      const categoriesResult = await BackendSyncService.downloadCategoriesFromBackend(
+        userEmail,
+        authToken
+      );
+      if (categoriesResult.success) {
+        console.log('✅ Unlock: Categorías descargadas:', categoriesResult.count);
+      } else {
+        console.warn('⚠️ Unlock: Error descargando categorías:', categoriesResult.error);
+      }
+
+      // Paso 3: Descargar GASTOS del backend
+      console.log('💰 Unlock: Descargando gastos del backend...');
+      const expensesResult = await BackendSyncService.downloadExpensesFromBackend(
+        userEmail,
+        authToken
+      );
+      if (expensesResult.success) {
+        console.log('✅ Unlock: Gastos descargados:', expensesResult.count);
+      } else {
+        console.warn('⚠️ Unlock: Error descargando gastos:', expensesResult.error);
+      }
+
+      // Paso 4: Descargar LIQUIDACIONES del backend
+      console.log('📋 Unlock: Descargando liquidaciones del backend...');
+      const liquidationsResult = await BackendSyncService.downloadLiquidationsFromBackend(
+        userEmail,
+        authToken
+      );
+      if (liquidationsResult.success) {
+        console.log('✅ Unlock: Liquidaciones descargadas:', liquidationsResult.count);
+      } else {
+        console.warn('⚠️ Unlock: Error descargando liquidaciones:', liquidationsResult.error);
+      }
+
+      // Paso 5: Verificar si es MANAGER y descargar datos pendientes de aprobación
+      console.log('👔 Unlock: Verificando si es manager...');
+      const managerCheck = await BackendSyncService.checkIfUserIsManager(userEmail, authToken);
+      
+      if (managerCheck.isManager) {
+        console.log('👔 Unlock: Usuario ES MANAGER de', managerCheck.employeeCount, 'empleados');
+        
+        // Descargar liquidaciones pendientes de aprobación
+        const pendingLiquidationsResult = await BackendSyncService.downloadPendingLiquidationsForManager(
+          userEmail,
+          authToken
+        );
+        if (pendingLiquidationsResult.success) {
+          console.log('✅ Unlock: Liquidaciones pendientes descargadas:', pendingLiquidationsResult.count);
+        }
+
+        // Descargar gastos individuales pendientes de aprobación
+        const pendingExpensesResult = await BackendSyncService.downloadPendingExpensesForManager(
+          userEmail,
+          authToken
+        );
+        if (pendingExpensesResult.success) {
+          console.log('✅ Unlock: Gastos pendientes descargados:', pendingExpensesResult.count);
+        }
+      } else {
+        console.log('ℹ️ Unlock: Usuario NO es manager');
+      }
+
+      console.log('✅ Unlock: ========== SINCRONIZACIÓN COMPLETADA ==========');
+    } catch (error) {
+      console.error('🚨 Unlock: Error en sincronización de datos:', error);
+    }
+  };
+
+  /**
+   * @deprecated Esta función ya no se usa, se reemplazó por syncUserDataInBackground
    */
   const checkManagerAndDownloadPendingLiquidations = async (userEmail: string) => {
     try {

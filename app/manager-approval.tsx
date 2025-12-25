@@ -17,6 +17,7 @@ import { useAuth } from '../context/AuthContext';
 import { Liquidation, getLiquidationStatusColor, getLiquidationStatusText } from '../models/Liquidation';
 import { BackendSyncService } from '../services/BackendSyncService';
 import { getExpenseById } from '../services/ExpenseService';
+import * as NotificationService from '../services/NotificationService';
 
 interface ManagerSummary {
   pendingCount: number;
@@ -96,30 +97,33 @@ export default function ManagerApprovalScreen() {
     if (!user?.email) return;
 
     try {
+      console.log(`${approve ? '✅' : '❌'} ManagerApproval: ${approve ? 'Aprobando' : 'Rechazando'} liquidación...`);
+      
       // Obtener token de autenticación
       const loginResult = await BackendSyncService.loginAndGetToken(user.email, user.pin || '');
       
       if (!loginResult.success || !loginResult.token) {
-        Alert.alert('Error', 'No se pudo autenticar. Por favor, intente de nuevo.');
+        Alert.alert('Sin Conexión', 'No se pudo conectar al servidor. Por favor, verifique su conexión a internet.');
         return;
       }
 
+      // Aprobar o rechazar en el backend
       const result = approve 
         ? await BackendSyncService.approveLiquidation(liquidationId, comments || '', loginResult.token)
         : await BackendSyncService.rejectLiquidation(liquidationId, comments || '', loginResult.token);
 
       if (result.success) {
         Alert.alert(
-          'Éxito', 
-          `Liquidación ${approve ? 'aprobada' : 'rechazada'} correctamente`,
+          '✅ Completado', 
+          `Liquidación ${approve ? 'aprobada' : 'rechazada'} correctamente.\n\nEl empleado recibirá la notificación cuando sincronice.`,
           [{ text: 'OK', onPress: loadPendingLiquidations }]
         );
       } else {
-        Alert.alert('Error', result.error || 'Error procesando la solicitud');
+        Alert.alert('Error', result.error || 'Error procesando la solicitud. Por favor, intente de nuevo.');
       }
     } catch (error) {
-      console.error('Error en aprobación:', error);
-      Alert.alert('Error', 'Error al procesar la aprobación');
+      console.error('❌ ManagerApproval: Error en aprobación:', error);
+      Alert.alert('Error', 'No se pudo procesar la aprobación. Verifique su conexión.');
     }
   };
 
@@ -146,6 +150,8 @@ export default function ManagerApprovalScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Limpiar badge de notificaciones cuando el manager abre la pantalla
+      NotificationService.clearBadge();
       loadPendingLiquidations();
     }, [user?.email])
   );

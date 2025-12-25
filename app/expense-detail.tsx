@@ -1,92 +1,575 @@
-import { useLocalSearchParams } from 'expo-router';
-import React from 'react';
-import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Expense, STATUSES } from '../models/Expense';
+import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useState } from 'react';
+import { Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Expense, STATUSES, canVoidExpense, getExpenseStatusText } from '../models/Expense';
+import { formatDateToSpanish, formatTimestampToSpanish } from '../utils/dateUtils';
+import * as ExpenseService from '../services/ExpenseService';
+import * as AuthService from '../services/AuthService';
+import { BackendSyncService } from '../services/BackendSyncService';
 
 export default function ExpenseDetailScreen() {
   const params = useLocalSearchParams();
-  const expense: Expense = JSON.parse(params.expense as string); // Parse the passed expense data
+  const router = useRouter();
+  const expense: Expense = JSON.parse(params.expense as string);
   const statusInfo = STATUSES[expense.status];
+  
+  const [showVoidModal, setShowVoidModal] = useState(false);
+  const [voidReason, setVoidReason] = useState('');
+  const [isVoiding, setIsVoiding] = useState(false);
+
+  const handleVoidExpense = async () => {
+    if (!voidReason || voidReason.trim().length === 0) {
+      Alert.alert('Error', 'Debe proporcionar una razón para anular el gasto');
+      return;
+    }
+
+    try {
+      setIsVoiding(true);
+      const user = await AuthService.getLastLoggedInUser();
+      if (!user) {
+        Alert.alert('Error', 'No se encontró usuario activo');
+        return;
+      }
+
+      // Anular gasto localmente primero
+      await ExpenseService.voidExpense(expense.id, user.email, voidReason);
+      console.log('✅ Gasto anulado localmente:', expense.id);
+      
+      // Intentar sincronizar en background si hay conexión (sin bloquear la UI)
+      console.log('🔄 Intentando sincronizar anulación en background...');
+      const plainPin = await AuthService.getPIN();
+      console.log('📌 PIN recuperado:', plainPin ? `${plainPin.length} caracteres` : 'null');
+      console.log('📌 Email:', user.email);
+      
+      if (plainPin && plainPin.length === 4) {
+        console.log('🔐 Intentando login con email:', user.email);
+        BackendSyncService.loginAndGetToken(user.email, plainPin)
+          .then(async (loginResult) => {
+            console.log('📥 Respuesta de login:', JSON.stringify(loginResult));
+            if (loginResult.success && loginResult.token) {
+              console.log('✅ Login exitoso, sincronizando gasto...');
+              await BackendSyncService.syncExpenses(user.email, loginResult.token);
+              console.log('✅ Anulación sincronizada en background');
+            } else {
+              console.log('⚠️ Login falló en background:', loginResult.error);
+            }
+          })
+          .catch(err => {
+            console.error('❌ Error en sincronización background:', err);
+            console.error('❌ Detalle del error:', JSON.stringify(err));
+          });
+      } else {
+        console.log('⚠️ PIN inválido o no encontrado. Longitud:', plainPin?.length);
+      }
+      
+      Alert.alert(
+        '✅ Gasto Anulado',
+        'El gasto ha sido anulado exitosamente. Se mantendrá como registro histórico.',
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+    } catch (error) {
+      console.error('Error anulando gasto:', error);
+      Alert.alert('Error', (error as Error).message);
+    } finally {
+      setIsVoiding(false);
+      setShowVoidModal(false);
+    }
+  };
+
+  const showCanVoid = canVoidExpense(expense);
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>{expense.description}</Text>
-
-      {/* Status Badge */}
-      <View style={[styles.statusBadge, { backgroundColor: statusInfo.backgroundColor }]}>
-        <Text style={[styles.statusText, { color: statusInfo.color }]}>{statusInfo.text}</Text>
+    <View style={styles.container}>
+      {/* Header con botón de regreso */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color="#1e293b" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Detalle del Gasto</Text>
+        <View style={{ width: 24 }} />
       </View>
 
-      {/* Basic Info */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Información Básica</Text>
-        <DetailRow label="Monto" value={`Q${expense.amount.toFixed(2)}`} />
-        <DetailRow label="Fecha" value={expense.date} />
-        <DetailRow label="Categoría" value={expense.category} />
-        <DetailRow label="Departamento" value={expense.department} />
-        <DetailRow label="Moneda" value={expense.currency} />
-      </View>
-
-      {/* Supplier Info */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Proveedor</Text>
-        <DetailRow label="Proveedor" value={expense.supplier} />
-        <DetailRow label="NIT" value={expense.vat_number} />
-      </View>
-
-      {/* Invoice Info */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Detalles de Factura</Text>
-        <DetailRow label="Serie" value={expense.serie} />
-        <DetailRow label="No. Factura" value={expense.noinvoice} />
-        <DetailRow label="Total IVA" value={`Q${expense.totiva.toFixed(2)}`} />
-      </View>
-
-      {/* Accounting Info */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Información Contable</Text>
-        <DetailRow label="Centro" value={expense.centro} />
-        <DetailRow label="Cuenta" value={expense.cuenta} />
-        <DetailRow label="Orden CO" value={expense.ordenco} />
-      </View>
-
-      {/* Notes and Attachment */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Notas</Text>
-        <Text style={styles.notes}>{expense.notes || 'Sin notas'}</Text>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Comprobante</Text>
-        {expense.imageuri ? (
-          <Image source={{ uri: expense.imageuri }} style={styles.image} resizeMode="contain" />
-        ) : (
-          <Text style={styles.noImage}>Sin comprobante adjunto</Text>
+      <ScrollView 
+        style={styles.scrollContent}
+        contentContainerStyle={styles.scrollContentContainer}
+      >
+        {/* Banner de estado anulado */}
+        {expense.expenseStatus === 'voided' && (
+          <View style={styles.voidedBanner}>
+            <Ionicons name="close-circle" size={24} color="#dc2626" />
+            <View style={styles.voidedBannerText}>
+              <Text style={styles.voidedTitle}>Gasto Anulado</Text>
+              {expense.voidedAt && (
+                <Text style={styles.voidedDate}>
+                  Anulado el {formatDateToSpanish(expense.voidedAt.split('T')[0])}
+                </Text>
+              )}
+              {expense.voidedReason && (
+                <Text style={styles.voidedReason}>Razón: {expense.voidedReason}</Text>
+              )}
+            </View>
+          </View>
         )}
-      </View>
-    </ScrollView>
+
+        {/* Card Principal: Monto y Estado */}
+        <View style={styles.mainCard}>
+          <View style={styles.mainCardHeader}>
+            <View>
+              <Text style={styles.mainCardLabel}>Gasto #{expense.id.slice(-8)}</Text>
+              <Text style={styles.createdDate}>
+                Creado: {formatTimestampToSpanish(parseInt(expense.id))}
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.amount}>Q{expense.amount.toFixed(2)}</Text>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusBadge, { backgroundColor: statusInfo.backgroundColor }]}>
+              <Text style={[styles.statusText, { color: statusInfo.color }]}>{statusInfo.text}</Text>
+            </View>
+            {expense.expenseStatus !== 'draft' && (
+              <View style={[styles.statusBadge, { backgroundColor: expense.expenseStatus === 'voided' ? '#fee2e2' : '#dbeafe' }]}>
+                <Text style={[styles.statusText, { color: expense.expenseStatus === 'voided' ? '#dc2626' : '#2563eb' }]}>
+                  {getExpenseStatusText(expense.expenseStatus)}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Información General */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Información General</Text>
+          <DetailRow icon="calendar-outline" label="Fecha Factura" value={formatDateToSpanish(expense.date)} />
+          <DetailRow icon="pricetag-outline" label="Categoría" value={expense.category} />
+          <DetailRow icon="briefcase-outline" label="Departamento" value={expense.department} />
+          <DetailRow icon="cash-outline" label="Moneda" value={expense.currency} />
+        </View>
+
+        {/* Proveedor */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Proveedor</Text>
+          <DetailRow icon="storefront-outline" label="Nombre" value={expense.supplier} />
+          <DetailRow icon="card-outline" label="NIT" value={expense.vat_number} />
+        </View>
+
+        {/* Factura */}
+        {(expense.serie || expense.noinvoice || expense.totiva > 0) && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Factura</Text>
+            {expense.serie && <DetailRow icon="document-text-outline" label="Serie" value={expense.serie} />}
+            {expense.noinvoice && <DetailRow icon="receipt-outline" label="Número" value={expense.noinvoice} />}
+            {expense.totiva > 0 && <DetailRow icon="calculator-outline" label="IVA" value={`Q${expense.totiva.toFixed(2)}`} />}
+          </View>
+        )}
+
+        {/* Contabilidad */}
+        {(expense.centro || expense.cuenta || expense.ordenco) && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Información Contable</Text>
+            {expense.centro && <DetailRow icon="business-outline" label="Centro" value={expense.centro} />}
+            {expense.cuenta && <DetailRow icon="list-outline" label="Cuenta" value={expense.cuenta} />}
+            {expense.ordenco && <DetailRow icon="document-outline" label="Orden CO" value={expense.ordenco} />}
+          </View>
+        )}
+
+        {/* Descripción */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Descripción</Text>
+          <Text style={styles.descriptionText}>{expense.description}</Text>
+        </View>
+
+        {/* Notas */}
+        {expense.notes && expense.notes.trim().length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Notas Adicionales</Text>
+            <Text style={styles.notesText}>{expense.notes}</Text>
+          </View>
+        )}
+
+        {/* Comprobante - Con mejor presentación */}
+        {expense.imageuri && (
+          <View style={styles.imageCard}>
+            <Text style={styles.cardTitle}>Comprobante Adjunto</Text>
+            <TouchableOpacity activeOpacity={0.9} style={styles.imageContainer}>
+              <Image 
+                source={{ uri: expense.imageuri }} 
+                style={styles.image} 
+                resizeMode="contain" 
+              />
+            </TouchableOpacity>
+            <Text style={styles.imageHint}>Toca para ver en detalle</Text>
+          </View>
+        )}
+
+        {/* Botón de Anular Gasto */}
+        {showCanVoid && (
+          <TouchableOpacity 
+            style={styles.voidButton}
+            onPress={() => setShowVoidModal(true)}
+          >
+            <Ionicons name="close-circle-outline" size={20} color="white" />
+            <Text style={styles.voidButtonText}>Anular Gasto</Text>
+          </TouchableOpacity>
+        )}
+      </ScrollView>
+
+      {/* Modal para anular gasto */}
+      <Modal
+        visible={showVoidModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowVoidModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Anular Gasto</Text>
+            <Text style={styles.modalDescription}>
+              El gasto será marcado como anulado y se mantendrá como registro histórico. 
+              No podrá agregarse a liquidaciones.
+            </Text>
+            
+            <Text style={styles.inputLabel}>Razón de anulación *</Text>
+            <TextInput
+              style={styles.reasonInput}
+              placeholder="Ej: Factura duplicada, error de registro..."
+              value={voidReason}
+              onChangeText={setVoidReason}
+              multiline
+              numberOfLines={3}
+              textAlignVertical="top"
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={styles.cancelButton}
+                onPress={() => {
+                  setShowVoidModal(false);
+                  setVoidReason('');
+                }}
+                disabled={isVoiding}
+              >
+                <Text style={styles.cancelButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.confirmVoidButton, isVoiding && styles.disabledButton]}
+                onPress={handleVoidExpense}
+                disabled={isVoiding}
+              >
+                <Ionicons name="close-circle" size={20} color="white" />
+                <Text style={styles.confirmVoidButtonText}>
+                  {isVoiding ? 'Anulando...' : 'Anular'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
-// Helper component for detail rows
-const DetailRow = ({ label, value }: { label: string; value: string }) => (
+// Helper component mejorado
+const DetailRow = ({ icon, label, value }: { icon: string; label: string; value: string }) => (
   <View style={styles.detailRow}>
-    <Text style={styles.detailLabel}>{label}:</Text>
+    <View style={styles.detailLabel}>
+      <Ionicons name={icon as any} size={18} color="#64748b" />
+      <Text style={styles.labelText}>{label}</Text>
+    </View>
     <Text style={styles.detailValue}>{value}</Text>
   </View>
 );
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#f8fafc' },
-  title: { fontSize: 28, fontWeight: 'bold', marginBottom: 10, color: '#2563eb' },
-  statusBadge: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20, alignSelf: 'flex-start', marginBottom: 20 },
-  statusText: { fontSize: 14, fontWeight: 'bold' },
-  section: { marginBottom: 20 },
-  sectionTitle: { fontSize: 18, fontWeight: '600', marginBottom: 10, color: '#1e293b' },
-  detailRow: { flexDirection: 'row', marginBottom: 8 },
-  detailLabel: { fontSize: 16, fontWeight: '500', color: '#374151', width: 120 },
-  detailValue: { fontSize: 16, color: '#64748b', flex: 1 },
-  notes: { fontSize: 16, color: '#64748b', lineHeight: 24 },
-  image: { width: '100%', height: 300, borderRadius: 8, marginBottom: 20 },
-  noImage: { fontSize: 16, color: '#64748b', textAlign: 'center' },
+  container: { 
+    flex: 1, 
+    backgroundColor: '#f8fafc' 
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  scrollContent: {
+    flex: 1,
+    padding: 16,
+  },
+  scrollContentContainer: {
+    paddingBottom: 100,
+  },
+  mainCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  mainCardHeader: {
+    marginBottom: 12,
+  },
+  mainCardLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748b',
+    marginBottom: 4,
+  },
+  createdDate: {
+    fontSize: 13,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+  amount: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#059669',
+    marginBottom: 12,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  statusBadge: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  voidedBanner: {
+    flexDirection: 'row',
+    backgroundColor: '#fee2e2',
+    borderLeftWidth: 4,
+    borderLeftColor: '#dc2626',
+    padding: 16,
+    marginBottom: 16,
+    borderRadius: 8,
+    gap: 12,
+  },
+  voidedBannerText: {
+    flex: 1,
+  },
+  voidedTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#991b1b',
+    marginBottom: 4,
+  },
+  voidedDate: {
+    fontSize: 13,
+    color: '#dc2626',
+    marginBottom: 4,
+  },
+  voidedReason: {
+    fontSize: 14,
+    color: '#7f1d1d',
+    fontStyle: 'italic',
+  },
+  voidButton: {
+    flexDirection: 'row',
+    backgroundColor: '#dc2626',
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 24,
+    marginBottom: 32,
+    marginHorizontal: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  voidButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 12,
+  },
+  modalDescription: {
+    fontSize: 14,
+    color: '#64748b',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#334155',
+    marginBottom: 8,
+  },
+  reasonInput: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    color: '#1e293b',
+    minHeight: 80,
+    marginBottom: 20,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    color: '#475569',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  confirmVoidButton: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: '#dc2626',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  confirmVoidButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  card: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 16,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  detailLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  labelText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#64748b',
+  },
+  detailValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+    textAlign: 'right',
+    flex: 1,
+  },
+  descriptionText: {
+    fontSize: 15,
+    color: '#1e293b',
+    lineHeight: 22,
+    fontWeight: '500',
+  },
+  notesText: {
+    fontSize: 14,
+    color: '#64748b',
+    lineHeight: 20,
+    fontStyle: 'italic',
+  },
+  imageCard: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  imageContainer: {
+    width: '100%',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  image: {
+    width: '100%',
+    height: 400,
+    backgroundColor: '#ffffff',
+  },
+  imageHint: {
+    fontSize: 12,
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
 });

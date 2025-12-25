@@ -1,7 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as AuthService from '../services/AuthService';
 import { BackendSyncService } from '../services/BackendSyncService';
+import * as NotificationService from '../services/NotificationService';
+
+// Clave para guardar el contador de liquidaciones pendientes
+const PENDING_LIQUIDATIONS_COUNT_KEY = '@ManagerPendingLiquidationsCount';
+const LAST_PENDING_COUNT_KEY = '@LastPendingCount'; // Para comparar y enviar notificación solo si aumenta
 
 /**
  * Hook para sincronización automática de liquidaciones pendientes para managers
@@ -12,12 +18,51 @@ import { BackendSyncService } from '../services/BackendSyncService';
  * - Solo se ejecuta si el usuario es manager
  * - Se ejecuta en background sin bloquear la UI
  * - Se pausa cuando la app está en segundo plano
+ * - Guarda el contador localmente para mostrar badges
  */
 
 interface UseManagerSyncOptions {
   enabled?: boolean;           // Activar/desactivar sincronización (default: true)
   intervalMinutes?: number;    // Intervalo en minutos (default: 5)
 }
+
+/**
+ * Obtiene el número de liquidaciones pendientes guardado localmente
+ */
+export const getPendingLiquidationsCount = async (): Promise<number> => {
+  try {
+    const count = await AsyncStorage.getItem(PENDING_LIQUIDATIONS_COUNT_KEY);
+    return count ? parseInt(count, 10) : 0;
+  } catch (error) {
+    console.error('❌ Error obteniendo contador de liquidaciones:', error);
+    return 0;
+  }
+};
+
+/**
+ * Guarda el número de liquidaciones pendientes localmente
+ */
+const savePendingLiquidationsCount = async (count: number): Promise<void> => {
+  try {
+    // Obtener el conteo anterior
+    const lastCountStr = await AsyncStorage.getItem(LAST_PENDING_COUNT_KEY);
+    const lastCount = lastCountStr ? parseInt(lastCountStr, 10) : 0;
+    
+    // Guardar el nuevo conteo
+    await AsyncStorage.setItem(PENDING_LIQUIDATIONS_COUNT_KEY, count.toString());
+    await AsyncStorage.setItem(LAST_PENDING_COUNT_KEY, count.toString());
+    console.log(`📊 ManagerSync: Contador guardado: ${count} liquidaciones pendientes`);
+    
+    // Si el conteo aumentó y hay liquidaciones nuevas, enviar notificación
+    if (count > lastCount && count > 0) {
+      const newLiquidations = count - lastCount;
+      console.log(`🔔 ManagerSync: Detectadas ${newLiquidations} liquidaciones nuevas - enviando notificación`);
+      await NotificationService.sendLiquidationPendingNotification(count);
+    }
+  } catch (error) {
+    console.error('❌ Error guardando contador de liquidaciones:', error);
+  }
+};
 
 export const useManagerSync = (options: UseManagerSyncOptions = {}) => {
   const { enabled = true, intervalMinutes = 5 } = options;
@@ -99,8 +144,12 @@ export const useManagerSync = (options: UseManagerSyncOptions = {}) => {
 
         if (liquidationsResult.success) {
           console.log('✅ ManagerSync: Liquidaciones sincronizadas -', liquidationsResult.count);
+          
+          // Guardar el contador localmente para mostrar badges
+          await savePendingLiquidationsCount(liquidationsResult.count);
+          
           if (liquidationsResult.count > 0) {
-            console.log('📢 ManagerSync: HAY', liquidationsResult.count, 'LIQUIDACIONES NUEVAS/ACTUALIZADAS');
+            console.log('📢 ManagerSync: ¡HAY', liquidationsResult.count, 'LIQUIDACIONES NUEVAS/ACTUALIZADAS!');
           }
         } else {
           console.log('⚠️ ManagerSync: Error sincronizando liquidaciones:', liquidationsResult.error);

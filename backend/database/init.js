@@ -49,10 +49,12 @@ const expenseSchema = new mongoose.Schema({
   expenseStatus: { 
     type: String, 
     required: true, 
-    enum: ['draft', 'in_liquidation', 'approved'],
+    enum: ['draft', 'in_liquidation', 'approved', 'voided'],
     default: 'draft'
   },
   liquidationId: { type: String, default: null }, // ID de la liquidación a la que pertenece
+  voidedAt: { type: String, default: null }, // Fecha de anulación (ISO string)
+  voidedReason: { type: String, default: null }, // Razón de anulación
   supplier: { type: String, default: null },
   vat_number: { type: String, default: null },
   department: { type: String, default: null },
@@ -95,7 +97,11 @@ const liquidationSchema = new mongoose.Schema({
   managerComments: { type: String, default: null },
   submittedDate: { type: String, default: null }, // YYYY-MM-DD
   approvedDate: { type: String, default: null }, // YYYY-MM-DD
-  rejectedDate: { type: String, default: null } // YYYY-MM-DD
+  rejectedDate: { type: String, default: null }, // YYYY-MM-DD
+  approverEmail: { type: String, default: null }, // Email del aprobador (tracking)
+  rejectedBy: { type: String, default: null }, // Email del rechazador (tracking)
+  csvGeneratedAt: { type: Date, default: null }, // Fecha de generación de CSV
+  csvGeneratedBy: { type: String, default: null } // Usuario que generó el CSV
 }, {
   timestamps: true, // createdAt y updatedAt
   collection: 'liquidations'
@@ -325,7 +331,7 @@ const initDatabase = async () => {
     
     await Config.findOneAndUpdate(
       { key: 'max_expense_amount' },
-      { key: 'max_expense_amount', value: '10000', description: 'Monto máximo permitido para gastos' },
+      { key: 'max_expense_amount', value: '3500', description: 'Monto máximo permitido para gastos' },
       { upsert: true, new: true }
     );
     

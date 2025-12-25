@@ -5,18 +5,21 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Liquidation, getLiquidationStatusColor, getLiquidationStatusText, canSubmitLiquidation, canGenerateCSV } from '../models/Liquidation';
+import { Liquidation, getLiquidationStatusColor, getLiquidationStatusText, canSubmitLiquidation, canGenerateCSV, canEditLiquidation } from '../models/Liquidation';
 import { Expense } from '../models/Expense';
-import { getLiquidationById, submitLiquidation, deleteLiquidation } from '../services/LiquidationService';
+import { getLiquidationById, submitLiquidation, deleteLiquidation, removeExpenseFromLiquidation, addExpenseToLiquidation } from '../services/LiquidationService';
 import { getExpenseById } from '../services/ExpenseService';
+import { BackendSyncService } from '../services/BackendSyncService';
 import * as AuthService from '../services/AuthService';
 import { generateLiquidationCSV, generateDetailedLiquidationCSV } from '../services/ExportService';
+import { formatDateToSpanish } from '../utils/dateUtils';
 
 export default function LiquidationDetailScreen() {
   const params = useLocalSearchParams();
@@ -25,6 +28,8 @@ export default function LiquidationDetailScreen() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [userEmail, setUserEmail] = useState('');
+  const [showAddExpenseModal, setShowAddExpenseModal] = useState(false);
+  const [availableExpenses, setAvailableExpenses] = useState<Expense[]>([]);
 
   const liquidationId = params.liquidationId as string;
 
@@ -43,7 +48,7 @@ export default function LiquidationDetailScreen() {
       }
 
       // Cargar liquidación
-      const liq = await getLiquidationById(liquidationId);
+      const liq = await getLiquidationById(liquidationId, user?.email || '');
       if (!liq) {
         Alert.alert('Error', 'Liquidación no encontrada');
         router.back();
@@ -63,6 +68,11 @@ export default function LiquidationDetailScreen() {
 
       setExpenses(loadedExpenses);
       console.log('✅ Liquidación cargada con', loadedExpenses.length, 'gastos');
+      
+      // Si la liquidación puede editarse, cargar gastos disponibles
+      if (canEditLiquidation(liq.status)) {
+        await loadAvailableExpenses(user?.email || '', liq.expenseIds);
+      }
     } catch (error) {
       console.error('❌ Error cargando liquidación:', error);
       Alert.alert('Error', 'No se pudo cargar la liquidación');
@@ -71,12 +81,88 @@ export default function LiquidationDetailScreen() {
     }
   };
 
+  const loadAvailableExpenses = async (userEmail: string, excludeIds: string[]) => {
+    try {
+      const { getExpenses } = require('../services/ExpenseService');
+      const allExpenses = await getExpenses(userEmail);
+      
+      // Filtrar solo gastos disponibles (draft) y que no estén ya en la liquidación
+      const available = allExpenses.filter((exp: Expense) => 
+        exp.expenseStatus === 'draft' && !excludeIds.includes(exp.id)
+      );
+      
+      setAvailableExpenses(available);
+      console.log('✅ Gastos disponibles para agregar:', available.length);
+    } catch (error) {
+      console.error('❌ Error cargando gastos disponibles:', error);
+    }
+  };
+
+  // Función helper para sincronizar liquidación en segundo plano
+  const syncLiquidationInBackground = async (email: string) => {
+    try {
+      // PASO 1: Verificar conectividad
+      console.log('🌐 LiquidationDetail (BG): Verificando conexión...');
+      const isConnected = await BackendSyncService.checkConnection();
+      
+      if (!isConnected) {
+        console.log('⚠️ LiquidationDetail (BG): Sin conexión - sincronización pendiente');
+        console.log('💾 LiquidationDetail (BG): La liquidación se sincronizará cuando haya conexión');
+        return;
+      }
+      console.log('✅ LiquidationDetail (BG): Conexión OK');
+
+      // PASO 2: Obtener PIN y autenticar
+      const userPIN = await AuthService.getPIN();
+      if (!userPIN) {
+        console.log('⚠️ LiquidationDetail (BG): No se encontró PIN');
+        return;
+      }
+
+      console.log('🔐 LiquidationDetail (BG): Autenticando...');
+      let loginResult = await BackendSyncService.loginAndGetToken(email, userPIN);
+      
+      if (!loginResult.success || !loginResult.token) {
+        console.log('📝 LiquidationDetail (BG): Registrando usuario...');
+        const user = await AuthService.getLastLoggedInUser();
+        if (user) {
+          const registerResult = await BackendSyncService.syncUserRegistration(user, userPIN);
+          if (registerResult.success) {
+            loginResult = await BackendSyncService.loginAndGetToken(email, userPIN);
+          }
+        }
+      }
+
+      // PASO 3: Sincronizar liquidaciones
+      if (loginResult.success && loginResult.token) {
+        console.log('🔄 LiquidationDetail (BG): Sincronizando liquidaciones...');
+        const syncResult = await BackendSyncService.syncLiquidations(email, loginResult.token);
+        
+        if (syncResult.success) {
+          console.log('✅ LiquidationDetail (BG): ¡Liquidación sincronizada exitosamente!');
+        } else {
+          console.log('⚠️ LiquidationDetail (BG): Error en sincronización:', syncResult.error);
+        }
+      } else {
+        console.log('⚠️ LiquidationDetail (BG): No se pudo autenticar');
+      }
+    } catch (error) {
+      console.log('⚠️ LiquidationDetail (BG): Error en sincronización (no crítico):', error);
+      console.log('💾 LiquidationDetail (BG): La liquidación quedó guardada y se sincronizará después');
+    }
+  };
+
   const handleSubmitToManager = async () => {
     if (!liquidation) return;
 
     Alert.alert(
-      'Confirmar Envío',
-      `¿Desea enviar esta liquidación al jefe por Q${liquidation.totalAmount.toFixed(2)}?\n\nUna vez enviada, no podrá modificarla.`,
+      'Enviar al Jefe',
+      `¿Desea enviar esta liquidación al jefe?
+
+Total: Q${liquidation.totalAmount.toFixed(2)}
+Gastos: ${expenses.length}
+
+Una vez enviada, no podrá modificarla hasta que el jefe la revise.`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -84,12 +170,27 @@ export default function LiquidationDetailScreen() {
           style: 'default',
           onPress: async () => {
             try {
-              console.log('📤 Enviando liquidación al jefe...');
-              await submitLiquidation(liquidation.id);
-              Alert.alert('Éxito', 'Liquidación enviada al jefe para revisión');
-              await loadLiquidationData(); // Recargar datos
+              console.log('📤 LiquidationDetail: Enviando liquidación al jefe...');
+              
+              // PASO 1: Guardar localmente primero (cambiar status a 'submitted')
+              await submitLiquidation(liquidation.id, userEmail);
+              console.log('✅ LiquidationDetail: Liquidación guardada localmente como "enviada"');
+              
+              // PASO 2: Notificar al usuario inmediatamente
+              Alert.alert(
+                '✅ Enviado', 
+                'La liquidación fue enviada al jefe. Se sincronizará automáticamente cuando tenga conexión.',
+                [{ text: 'OK', onPress: () => loadLiquidationData() }]
+              );
+              
+              // PASO 3: Sincronizar en segundo plano (sin await, no bloqueante)
+              console.log('🔄 LiquidationDetail: Iniciando sincronización en segundo plano...');
+              (async () => {
+                await syncLiquidationInBackground(userEmail);
+              })();
+              
             } catch (error) {
-              console.error('❌ Error enviando liquidación:', error);
+              console.error('❌ LiquidationDetail: Error enviando liquidación:', error);
               Alert.alert('Error', 'No se pudo enviar la liquidación: ' + (error as Error).message);
             }
           }
@@ -112,7 +213,7 @@ export default function LiquidationDetailScreen() {
           onPress: async () => {
             try {
               console.log('🗑️ Eliminando liquidación...');
-              await deleteLiquidation(liquidation.id);
+              await deleteLiquidation(liquidation.id, userEmail);
               Alert.alert('Éxito', 'Liquidación eliminada');
               router.back();
             } catch (error) {
@@ -123,6 +224,79 @@ export default function LiquidationDetailScreen() {
         }
       ]
     );
+  };
+
+  const handleRemoveExpense = async (expenseId: string) => {
+    if (!liquidation) return;
+
+    const expense = expenses.find(e => e.id === expenseId);
+    if (!expense) return;
+
+    // Cambiar mensaje según si es rechazada o borrador
+    const actionTitle = liquidation.status === 'rejected' ? 'Anular Gasto Rechazado' : 'Quitar Gasto';
+    const actionMessage = liquidation.status === 'rejected' 
+      ? `¿Desea anular este gasto de la liquidación rechazada?\n\nGasto: ${expense.description}\nMonto: Q${expense.amount.toFixed(2)}\n\nEl gasto volverá a estado "Borrador" para que pueda corregirlo o incluirlo en otra liquidación.`
+      : `¿Desea quitar este gasto de la liquidación?\n\nGasto: ${expense.description}\nMonto: Q${expense.amount.toFixed(2)}\n\nEl gasto volverá a estado "Borrador" y podrá incluirse en otra liquidación.`;
+
+    Alert.alert(
+      actionTitle,
+      actionMessage,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: liquidation.status === 'rejected' ? 'Anular' : 'Quitar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const actionLog = liquidation.status === 'rejected' ? 'Anulando' : 'Quitando';
+              console.log(`🗑️ ${actionLog} gasto de liquidación...`);
+              await removeExpenseFromLiquidation(liquidation.id, expenseId, userEmail);
+              const successMsg = liquidation.status === 'rejected' 
+                ? 'Gasto anulado. Ahora puede corregirlo o incluirlo en otra liquidación.' 
+                : 'Gasto quitado de la liquidación';
+              Alert.alert('Éxito', successMsg);
+              await loadLiquidationData();
+            } catch (error) {
+              console.error('❌ Error quitando gasto:', error);
+              Alert.alert('Error', 'No se pudo quitar el gasto: ' + (error as Error).message);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleAddExpense = async (expenseId: string) => {
+    if (!liquidation) return;
+
+    try {
+      console.log('🔍 Validando gasto antes de agregar...');
+      
+      // Validar que el gasto pueda agregarse
+      const { validateExpenseForLiquidation } = require('../services/ExpenseService');
+      const validation = await validateExpenseForLiquidation(expenseId, userEmail, liquidation.id);
+      
+      if (!validation.valid) {
+        Alert.alert('No se puede agregar', validation.error || 'El gasto no puede agregarse a esta liquidación');
+        return;
+      }
+      
+      console.log('➕ Agregando gasto a liquidación...');
+      await addExpenseToLiquidation(liquidation.id, expenseId, userEmail);
+      Alert.alert('Éxito', 'Gasto agregado a la liquidación');
+      setShowAddExpenseModal(false);
+      await loadLiquidationData();
+    } catch (error) {
+      console.error('❌ Error agregando gasto:', error);
+      Alert.alert('Error', 'No se pudo agregar el gasto: ' + (error as Error).message);
+    }
+  };
+
+  const handleViewExpenseDetail = (expense: Expense) => {
+    router.push({ 
+      pathname: '../expense-detail', 
+      params: { expense: JSON.stringify(expense) } 
+    });
   };
 
   const handleDownloadCSV = async () => {
@@ -181,16 +355,88 @@ export default function LiquidationDetailScreen() {
     );
   };
 
-  const renderExpenseItem = ({ item }: { item: Expense }) => (
-    <View style={styles.expenseItem}>
-      <View style={styles.expenseHeader}>
-        <Text style={styles.expenseDescription}>{item.description}</Text>
-        <Text style={styles.expenseAmount}>Q{item.amount.toFixed(2)}</Text>
+  const renderExpenseItem = ({ item }: { item: Expense }) => {
+    const canEdit = liquidation && canEditLiquidation(liquidation.status);
+    const shortDescription = item.description.length > 60 
+      ? item.description.substring(0, 60) + '...' 
+      : item.description;
+
+    return (
+      <View style={styles.expenseItem}>
+        <View style={styles.expenseRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.expenseDescription} numberOfLines={2}>
+              {shortDescription}
+            </Text>
+            <View style={styles.expenseMetadata}>
+              <View style={styles.metadataItem}>
+                <Ionicons name="calendar-outline" size={14} color="#64748b" />
+                <Text style={styles.metadataText}>{formatDateToSpanish(item.date)}</Text>
+              </View>
+              <View style={styles.metadataItem}>
+                <Ionicons name="pricetag-outline" size={14} color="#64748b" />
+                <Text style={styles.metadataText}>{item.category}</Text>
+              </View>
+              <View style={styles.metadataItem}>
+                <Ionicons name="business-outline" size={14} color="#64748b" />
+                <Text style={styles.metadataText}>{item.department}</Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.expenseActions}>
+            <Text style={styles.expenseAmount}>Q{item.amount.toFixed(2)}</Text>
+            <View style={styles.expenseButtons}>
+              <TouchableOpacity 
+                style={styles.viewButton}
+                onPress={() => handleViewExpenseDetail(item)}
+              >
+                <Ionicons name="eye-outline" size={18} color="#2563eb" />
+              </TouchableOpacity>
+              {canEdit && (
+                <TouchableOpacity 
+                  style={styles.removeButton}
+                  onPress={() => handleRemoveExpense(item.id)}
+                >
+                  <Ionicons name="close-circle-outline" size={18} color="#ef4444" />
+                  <Text style={styles.removeButtonText}>
+                    {liquidation.status === 'rejected' ? 'Anular' : 'Quitar'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
       </View>
-      <Text style={styles.expenseDetails}>{item.date} • {item.supplier}</Text>
-      <Text style={styles.expenseDetails}>{item.category} • {item.department}</Text>
-    </View>
-  );
+    );
+  };
+
+  const renderAvailableExpenseItem = ({ item }: { item: Expense }) => {
+    const shortDescription = item.description.length > 50 
+      ? item.description.substring(0, 50) + '...' 
+      : item.description;
+
+    return (
+      <TouchableOpacity 
+        style={styles.availableExpenseItem}
+        onPress={() => handleAddExpense(item.id)}
+      >
+        <View style={styles.availableExpenseContent}>
+          <Text style={styles.availableExpenseDescription} numberOfLines={2}>
+            {shortDescription}
+          </Text>
+          <View style={styles.availableExpenseMetadata}>
+            <Text style={styles.availableExpenseDetail}>{formatDateToSpanish(item.date)}</Text>
+            <Text style={styles.availableExpenseDetail}>•</Text>
+            <Text style={styles.availableExpenseDetail}>{item.category}</Text>
+          </View>
+        </View>
+        <View style={styles.availableExpenseRight}>
+          <Text style={styles.availableExpenseAmount}>Q{item.amount.toFixed(2)}</Text>
+          <Ionicons name="add-circle" size={24} color="#2563eb" />
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   if (isLoading) {
     return (
@@ -233,7 +479,18 @@ export default function LiquidationDetailScreen() {
         {/* Card de Resumen */}
         <View style={styles.summaryCard}>
           <View style={styles.summaryHeader}>
-            <Text style={styles.summaryTitle}>Liquidación #{liquidation.id.slice(-6)}</Text>
+            <View>
+              <Text style={styles.summaryTitle}>Liquidación #{liquidation.id.slice(-6)}</Text>
+              <Text style={styles.createdTimestamp}>
+                Creada: {new Date(parseInt(liquidation.id)).toLocaleString('es-GT', { 
+                  day: '2-digit', 
+                  month: '2-digit', 
+                  year: 'numeric',
+                  hour: '2-digit', 
+                  minute: '2-digit' 
+                })}
+              </Text>
+            </View>
             <View style={[styles.statusBadge, { backgroundColor: statusColor + '20' }]}>
               <Text style={[styles.statusText, { color: statusColor }]}>{statusText}</Text>
             </View>
@@ -248,14 +505,14 @@ export default function LiquidationDetailScreen() {
           <View style={styles.summaryRow}>
             <Ionicons name="calendar-outline" size={20} color="#64748b" />
             <Text style={styles.summaryLabel}>Fecha Creación:</Text>
-            <Text style={styles.summaryValue}>{liquidation.createdDate}</Text>
+            <Text style={styles.summaryValue}>{formatDateToSpanish(liquidation.createdDate)}</Text>
           </View>
 
           {liquidation.submittedDate && (
             <View style={styles.summaryRow}>
               <Ionicons name="send-outline" size={20} color="#64748b" />
               <Text style={styles.summaryLabel}>Fecha Envío:</Text>
-              <Text style={styles.summaryValue}>{liquidation.submittedDate}</Text>
+              <Text style={styles.summaryValue}>{formatDateToSpanish(liquidation.submittedDate)}</Text>
             </View>
           )}
 
@@ -263,7 +520,7 @@ export default function LiquidationDetailScreen() {
             <View style={styles.summaryRow}>
               <Ionicons name="checkmark-circle-outline" size={20} color="#64748b" />
               <Text style={styles.summaryLabel}>Fecha Aprobación:</Text>
-              <Text style={styles.summaryValue}>{liquidation.approvedDate}</Text>
+              <Text style={styles.summaryValue}>{formatDateToSpanish(liquidation.approvedDate)}</Text>
             </View>
           )}
 
@@ -271,7 +528,7 @@ export default function LiquidationDetailScreen() {
             <View style={styles.summaryRow}>
               <Ionicons name="close-circle-outline" size={20} color="#64748b" />
               <Text style={styles.summaryLabel}>Fecha Rechazo:</Text>
-              <Text style={styles.summaryValue}>{liquidation.rejectedDate}</Text>
+              <Text style={styles.summaryValue}>{formatDateToSpanish(liquidation.rejectedDate)}</Text>
             </View>
           )}
 
@@ -288,11 +545,79 @@ export default function LiquidationDetailScreen() {
           </View>
         </View>
 
+        {/* Banner de liquidación rechazada */}
+        {liquidation.status === 'rejected' && (
+          <View style={styles.rejectedBanner}>
+            <View style={styles.rejectedHeader}>
+              <Ionicons name="alert-circle" size={24} color="#dc2626" />
+              <Text style={styles.rejectedTitle}>Liquidación Rechazada</Text>
+            </View>
+            <Text style={styles.rejectedText}>
+              Esta liquidación fue rechazada por el jefe. Puede revisar los comentarios, modificar los gastos y volver a enviarla.
+            </Text>
+            <View style={styles.rejectedActions}>
+              <View style={styles.rejectedActionItem}>
+                <Ionicons name="eye-outline" size={16} color="#475569" />
+                <Text style={styles.rejectedActionText}>Toque un gasto para ver detalles y editarlo</Text>
+              </View>
+              <View style={styles.rejectedActionItem}>
+                <Ionicons name="close-circle-outline" size={16} color="#475569" />
+                <Text style={styles.rejectedActionText}>Use el botón (×) para quitar gastos</Text>
+              </View>
+              <View style={styles.rejectedActionItem}>
+                <Ionicons name="add-circle-outline" size={16} color="#475569" />
+                <Text style={styles.rejectedActionText}>Agregue nuevos gastos si es necesario</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Banner de liquidación en revisión */}
+        {liquidation.status === 'submitted' && (
+          <View style={styles.submittedBanner}>
+            <View style={styles.submittedHeader}>
+              <Ionicons name="time-outline" size={24} color="#2563eb" />
+              <Text style={styles.submittedTitle}>En Revisión</Text>
+            </View>
+            <Text style={styles.submittedText}>
+              Esta liquidación fue enviada al jefe y está en proceso de revisión. No se puede modificar hasta que sea aprobada o rechazada.
+            </Text>
+            <View style={styles.submittedInfo}>
+              <Text style={styles.submittedInfoText}>
+                ℹ️ Los cambios en el estado se sincronizarán automáticamente cuando su jefe tome una decisión.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Banner de liquidación aprobada */}
+        {liquidation.status === 'approved' && (
+          <View style={styles.approvedBanner}>
+            <View style={styles.approvedHeader}>
+              <Ionicons name="checkmark-circle" size={28} color="#059669" />
+              <Text style={styles.approvedTitle}>¡Liquidación Aprobada!</Text>
+            </View>
+            <Text style={styles.approvedText}>
+              Esta liquidación fue aprobada por el jefe. Ya puede generar el archivo CSV para procesar los gastos.
+            </Text>
+            <View style={styles.approvedActions}>
+              <View style={styles.approvedActionItem}>
+                <Ionicons name="document-text" size={16} color="#059669" />
+                <Text style={styles.approvedActionText}>Use el botón "Descargar CSV" para exportar</Text>
+              </View>
+              <View style={styles.approvedActionItem}>
+                <Ionicons name="lock-closed" size={16} color="#059669" />
+                <Text style={styles.approvedActionText}>Esta liquidación ya no puede modificarse</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* Comentarios del Manager */}
         {liquidation.managerComments && (
           <View style={styles.commentsCard}>
             <View style={styles.commentsHeader}>
-              <Ionicons name="chatbox-outline" size={20} color="#2563eb" />
+              <Ionicons name="chatbox-outline" size={20} color="#f59e0b" />
               <Text style={styles.commentsTitle}>Comentarios del Jefe</Text>
             </View>
             <Text style={styles.commentsText}>{liquidation.managerComments}</Text>
@@ -301,7 +626,18 @@ export default function LiquidationDetailScreen() {
 
         {/* Lista de Gastos */}
         <View style={styles.expensesCard}>
-          <Text style={styles.expensesTitle}>Gastos Incluidos ({expenses.length})</Text>
+          <View style={styles.expensesHeader}>
+            <Text style={styles.expensesTitle}>Gastos Incluidos ({expenses.length})</Text>
+            {canEditLiquidation(liquidation.status) && availableExpenses.length > 0 && (
+              <TouchableOpacity 
+                style={styles.addExpenseButton}
+                onPress={() => setShowAddExpenseModal(true)}
+              >
+                <Ionicons name="add-circle" size={20} color="#2563eb" />
+                <Text style={styles.addExpenseButtonText}>Agregar</Text>
+              </TouchableOpacity>
+            )}
+          </View>
           <FlatList
             data={expenses}
             renderItem={renderExpenseItem}
@@ -346,6 +682,48 @@ export default function LiquidationDetailScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Modal para agregar gastos */}
+      <Modal
+        visible={showAddExpenseModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowAddExpenseModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Agregar Gastos</Text>
+              <TouchableOpacity onPress={() => setShowAddExpenseModal(false)}>
+                <Ionicons name="close" size={28} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            
+            {availableExpenses.length === 0 ? (
+              <View style={styles.emptyModal}>
+                <Ionicons name="folder-open-outline" size={60} color="#cbd5e1" />
+                <Text style={styles.emptyModalTitle}>No hay gastos disponibles</Text>
+                <Text style={styles.emptyModalText}>
+                  Todos tus gastos en "Borrador" ya están incluidos en esta u otras liquidaciones.
+                </Text>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.modalSubtitle}>
+                  Seleccione un gasto para agregarlo a la liquidación
+                </Text>
+                <FlatList
+                  data={availableExpenses}
+                  renderItem={renderAvailableExpenseItem}
+                  keyExtractor={item => item.id}
+                  style={styles.availableExpensesList}
+                  ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                />
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -415,6 +793,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#1e293b',
+  },
+  createdTimestamp: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '500',
+    marginTop: 2,
   },
   statusBadge: {
     paddingVertical: 6,
@@ -510,23 +894,39 @@ const styles = StyleSheet.create({
   },
   expenseItem: {
     paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
   },
-  expenseHeader: {
+  expenseRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
+    alignItems: 'flex-start',
+    marginBottom: 8,
   },
   expenseDescription: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     color: '#1e293b',
     flex: 1,
+    marginRight: 12,
   },
   expenseAmount: {
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '700',
     color: '#059669',
+  },
+  expenseMetadata: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  metadataItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  metadataText: {
+    fontSize: 12,
+    color: '#64748b',
   },
   expenseDetails: {
     fontSize: 13,
@@ -584,5 +984,266 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  // Estilos para banner de rechazo
+  rejectedBanner: {
+    backgroundColor: '#fef2f2',
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#fca5a5',
+  },
+  rejectedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  rejectedTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#dc2626',
+  },
+  rejectedText: {
+    fontSize: 14,
+    color: '#475569',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  rejectedActions: {
+    gap: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#fca5a5',
+  },
+  rejectedActionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  rejectedActionText: {
+    fontSize: 13,
+    color: '#475569',
+    flex: 1,
+  },
+  // Estilos para banner de liquidación en revisión (submitted)
+  submittedBanner: {
+    backgroundColor: '#eff6ff',
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#93c5fd',
+  },
+  submittedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  submittedTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2563eb',
+  },
+  submittedText: {
+    fontSize: 14,
+    color: '#475569',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  submittedInfo: {
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#93c5fd',
+  },
+  submittedInfoText: {
+    fontSize: 13,
+    color: '#475569',
+    fontStyle: 'italic',
+  },
+  // Estilos para banner de liquidación aprobada
+  approvedBanner: {
+    backgroundColor: '#f0fdf4',
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#86efac',
+  },
+  approvedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  approvedTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#059669',
+  },
+  approvedText: {
+    fontSize: 14,
+    color: '#475569',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  approvedActions: {
+    gap: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#86efac',
+  },
+  approvedActionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  approvedActionText: {
+    fontSize: 13,
+    color: '#059669',
+    fontWeight: '500',
+    flex: 1,
+  },
+  // Estilos para header de gastos con botón agregar
+  expensesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  addExpenseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#eff6ff',
+    borderRadius: 8,
+  },
+  addExpenseButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2563eb',
+  },
+  // Estilos para acciones de gastos
+  expenseActions: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  expenseButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  viewButton: {
+    padding: 4,
+  },
+  removeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#fef2f2',
+  },
+  removeButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ef4444',
+  },
+  // Estilos para modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '80%',
+    paddingBottom: 32,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1e293b',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 16,
+  },
+  emptyModal: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  emptyModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#475569',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyModalText: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  // Estilos para lista de gastos disponibles
+  availableExpensesList: {
+    paddingHorizontal: 20,
+  },
+  availableExpenseItem: {
+    flexDirection: 'row',
+    backgroundColor: '#f8fafc',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+  },
+  availableExpenseContent: {
+    flex: 1,
+    marginRight: 12,
+  },
+  availableExpenseDescription: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 6,
+  },
+  availableExpenseMetadata: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  availableExpenseDetail: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  availableExpenseRight: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  availableExpenseAmount: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#059669',
   },
 });

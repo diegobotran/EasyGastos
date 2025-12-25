@@ -26,78 +26,11 @@ export default function CategoryScreen() {
       return;
     }
 
-    // PRIMERO: Verificar usuario y autenticación ANTES de agregar localmente
     try {
-      console.log('🚀 Categories: ========== INICIANDO PROCESO DE AGREGAR CATEGORÍA ==========');
-      const user = await AuthService.getLastLoggedInUser();
-      if (!user || !user.email) {
-        console.error('❌ Categories: No hay usuario logueado');
-        Alert.alert('Error', 'No se puede agregar categoría: usuario no disponible.');
-        return;
-      }
-
-      console.log('✅ Categories: Usuario encontrado:', user.email);
-
-      // Obtener PIN local
-      const userPIN = await AuthService.getPIN();
-      if (!userPIN) {
-        console.error('❌ Categories: No se encontró PIN almacenado localmente');
-        Alert.alert('Error', 'No se encontró PIN local. Configure su PIN primero.');
-        return;
-      }
-
-      console.log('🔐 Categories: PIN local obtenido');
-      console.log('🔐 Categories: Intentando login para usuario:', user.email);
+      console.log('🚀 Categories: ========== MODO OFFLINE-FIRST: AGREGAR CATEGORÍA ==========');
       
-      // STEP 1: Intentar login primero
-      const loginResult = await BackendSyncService.loginAndGetToken(user.email, userPIN);
-      console.log('🔐 Categories: Resultado de login:', loginResult);
-      
-      let authToken = '';
-      
-      if (loginResult.success && loginResult.token) {
-        // Login exitoso - usuario ya existe
-        console.log('✅ Categories: Login exitoso - usuario ya existe en backend');
-        authToken = loginResult.token;
-        
-      } else {
-        // Login falló - usuario no existe, registrar
-        console.log('❌ Categories: Login falló - usuario no existe, registrando...');
-        console.log('❌ Categories: Error de login:', loginResult.error);
-        
-        // STEP 2: Registrar usuario si no existe
-        const registerResult = await BackendSyncService.syncUserRegistration(user, userPIN);
-        console.log('📝 Categories: Resultado de registro:', registerResult);
-        
-        if (!registerResult.success) {
-          console.error('❌ Categories: Error registrando usuario:', registerResult.error);
-          Alert.alert('Error', 'No se pudo registrar el usuario en el servidor: ' + (registerResult.error || 'Error desconocido'));
-          return;
-        }
-        
-        console.log('✅ Categories: Usuario registrado - haciendo login...');
-        
-        // STEP 3: Login después del registro
-        const newLoginResult = await BackendSyncService.loginAndGetToken(user.email, userPIN);
-        console.log('🔐 Categories: Login después de registro:', newLoginResult);
-        
-        if (!newLoginResult.success || !newLoginResult.token) {
-          console.error('❌ Categories: No se pudo obtener token después del registro');
-          Alert.alert('Error', 'No se pudo obtener token después del registro: ' + (newLoginResult.error || 'Error desconocido'));
-          return;
-        }
-        
-        authToken = newLoginResult.token;
-        console.log('✅ Categories: Token obtenido después del registro');
-      }
-
-      console.log('✅ Categories: Token disponible - procediendo a agregar y sincronizar');
-      
-      // Guardar el token para futuras sincronizaciones
-      await SecureStore.setItemAsync('authToken', authToken);
-
-      // AHORA SÍ: Agregar la categoría localmente
-      console.log('💾 Categories: Agregando categoría localmente...');
+      // PASO 1: SIEMPRE agregar la categoría LOCALMENTE primero (offline-first)
+      console.log('💾 Categories: Agregando categoría LOCALMENTE (offline-first)...');
       addCategory(name, centro, cuenta, ordenco);
       
       // Limpiar el formulario inmediatamente
@@ -106,32 +39,77 @@ export default function CategoryScreen() {
       setCuenta('');
       setOrdenco('');
 
-      // Notificar al usuario de inmediato (sin esperar backend)
+      // Notificar al usuario de inmediato
       Alert.alert('Éxito', '✅ Categoría agregada localmente');
+      console.log('✅ Categories: Categoría agregada en base de datos local');
 
-      // STEP 4: SINCRONIZAR EN SEGUNDO PLANO (NO BLOQUEAR UI)
+      // PASO 2: Intentar sincronizar con el servidor EN SEGUNDO PLANO (no bloqueante)
       console.log('🔄 Categories: Iniciando sincronización en segundo plano...');
       
-      // Ejecutar sin await para no bloquear
+      // Ejecutar en segundo plano sin bloquear la UI
       (async () => {
         try {
-          console.log('🔄 Categories (BG): Sincronizando categoría con backend...');
+          const user = await AuthService.getLastLoggedInUser();
+          if (!user || !user.email) {
+            console.warn('⚠️ Categories (BG): No hay usuario para sincronizar');
+            return;
+          }
+
+          const userPIN = await AuthService.getPIN();
+          if (!userPIN) {
+            console.warn('⚠️ Categories (BG): No hay PIN para sincronizar');
+            return;
+          }
+
+          console.log('🔄 Categories (BG): Intentando login...');
+          const loginResult = await BackendSyncService.loginAndGetToken(user.email, userPIN);
+          
+          let authToken = '';
+          
+          if (loginResult.success && loginResult.token) {
+            console.log('✅ Categories (BG): Login exitoso');
+            authToken = loginResult.token;
+          } else {
+            console.log('⚠️ Categories (BG): Login falló, intentando registro...');
+            const registerResult = await BackendSyncService.syncUserRegistration(user, userPIN);
+            
+            if (registerResult.success) {
+              console.log('✅ Categories (BG): Usuario registrado, reintentando login...');
+              const newLoginResult = await BackendSyncService.loginAndGetToken(user.email, userPIN);
+              
+              if (newLoginResult.success && newLoginResult.token) {
+                authToken = newLoginResult.token;
+              } else {
+                console.warn('⚠️ Categories (BG): No se pudo obtener token después del registro');
+                return;
+              }
+            } else {
+              console.warn('⚠️ Categories (BG): Servidor no disponible, sincronización pendiente');
+              return;
+            }
+          }
+
+          // Guardar token para futuras sincronizaciones
+          await SecureStore.setItemAsync('authToken', authToken);
+
+          // Sincronizar categorías
+          console.log('🔄 Categories (BG): Sincronizando con backend...');
           const syncResult = await BackendSyncService.syncCategories(user.email, authToken);
           
           if (syncResult.success) {
             console.log('✅ Categories (BG): Categoría sincronizada exitosamente con backend');
           } else {
-            console.warn('⚠️ Categories (BG): Error en sincronización:', syncResult.error);
+            console.warn('⚠️ Categories (BG): Error en sincronización (se reintentará más tarde):', syncResult.error);
           }
         } catch (syncError) {
-          console.error('❌ Categories (BG): Error en sincronización:', syncError);
+          console.warn('⚠️ Categories (BG): Error en sincronización (se reintentará más tarde):', syncError);
         }
       })();
       
-      console.log('✅ Categories: Proceso completado (sincronización en curso en segundo plano)');
+      console.log('✅ Categories: Proceso completado (categoría guardada localmente, sincronización en segundo plano)');
       
     } catch (error) {
-      console.error('❌ Categories: Error en handleAddCategory:', error);
+      console.error('❌ Categories: Error crítico al agregar categoría:', error);
       Alert.alert('Error', 'Ocurrió un error al agregar la categoría: ' + (error instanceof Error ? error.message : 'Error desconocido'));
     }
   };

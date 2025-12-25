@@ -37,7 +37,8 @@ const managerEmployeeLinkSchema = new mongoose.Schema({
     required: false
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  collection: 'manager_employee_links'
 });
 
 // Índice compuesto para evitar duplicados

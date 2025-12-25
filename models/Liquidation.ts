@@ -6,17 +6,27 @@
  */
 
 export interface Liquidation {
-  id: string;                    // ID único de la liquidación
+  id: string;                    // ID único de la liquidación (timestamp)
   userId: string;                // Email del usuario que crea la liquidación
   employeeName: string;          // Nombre del empleado
-  createdDate: string;           // Fecha de creación (YYYY-MM-DD)
+  createdDate: string;           // Fecha de creación en formato YYYY-MM-DD (almacenamiento) - se muestra como DD/MM/YYYY
   expenseIds: string[];          // IDs de los gastos incluidos
   totalAmount: number;           // Monto total de todos los gastos
   status: LiquidationStatus;     // Estado actual
+  managerEmail?: string;         // Email del jefe asignado (opcional)
   managerComments?: string;      // Comentarios del jefe (opcional)
-  submittedDate?: string;        // Fecha de envío al jefe (opcional)
-  approvedDate?: string;         // Fecha de aprobación (opcional)
-  rejectedDate?: string;         // Fecha de rechazo (opcional)
+  submittedDate?: string;        // Fecha de envío en formato YYYY-MM-DD (almacenamiento) - se muestra como DD/MM/YYYY
+  approvedDate?: string;         // Fecha de aprobación en formato YYYY-MM-DD (almacenamiento) - se muestra como DD/MM/YYYY
+  rejectedDate?: string;         // Fecha de rechazo en formato YYYY-MM-DD (almacenamiento) - se muestra como DD/MM/YYYY
+  approverEmail?: string;        // Email del aprobador (tracking)
+  rejectedBy?: string;           // Email del rechazador (tracking)
+  csvGeneratedAt?: string;       // Fecha de generación de CSV
+  csvGeneratedBy?: string;       // Usuario que generó el CSV
+  sapDocNumber?: string;         // Número de documento SAP (opcional, para exportación)
+  approverName?: string;         // Nombre del aprobador (opcional)
+  comments?: string;             // Comentarios adicionales (opcional)
+  createdAt?: number;            // Timestamp de creación de la liquidación
+  updatedAt?: number;            // Timestamp de última actualización
 }
 
 /**

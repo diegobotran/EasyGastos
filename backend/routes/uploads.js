@@ -51,24 +51,16 @@ router.post('/', authenticateToken, upload.single('file'), async (req, res) => {
 
 // POST /api/uploads/expense-image - subir imagen de gasto con ID específico
 router.post('/expense-image', authenticateToken, (req, res) => {
-  // Configuración de multer específica para imágenes de gastos
+  // Usar multer.diskStorage estándar sin acceder a req.body en filename
   const expenseStorage = multer.diskStorage({
     destination: function (req, file, cb) {
       cb(null, expensesDir);
     },
     filename: function (req, file, cb) {
-      // Usar el expenseId del body para nombrar el archivo
-      const expenseId = req.body.expenseId;
-      if (!expenseId) {
-        return cb(new Error('expenseId is required'));
-      }
-      
-      // Obtener extensión del archivo original
+      // No podemos acceder a req.body aquí porque multer aún no lo ha parseado
+      // Usar timestamp + nombre original, luego renombrarlo si es necesario
       const ext = path.extname(file.originalname) || '.jpg';
-      
-      // Nombre: {expenseId}_{timestamp}.{ext}
-      const filename = `${expenseId}_${Date.now()}${ext}`;
-      console.log('📸 Uploads: Guardando imagen como:', filename);
+      const filename = `temp_${Date.now()}${ext}`;
       cb(null, filename);
     }
   });
@@ -96,15 +88,37 @@ router.post('/expense-image', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'No image uploaded' });
     }
 
-    // URL relativa (el frontend completará con la base URL)
-    const relativeUrl = `/uploads/expenses/${req.file.filename}`;
-    console.log('✅ Uploads: Imagen guardada:', relativeUrl);
+    // Ahora req.body está disponible
+    const expenseId = req.body.expenseId;
+    
+    if (!expenseId) {
+      // Eliminar archivo temporal si no hay expenseId
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'expenseId is required' });
+    }
 
-    return res.json({ 
-      success: true, 
-      url: relativeUrl,
-      filename: req.file.filename 
-    });
+    // Renombrar archivo con el expenseId
+    const ext = path.extname(req.file.filename);
+    const newFilename = `${expenseId}_${Date.now()}${ext}`;
+    const oldPath = req.file.path;
+    const newPath = path.join(expensesDir, newFilename);
+
+    try {
+      fs.renameSync(oldPath, newPath);
+      console.log('✅ Uploads: Imagen guardada como:', newFilename);
+
+      // URL relativa
+      const relativeUrl = `/uploads/expenses/${newFilename}`;
+
+      return res.json({ 
+        success: true, 
+        url: relativeUrl,
+        filename: newFilename 
+      });
+    } catch (renameErr) {
+      console.error('❌ Uploads: Error renombrando archivo:', renameErr);
+      return res.status(500).json({ error: 'Error saving image' });
+    }
   });
 });
 

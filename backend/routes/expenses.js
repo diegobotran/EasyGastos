@@ -9,44 +9,103 @@ const { Expense, User, SyncLog } = models;
 
 // Middleware para validar datos de gasto
 const validateExpense = [
-  body('id').isUUID(),
+  body('id').trim().isLength({ min: 1 }),
   body('userEmail').isEmail().normalizeEmail(),
-  body('description').trim().isLength({ min: 1 }).escape(),
+  body('description').trim().isLength({ min: 1 }),
   body('amount').isNumeric().custom(value => {
     if (value <= 0) throw new Error('El monto debe ser mayor a 0');
-    if (value > 10000) throw new Error('El monto no puede exceder 10,000');
+    if (value > 3500) throw new Error('El monto no puede exceder Q3,500');
     return true;
   }),
-  body('date').isISO8601().toDate(),
-  body('category').trim().isLength({ min: 1 }).escape(),
+  body('date').isISO8601(), // Mantener como string ISO, no convertir a Date
+  body('category').trim().isLength({ min: 1 }),
   body('status').isIn(['BORRADOR', 'ENVIADO_JEFE', 'APROBADO_JEFE', 'RECHAZADO_JEFE', 'APROBADO_FINANZAS', 'RECHAZADO_FINANZAS', 'CONTABILIZADO', 'ERROR_SAP']),
-  body('supplier').optional().trim().escape(),
+  body('expenseStatus').optional().isIn(['draft', 'in_liquidation', 'approved', 'voided']),
+  body('supplier').optional().trim(),
   body('vat_number').optional().trim(),
-  body('department').optional().trim().escape(),
+  body('department').optional().trim(),
   body('notes').optional().trim(),
   body('noinvoice').optional().trim(),
   body('serie').optional().trim(),
   body('centro').optional().trim(),
   body('cuenta').optional().trim(),
   body('ordenco').optional().trim(),
-  body('currency').optional().isIn(['EUR', 'USD', 'GBP']),
+  body('managerEmail').optional({ nullable: true, checkFalsy: true }).isEmail(),
+  body('liquidationId').optional().trim(),
+  body('imageuri').optional().trim(),
+  body('currency').optional().isIn(['GTQ', 'EUR', 'USD', 'GBP']),
   body('totiva').optional().isNumeric()
 ];
 
 // Crear nuevo gasto (requiere autenticación)
 router.post('/', authenticateToken, validateExpense, async (req, res) => {
   try {
+    console.log('📥 POST /api/expenses - Datos recibidos:', JSON.stringify(req.body, null, 2));
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.error('❌ Errores de validación:', JSON.stringify(errors.array(), null, 2));
       return res.status(400).json({ errors: errors.array() });
     }
 
     const expenseData = req.body;
+    console.log('✅ Validación exitosa para gasto ID:', expenseData.id);
 
     // Verificar si ya existe un gasto con ese ID
     const existingExpense = await Expense.findOne({ id: expenseData.id });
     if (existingExpense) {
+      console.log('⚠️ Gasto duplicado detectado - ID:', expenseData.id);
       return res.status(409).json({ error: 'Ya existe un gasto con ese ID' });
+    }
+
+    // VALIDACIÓN DE DUPLICADOS: Verificar factura duplicada (serie + noinvoice + fecha + monto)
+    if (expenseData.serie && expenseData.noinvoice) {
+      console.log('🔍 Backend: Verificando duplicado de factura:', {
+        serie: expenseData.serie,
+        noinvoice: expenseData.noinvoice,
+        date: expenseData.date,
+        amount: expenseData.amount
+      });
+
+      // IMPORTANTE: Ignorar gastos anulados para permitir re-crear facturas anuladas
+      const duplicateExpense = await Expense.findOne({
+        userEmail: expenseData.userEmail,
+        serie: expenseData.serie,
+        noinvoice: expenseData.noinvoice,
+        date: expenseData.date,
+        amount: { $gte: expenseData.amount - 0.01, $lte: expenseData.amount + 0.01 }, // Tolerancia de 0.01
+        expenseStatus: { $ne: 'voided' } // Excluir gastos anulados
+      });
+
+      if (duplicateExpense) {
+        console.log('⚠️ Backend: Factura duplicada detectada:', duplicateExpense.id);
+        
+        // Verificar si está en liquidación
+        const inLiquidation = duplicateExpense.liquidationId && 
+                             (duplicateExpense.expenseStatus === 'in_liquidation' || 
+                              duplicateExpense.expenseStatus === 'approved');
+        
+        let errorMsg = `Factura duplicada: Ya existe una factura con Serie "${expenseData.serie}", No. "${expenseData.noinvoice}", Fecha ${expenseData.date} y Monto ${expenseData.amount}.`;
+        
+        if (inLiquidation) {
+          errorMsg += ` Esta factura está incluida en la liquidación #${duplicateExpense.liquidationId}.`;
+        }
+        
+        return res.status(409).json({ 
+          error: errorMsg,
+          duplicateExpenseId: duplicateExpense.id,
+          inLiquidation: inLiquidation
+        });
+      }
+      
+      console.log('✅ Backend: No se encontraron duplicados');
+    }
+
+    // Convertir fecha a formato ISO antes de guardar
+    if (expenseData.date) {
+      const dateObj = new Date(expenseData.date);
+      expenseData.date = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
+      console.log('📅 Fecha convertida a formato ISO:', expenseData.date);
     }
 
     // Obtener el manager directo del empleado
@@ -147,6 +206,8 @@ router.get('/', authenticateToken, async (req, res) => {
       date: expense.date,
       category: expense.category,
       status: expense.status,
+      expenseStatus: expense.expenseStatus || 'draft',
+      liquidationId: expense.liquidationId || '',
       supplier: expense.supplier,
       vat_number: expense.vat_number,
       department: expense.department,
@@ -160,6 +221,13 @@ router.get('/', authenticateToken, async (req, res) => {
       imageuri: expense.imageuri,
       totiva: expense.totiva,
       currency: expense.currency,
+      voidedAt: expense.voidedAt,
+      voidedReason: expense.voidedReason,
+      approvalComments: expense.approvalComments,
+      approvedAt: expense.approvedAt,
+      approvedBy: expense.approvedBy,
+      rejectedAt: expense.rejectedAt,
+      rejectedBy: expense.rejectedBy,
       createdAt: expense.createdAt,
       updatedAt: expense.updatedAt
     }));
@@ -221,6 +289,108 @@ router.get('/pending-approval', authenticateToken, requireManager, async (req, r
     res.json(expenseList);
   } catch (error) {
     console.error('Error obteniendo gastos pendientes:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// NUEVO: Actualizar gasto completo (PATCH) - Para sincronizar cambios como anulaciones
+router.patch('/:id', authenticateToken, [
+  body('expenseStatus').optional().isIn(['draft', 'in_liquidation', 'approved', 'voided']),
+  body('voidedAt').optional().trim(),
+  body('voidedReason').optional().trim(),
+  body('description').optional().trim().isLength({ min: 1 }),
+  body('amount').optional().isNumeric(),
+  body('date').optional().isISO8601(),
+  body('category').optional().trim(),
+  body('status').optional().isIn(['BORRADOR', 'ENVIADO_JEFE', 'APROBADO_JEFE', 'RECHAZADO_JEFE']),
+  body('supplier').optional().trim(),
+  body('department').optional().trim(),
+  body('notes').optional().trim(),
+  body('noinvoice').optional().trim(),
+  body('serie').optional().trim()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      console.error('❌ Errores de validación en PATCH:', JSON.stringify(errors.array(), null, 2));
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const updateData = req.body;
+
+    console.log('📝 PATCH /api/expenses/:id - Actualizando gasto:', id);
+    console.log('📝 Datos a actualizar:', JSON.stringify(updateData, null, 2));
+
+    // Buscar gasto existente
+    const expense = await Expense.findOne({ id });
+    if (!expense) {
+      return res.status(404).json({ error: 'Gasto no encontrado' });
+    }
+
+    // Verificar permisos: solo el dueño puede actualizar
+    if (expense.userEmail !== updateData.userEmail && expense.userEmail !== req.user.email) {
+      return res.status(403).json({ error: 'No tiene permisos para actualizar este gasto' });
+    }
+
+    // Si no tiene managerEmail, buscarlo en ManagerEmployeeLink o en el usuario
+    if (!updateData.managerEmail && !expense.managerEmail) {
+      const managerLink = await ManagerEmployeeLink.getDirectManager(expense.userEmail);
+      if (managerLink) {
+        updateData.managerEmail = managerLink.managerEmail;
+        console.log('✅ Manager asignado desde ManagerEmployeeLink:', updateData.managerEmail);
+      } else {
+        // Fallback: usar el managerEmail del usuario si no hay relación definida
+        const user = await User.findOne({ email: expense.userEmail });
+        if (user && user.managerEmail) {
+          updateData.managerEmail = user.managerEmail;
+          console.log('✅ Manager asignado desde User:', updateData.managerEmail);
+        }
+      }
+    }
+
+    // Actualizar campos permitidos
+    const allowedFields = [
+      'description', 'amount', 'date', 'category', 'status', 'expenseStatus',
+      'supplier', 'vat_number', 'department', 'notes', 'noinvoice', 'serie',
+      'centro', 'cuenta', 'ordenco', 'imageuri', 'currency', 'totiva',
+      'voidedAt', 'voidedReason', 'liquidationId'
+    ];
+
+    allowedFields.forEach(field => {
+      if (updateData[field] !== undefined) {
+        expense[field] = updateData[field];
+      }
+    });
+
+    // Normalizar fecha si se actualizó
+    if (updateData.date) {
+      const dateObj = new Date(updateData.date);
+      expense.date = dateObj.toISOString().split('T')[0];
+      console.log('📅 Fecha normalizada:', expense.date);
+    }
+
+    expense.updatedAt = new Date();
+    await expense.save();
+
+    console.log('✅ Gasto actualizado exitosamente:', id);
+
+    // Log de sincronización
+    const syncLog = new SyncLog({
+      userEmail: expense.userEmail,
+      entityType: 'EXPENSE',
+      entityId: expense.id,
+      action: 'UPDATE',
+      success: true
+    });
+    await syncLog.save();
+
+    res.json({
+      message: 'Gasto actualizado exitosamente',
+      expense: expense
+    });
+  } catch (error) {
+    console.error('❌ Error actualizando gasto:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });

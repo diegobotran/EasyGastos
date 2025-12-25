@@ -13,13 +13,13 @@ export const STATUSES = {
 type StatusCode = keyof typeof STATUSES;
 
 // Estados del gasto en el flujo de liquidación
-export type ExpenseStatus = 'draft' | 'in_liquidation' | 'approved';
+export type ExpenseStatus = 'draft' | 'in_liquidation' | 'approved' | 'voided';
 
 export interface Expense {
-  id: string; // Will be a timestamp for uniqueness we need to review because the app will be in several device or uuid() that's unique
+  id: string; // Timestamp para uniqueness - sirve también como fecha de creación
   description: string;
   amount: number;
-  date: string; // We'll store as YYYY-MM-DD for sorting
+  date: string; // Fecha del gasto en formato YYYY-MM-DD (almacenamiento) - se muestra como DD/MM/YYYY en UI
   category: string;
   status: StatusCode;
   expenseStatus: ExpenseStatus;  // Estado en flujo de liquidación: draft, in_liquidation, approved
@@ -32,12 +32,16 @@ export interface Expense {
   centro: string;
   cuenta: string;
   ordenco: string;
-  imageuri: string;  //path where the image is store locally in the device
+  imageuri: string;  // path where the image is store locally in the device
   totiva: number;
   currency: string;
   email: string;
   managerEmail?: string;
   liquidationId?: string;  // ID de la liquidación a la que pertenece (si aplica)
+  voidedAt?: string;  // Fecha de anulación del gasto (ISO string)
+  voidedReason?: string;  // Razón por la cual se anuló el gasto
+  createdAt?: number;  // Timestamp de creación del gasto
+  updatedAt?: number;  // Timestamp de última actualización
   needsSync?: boolean;
   lastSync?: number;
   serverUpdatedAt?: number;
@@ -49,6 +53,7 @@ export function getExpenseStatusText(expenseStatus: ExpenseStatus): string {
     draft: 'Borrador',
     in_liquidation: 'En Liquidación',
     approved: 'Autorizado',
+    voided: 'Anulado',
   };
   return statusTexts[expenseStatus];
 }
@@ -59,6 +64,13 @@ export function getExpenseStatusColor(expenseStatus: ExpenseStatus): string {
     draft: '#64748b',       // Gris
     in_liquidation: '#3b82f6',  // Azul
     approved: '#10b981',    // Verde
+    voided: '#dc2626',      // Rojo (anulado)
   };
   return statusColors[expenseStatus];
+}
+
+// Helper para verificar si un gasto puede ser anulado
+export function canVoidExpense(expense: Expense): boolean {
+  // Solo se puede anular si está en draft y NO está en una liquidación
+  return expense.expenseStatus === 'draft' && !expense.liquidationId;
 }

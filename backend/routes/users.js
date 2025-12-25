@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcrypt');
 const { models } = require('../database/init');
 const { authenticateToken, generateToken, canAccessUserData, optionalAuth, requireManager } = require('../middleware/auth');
+const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 const router = express.Router();
 
 const { User, SyncLog } = models;
@@ -49,8 +50,23 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       existingUser.department = department;
       existingUser.lastLoginAt = new Date();
 
-      // Determinar manager basado en el departamento
-      if (department) {
+      // Verificar si este usuario ES manager (aparece como managerEmail en links)
+      const isManagerCount = await ManagerEmployeeLink.countDocuments({ 
+        managerEmail: email, 
+        isActive: true 
+      });
+      existingUser.isManager = isManagerCount > 0;
+      
+      if (existingUser.isManager) {
+        console.log(`👔 Usuario ${email} ES MANAGER - Tiene ${isManagerCount} empleados asignados`);
+      }
+
+      // Determinar manager: primero buscar en ManagerEmployeeLink, luego por departamento
+      const managerLink = await ManagerEmployeeLink.getDirectManager(email);
+      if (managerLink) {
+        existingUser.managerEmail = managerLink.managerEmail;
+        console.log(`✅ Manager encontrado en ManagerEmployeeLink: ${managerLink.managerEmail}`);
+      } else if (department) {
         const manager = await User.findOne({ 
           department, 
           isManager: true, 
@@ -58,6 +74,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
         });
         if (manager) {
           existingUser.managerEmail = manager.email;
+          console.log(`✅ Manager encontrado por departamento: ${manager.email}`);
         }
       }
 
@@ -93,9 +110,27 @@ router.post('/register', validateUserRegistration, async (req, res) => {
     // ===== USUARIO NUEVO: REGISTRAR =====
     console.log(`📝 Registrando nuevo usuario: ${email}`);
 
-    // Determinar manager basado en el departamento
+    // Verificar si este usuario ES manager (aparece como managerEmail en links)
+    const isManagerCount = await ManagerEmployeeLink.countDocuments({ 
+      managerEmail: email, 
+      isActive: true 
+    });
+    const isManager = isManagerCount > 0;
+    
+    if (isManager) {
+      console.log(`👔 Usuario ${email} ES MANAGER - Tiene ${isManagerCount} empleados asignados`);
+    }
+
+    // Determinar manager: primero buscar en ManagerEmployeeLink, luego por departamento
     let managerEmail = null;
-    if (department) {
+    
+    // 1. Buscar en ManagerEmployeeLink (prioridad)
+    const managerLink = await ManagerEmployeeLink.getDirectManager(email);
+    if (managerLink) {
+      managerEmail = managerLink.managerEmail;
+      console.log(`✅ Manager encontrado en ManagerEmployeeLink: ${managerEmail}`);
+    } else if (department) {
+      // 2. Fallback: buscar manager por departamento
       const manager = await User.findOne({ 
         department, 
         isManager: true, 
@@ -103,6 +138,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       });
       if (manager) {
         managerEmail = manager.email;
+        console.log(`✅ Manager encontrado por departamento: ${managerEmail}`);
       }
     }
 
@@ -114,6 +150,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       pin: hashedPin,
       department,
       managerEmail,
+      isManager,
       lastLoginAt: new Date()
     });
 
@@ -188,6 +225,13 @@ router.post('/login', [
     if (!isValidPin) {
       return res.status(401).json({ error: 'PIN incorrecto' });
     }
+
+    // Actualizar isManager verificando ManagerEmployeeLink
+    const isManagerCount = await ManagerEmployeeLink.countDocuments({ 
+      managerEmail: email, 
+      isActive: true 
+    });
+    user.isManager = isManagerCount > 0;
 
     // Actualizar último login
     user.lastLoginAt = new Date();

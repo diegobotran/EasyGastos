@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import React, { useMemo, useState } from 'react';
-import { Expense, STATUSES } from '../models/Expense';
+import { Expense, getExpenseStatusText, ExpenseStatus } from '../models/Expense';
 import * as ExpenseService from '../services/ExpenseService';
 
 export const useExpensesViewModel = () => {
@@ -52,13 +52,27 @@ export const useExpensesViewModel = () => {
     if (filterStatus === 'Todos los estados') {
       return expenses;
     }
-    const statusCode = Object.keys(STATUSES).find(key => STATUSES[key as keyof typeof STATUSES].text === filterStatus);
-    return expenses.filter(expense => expense.status === statusCode);
+    
+    // Mapear el texto del filtro al expenseStatus correcto
+    const statusMap: { [key: string]: ExpenseStatus } = {
+      'Borrador': 'draft',
+      'En Liquidación': 'in_liquidation',
+      'Autorizado': 'approved',
+      'Anulado': 'voided'
+    };
+    
+    const targetStatus = statusMap[filterStatus];
+    if (!targetStatus) {
+      return expenses;
+    }
+    
+    return expenses.filter(expense => expense.expenseStatus === targetStatus);
   }, [expenses, filterStatus]);
 
   return {
     expenses: filteredExpenses,
     isLoading,
     setFilterStatus,
+    loadExpenses, // Exportar para poder recargar manualmente
   };
 };

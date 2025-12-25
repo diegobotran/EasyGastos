@@ -17,6 +17,7 @@ const syncRoutes = require('./routes/sync');
 const managerLinksRoutes = require('./routes/manager-links');
 const liquidationsRoutes = require('./routes/liquidations');
 const uploadsRoutes = require('./routes/uploads');
+const appRoutes = require('./routes/app');
 
 // Inicializar base de datos
 const { initDatabase } = require('./database/init');
@@ -148,6 +149,8 @@ app.use('/api/manager-links', managerLinksRoutes);
 app.use('/api/liquidations', liquidationsRoutes);
 // Rutas para subir archivos (imágenes de comprobantes)
 app.use('/api/uploads', uploadsRoutes);
+// Rutas para actualizaciones de la app móvil
+app.use('/api/app', appRoutes);
 
 // Manejo de errores
 app.use((err, req, res, next) => {

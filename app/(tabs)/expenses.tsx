@@ -13,9 +13,10 @@ import {
   View,
 } from 'react-native';
 import { useExpensesViewModel } from '../../hooks/useExpensesViewModel';
-import { Expense, STATUSES, getExpenseStatusColor, getExpenseStatusText } from '../../models/Expense';
+import { Expense, getExpenseStatusText, getExpenseStatusColor } from '../../models/Expense';
 import * as AuthService from '../../services/AuthService';
 import { createLiquidation } from '../../services/LiquidationService';
+import { formatDateToSpanish } from '../../utils/dateUtils';
 
 // A dedicated component to render each item in the list for better organization.
 interface ExpenseListItemProps {
@@ -27,23 +28,31 @@ interface ExpenseListItemProps {
 
 const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: ExpenseListItemProps) => {
   const router = useRouter();
-  const statusInfo = STATUSES[item.status];
-
-  if (!statusInfo) {
-    return <View style={styles.expenseItem}><Text>Gasto con estado inválido</Text></View>;
-  }
-
-  // --- THIS IS THE FIX ---
-  // 1. Manually combine the base style with the dynamic color styles.
+  
+  // Usar expenseStatus en lugar de status para mostrar el estado correcto del flujo
+  const statusText = getExpenseStatusText(item.expenseStatus);
+  const statusColor = getExpenseStatusColor(item.expenseStatus);
+  
+  // Determinar el color de fondo según el estado
+  const getBackgroundColor = (status: string) => {
+    switch (status) {
+      case 'draft': return '#f1f5f9';
+      case 'in_liquidation': return '#dbeafe';
+      case 'approved': return '#d1fae5';
+      case 'voided': return '#fee2e2';
+      default: return '#f1f5f9';
+    }
+  };
+  
   const statusBadgeStyle = {
-    ...styles.statusBadge, // Start with the base styles
-    backgroundColor: statusInfo.backgroundColor, // Add the dynamic background color
+    ...styles.statusBadge,
+    backgroundColor: getBackgroundColor(item.expenseStatus),
   };
+  
   const statusTextStyle = {
-    ...styles.statusText, // Start with the base styles
-    color: statusInfo.color, // Add the dynamic text color
+    ...styles.statusText,
+    color: statusColor,
   };
-  // --- END OF FIX ---
 
   const handleViewDetails = () => {
     if (!liquidationMode) {
@@ -62,6 +71,11 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
   // Determinar si el gasto puede ser seleccionado (solo si está en draft)
   const canBeSelected = item.expenseStatus === 'draft';
 
+  // Truncar proveedor para que no sea muy largo
+  const shortSupplier = item.supplier.length > 25 
+    ? item.supplier.substring(0, 25) + '...' 
+    : item.supplier;
+
   return (
     <TouchableOpacity 
       style={[
@@ -72,50 +86,83 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
       onPress={handlePress}
       disabled={liquidationMode && !canBeSelected}
     >
-      <View style={styles.expenseHeader}>
+      <View style={styles.expenseRow}>
         {/* Checkbox en modo liquidación */}
         {liquidationMode && (
           <View style={styles.checkboxContainer}>
             <Ionicons 
               name={isSelected ? 'checkbox' : 'square-outline'} 
-              size={24} 
+              size={22} 
               color={canBeSelected ? '#2563eb' : '#cbd5e1'} 
             />
           </View>
         )}
 
-        <View style={{ flex: 1, marginRight: 8 }}>
-          <Text style={styles.expenseDescription}>{item.description}</Text>
-        </View>
-        
-        {/* 2. Apply the new, single style object directly. */}
-        <View style={statusBadgeStyle}>
-          <Text style={statusTextStyle}>{statusInfo.text}</Text>
-        </View>
+        {/* Contenido principal */}
+        <View style={styles.expenseContent}>
+          {/* Header: Monto y Estado */}
+          <View style={styles.expenseHeader}>
+            <Text style={styles.expenseAmount}>Q{item.amount.toFixed(2)}</Text>
+            <View style={styles.badgeRow}>
+              <View style={statusBadgeStyle}>
+                <Text style={statusTextStyle}>{statusText}</Text>
+              </View>
+              {item.liquidationId && (
+                <View style={styles.liquidationBadge}>
+                  <Ionicons name="folder" size={10} color="#059669" />
+                  <Text style={styles.liquidationBadgeText}>#{item.liquidationId.slice(-6)}</Text>
+                </View>
+              )}
+            </View>
+          </View>
 
+          {/* Divider */}
+          <View style={styles.divider} />
+
+          {/* Grid de información */}
+          <View style={styles.infoGrid}>
+            {/* Primera fila - Fechas */}
+            <View style={styles.infoRow}>
+              <View style={styles.infoCell}>
+                <Text style={styles.infoLabel}>Fecha Factura</Text>
+                <Text style={styles.infoValue}>{formatDateToSpanish(item.date)}</Text>
+              </View>
+              <View style={styles.infoCellRight}>
+                <Text style={styles.infoLabel}>Fecha Carga</Text>
+                <Text style={styles.infoValue}>
+                  {item.createdAt ? formatDateToSpanish(new Date(item.createdAt).toISOString().split('T')[0]) : 'N/A'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Segunda fila */}
+            <View style={styles.infoRow}>
+              <View style={styles.infoCell}>
+                <Text style={styles.infoLabel}>Factura</Text>
+                <Text style={styles.infoValue}>{item.noinvoice || 'N/A'}</Text>
+              </View>
+              <View style={styles.infoCellRight}>
+                <Text style={styles.infoLabel}>Categoría</Text>
+                <Text style={styles.infoValue} numberOfLines={1}>{item.category}</Text>
+              </View>
+            </View>
+
+            {/* Tercera fila */}
+            <View style={styles.infoRow}>
+              <View style={styles.infoCell}>
+                <Text style={styles.infoLabel}>Departamento</Text>
+                <Text style={styles.infoValue} numberOfLines={1}>{item.department}</Text>
+              </View>
+            </View>
+
+            {/* Tercera fila - Proveedor completo */}
+            <View style={styles.infoRowFull}>
+              <Text style={styles.infoLabel}>Proveedor</Text>
+              <Text style={styles.infoValue} numberOfLines={1}>{shortSupplier}</Text>
+            </View>
+          </View>
+        </View>
       </View>
-      <Text style={styles.expenseDetails}>Q{item.amount.toFixed(2)} • {item.supplier}</Text>
-      <Text style={styles.expenseDetails}>{item.date} • {item.category} • {item.department}</Text>
-      
-      {/* Badge del estado de liquidación del gasto */}
-      <View style={[styles.expenseStatusBadge, { backgroundColor: getExpenseStatusColor(item.expenseStatus) + '20' }]}>
-        <Text style={[styles.expenseStatusText, { color: getExpenseStatusColor(item.expenseStatus) }]}>
-          {getExpenseStatusText(item.expenseStatus)}
-        </Text>
-      </View>
-
-      {item.liquidationId && (
-        <View style={styles.liquidationBadge}>
-          <Ionicons name="folder" size={12} color="#059669" />
-          <Text style={styles.liquidationBadgeText}>En liquidación #{item.liquidationId.slice(-6)}</Text>
-        </View>
-      )}
-
-      {!liquidationMode && (
-        <TouchableOpacity style={styles.detailsButton} onPress={handleViewDetails}>
-          <Text style={styles.detailsButtonText}>Ver Detalles</Text>
-        </TouchableOpacity>
-      )}
     </TouchableOpacity>
   );
 
@@ -138,7 +185,7 @@ const EmptyListComponent = () => (
 );
 
 export default function ExpensesScreen() {
-  const { expenses, isLoading, setFilterStatus } = useExpensesViewModel();
+  const { expenses, isLoading, setFilterStatus, loadExpenses } = useExpensesViewModel();
   const [searchQuery, setSearchQuery] = useState(''); // State for search input
   const [selectedFilter, setSelectedFilter] = useState('Todos los estados'); // State for filter
   const [liquidationMode, setLiquidationMode] = useState(false); // State for liquidation mode
@@ -146,9 +193,45 @@ export default function ExpensesScreen() {
   const router = useRouter();
 
   const filteredExpenses = expenses.filter(expense => {
-    const matchesSearch = expense.description.toLowerCase().includes(searchQuery.toLowerCase()) || expense.supplier.toLowerCase().includes(searchQuery.toLowerCase());
+    // Filtrar por búsqueda (descripción, proveedor, número de factura, fechas)
+    if (searchQuery === '') {
+      // Sin búsqueda, aplicar solo filtro de liquidación
+      if (liquidationMode && expense.expenseStatus !== 'draft') {
+        return false;
+      }
+      return true;
+    }
     
-    // En modo liquidación, solo mostrar gastos con expenseStatus='draft' (no in_liquidation ni approved)
+    const query = searchQuery.toLowerCase();
+    
+    // Buscar en descripción
+    const matchesDescription = expense.description.toLowerCase().includes(query);
+    
+    // Buscar en proveedor
+    const matchesSupplier = expense.supplier.toLowerCase().includes(query);
+    
+    // Buscar en número de factura
+    const matchesInvoice = expense.noinvoice && expense.noinvoice.toLowerCase().includes(query);
+    
+    // Buscar en fecha de factura (formato DD/MM/YYYY)
+    const invoiceDate = formatDateToSpanish(expense.date);
+    const matchesInvoiceDate = invoiceDate.includes(query);
+    
+    // Buscar en fecha de carga (formato DD/MM/YYYY)
+    let matchesCreatedDate = false;
+    if (expense.createdAt) {
+      try {
+        const createdDate = formatDateToSpanish(new Date(expense.createdAt).toISOString().split('T')[0]);
+        matchesCreatedDate = createdDate.includes(query);
+      } catch (e) {
+        matchesCreatedDate = false;
+      }
+    }
+    
+    const matchesSearch = matchesDescription || matchesSupplier || matchesInvoice || 
+                         matchesInvoiceDate || matchesCreatedDate;
+    
+    // En modo liquidación, solo mostrar gastos con expenseStatus='draft'
     if (liquidationMode && expense.expenseStatus !== 'draft') {
       return false;
     }
@@ -197,12 +280,21 @@ export default function ExpensesScreen() {
         expenseIds: selectedExpenseIds
       });
 
+      // Limpiar inmediatamente
+      setLiquidationMode(false);
+      setSelectedExpenseIds([]);
+
+      // Recargar gastos UNA SOLA VEZ para reflejar cambios de estado
+      if (loadExpenses) {
+        await loadExpenses();
+      }
+
       Alert.alert(
-        'Éxito',
-        `Liquidación creada con ${selectedExpenseIds.length} gastos por Q${liquidation.totalAmount.toFixed(2)}`,
+        '✅ Liquidación Creada',
+        `Se creó la liquidación con ${selectedExpenseIds.length} gastos por Q${liquidation.totalAmount.toFixed(2)}\n\n💡 Puedes verla ahora o ir a la pestaña "Liquidaciones" cuando desees.`,
         [
           {
-            text: 'Ver Liquidación',
+            text: 'Ver Ahora',
             onPress: () => {
               router.push({ 
                 pathname: '../liquidation-detail', 
@@ -210,20 +302,22 @@ export default function ExpensesScreen() {
               });
             }
           },
-          { text: 'OK' }
+          { text: 'Más Tarde' }
         ]
       );
-
-      // Salir del modo liquidación y limpiar selección
-      setLiquidationMode(false);
-      setSelectedExpenseIds([]);
     } catch (error) {
       console.error('❌ Error creando liquidación:', error);
       Alert.alert('Error', 'No se pudo crear la liquidación: ' + (error as Error).message);
     }
   };
 
-  const statusOptions = ['Todos los estados', ...Object.values(STATUSES).map(status => status.text)];
+  const statusOptions = [
+    'Todos los estados',
+    'Borrador',
+    'En Liquidación',
+    'Autorizado',
+    'Anulado'
+  ];
 
   if (isLoading) {
     return <ActivityIndicator style={styles.centered} size="large" />;
@@ -270,7 +364,7 @@ export default function ExpensesScreen() {
           <Ionicons name="search-outline" size={20} color="gray" />
           <TextInput 
             style={styles.searchInput} 
-            placeholder="Buscar por descripción o proveedor..." 
+            placeholder="Buscar por descripción, proveedor, factura, fecha..." 
             value={searchQuery}
             onChangeText={setSearchQuery} // Update search query
           />
@@ -392,7 +486,12 @@ const styles = StyleSheet.create({
     padding: 10,
     alignItems: 'center',
   },
-  searchInput: { marginLeft: 10, flex: 1, fontSize: 16 },
+  searchInput: { 
+    marginLeft: 10, 
+    flex: 1, 
+    fontSize: 16,
+    color: '#1e293b',
+  },
   filterWrapper: {
     flex: 1,
     marginLeft: 10,
@@ -440,10 +539,15 @@ const styles = StyleSheet.create({
   expenseItem: {
     backgroundColor: 'white',
     borderRadius: 12,
-    padding: 15,
-    marginBottom: 12,
+    padding: 16,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
   },
   expenseItemSelected: {
     borderColor: '#2563eb',
@@ -453,28 +557,40 @@ const styles = StyleSheet.create({
   expenseItemDisabled: {
     opacity: 0.5,
   },
+  expenseRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  checkboxContainer: {
+    marginRight: 12,
+    paddingTop: 2,
+  },
+  expenseContent: {
+    flex: 1,
+  },
   expenseHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
   },
-  checkboxContainer: {
-    marginRight: 12,
+  expenseAmount: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#059669',
   },
-  expenseDescription: { fontSize: 16, fontWeight: '600', color: '#1e293b' },
-  expenseDetails: { fontSize: 14, color: '#64748b', marginBottom: 4 },
-  statusBadge: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12 },
-  statusText: { fontSize: 12, fontWeight: 'bold' },
-  expenseStatusBadge: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    marginTop: 8,
-    alignSelf: 'flex-start',
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  expenseStatusText: {
-    fontSize: 13,
+  statusBadge: { 
+    paddingVertical: 4, 
+    paddingHorizontal: 10, 
+    borderRadius: 12,
+  },
+  statusText: { 
+    fontSize: 10, 
     fontWeight: '700',
   },
   liquidationBadge: {
@@ -483,25 +599,50 @@ const styles = StyleSheet.create({
     backgroundColor: '#d1fae5',
     paddingVertical: 4,
     paddingHorizontal: 8,
-    borderRadius: 6,
-    marginTop: 6,
-    alignSelf: 'flex-start',
-    gap: 4,
+    borderRadius: 12,
+    gap: 3,
   },
   liquidationBadgeText: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 10,
+    fontWeight: '700',
     color: '#059669',
   },
-  detailsButton: {
-    marginTop: 12,
-    alignSelf: 'flex-start',
-    backgroundColor: '#f1f5f9',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
+  divider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginBottom: 12,
   },
-  detailsButtonText: { color: '#475569', fontWeight: '600' },
+  infoGrid: {
+    gap: 10,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  infoCell: {
+    flex: 1,
+  },
+  infoCellRight: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  infoRowFull: {
+    width: '100%',
+  },
+  infoLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  infoValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',

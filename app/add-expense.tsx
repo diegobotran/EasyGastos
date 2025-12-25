@@ -3,10 +3,11 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { Picker } from '@react-native-picker/picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Category } from '../models/Category';
 import { Expense, STATUSES } from '../models/Expense';
@@ -14,6 +15,8 @@ import * as AuthService from '../services/AuthService';
 import { BackendSyncService } from '../services/BackendSyncService';
 import * as CategoryService from '../services/CategoryService';
 import * as ExpenseService from '../services/ExpenseService';
+import * as SettingsService from '../services/SettingsService';
+import { getExpenseAmountErrorMessage, isExpenseAmountValid } from '../models/Settings';
 
 
 
@@ -43,6 +46,7 @@ export default function AddExpenseScreen() {
   const [ordenco, setOrdenco] = useState('');
   const [totiva, setTotiva] = useState('');
   const [currency, setCurrency] = useState('GTQ');
+  const [isLoading, setIsLoading] = useState(false);
   const departments = ['Tecnologia', 'Ventas', 'Marketing', 'Finanzas', 'Recursos humanos'];
   const currencies = ['GTQ', 'USD', 'EUR'];
 
@@ -88,7 +92,75 @@ export default function AddExpenseScreen() {
       };
 
 
-  const formatDate = (date: Date) => date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+  // Formatea fecha a YYYY-MM-DD para almacenamiento interno
+  const formatDate = (date: Date) => {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${year}-${month}-${day}`;
+  };
+
+  // Formatea fecha a DD/MM/YYYY para visualización
+  const formatDateDisplay = (date: Date) => {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  };
+
+  // Función helper para sincronizar en segundo plano
+  const syncExpenseInBackground = async (userEmail: string, userData: any) => {
+    try {
+      // PASO 1: Verificar conectividad con el backend
+      console.log('🌐 AddExpense (BG): Verificando conexión al backend...');
+      const isConnected = await BackendSyncService.checkConnection();
+      
+      if (!isConnected) {
+        console.log('⚠️ AddExpense (BG): Backend no disponible - sincronización pendiente');
+        console.log('💾 AddExpense (BG): El gasto quedó guardado localmente');
+        return;
+      }
+      console.log('✅ AddExpense (BG): Conexión al backend OK');
+
+      // PASO 2: Obtener PIN local
+      const userPIN = await AuthService.getPIN();
+      if (!userPIN) {
+        console.log('⚠️ AddExpense (BG): No se encontró PIN - sincronización pendiente');
+        return;
+      }
+
+      // PASO 3: Autenticar (login o registro)
+      console.log('🔐 AddExpense (BG): Autenticando usuario...');
+      let loginResult = await BackendSyncService.loginAndGetToken(userEmail, userPIN);
+      
+      if (!loginResult.success || !loginResult.token) {
+        console.log('📝 AddExpense (BG): Usuario no registrado - registrando...');
+        const registerResult = await BackendSyncService.syncUserRegistration(userData, userPIN);
+        
+        if (registerResult.success) {
+          loginResult = await BackendSyncService.loginAndGetToken(userEmail, userPIN);
+        }
+      }
+
+      // PASO 4: Sincronizar gastos
+      if (loginResult.success && loginResult.token) {
+        console.log('🔄 AddExpense (BG): Sincronizando gastos con el backend...');
+        const syncResult = await BackendSyncService.syncExpenses(userEmail, loginResult.token);
+        
+        if (syncResult.success) {
+          console.log('✅ AddExpense (BG): ¡Gasto sincronizado exitosamente con el servidor!');
+        } else {
+          console.log('⚠️ AddExpense (BG): Error en sincronización:', syncResult.error);
+        }
+      } else {
+        console.log('⚠️ AddExpense (BG): No se pudo autenticar - sincronización pendiente');
+      }
+    } catch (error) {
+      // Error no crítico - el gasto ya está guardado localmente
+      console.log('⚠️ AddExpense (BG): No se pudo sincronizar (offline o error de red):', error);
+      console.log('💾 AddExpense (BG): El gasto quedó guardado localmente y se sincronizará cuando haya conexión');
+    }
+  };
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(false);
@@ -159,6 +231,23 @@ export default function AddExpenseScreen() {
       return;
     }
     
+    // Validar límite de monto por gasto
+    try {
+      const maxExpenseAmount = await SettingsService.getMaxExpenseAmount();
+      if (!isExpenseAmountValid(parsedAmount, maxExpenseAmount)) {
+        const errorMessage = getExpenseAmountErrorMessage(parsedAmount, maxExpenseAmount);
+        alert(errorMessage);
+        return;
+      }
+    } catch (error) {
+      console.error('Error al validar límite de monto:', error);
+      // Continuar con valor por defecto si hay error
+      if (parsedAmount > 3500) {
+        alert(`El monto no puede exceder Q3,500.00. Si necesitas un gasto mayor, divídelo en múltiples gastos.`);
+        return;
+      }
+    }
+    
     try {
       console.log('🚀 AddExpense: ========== INICIANDO PROCESO DE GUARDAR GASTO (OFFLINE-FIRST) ==========');
       
@@ -170,6 +259,68 @@ export default function AddExpenseScreen() {
       }
 
       console.log('✅ AddExpense: Usuario encontrado:', user.email);
+
+      // VALIDACIÓN DE DUPLICADOS (ANTES DE CREAR EL GASTO)
+      console.log('🔍 AddExpense: Verificando duplicados de factura...');
+      const duplicateCheck = await ExpenseService.checkDuplicateExpense(
+        user.email,
+        serie || '',
+        noinvoice || '',
+        formatDate(date),
+        parsedAmount
+      );
+
+      if (duplicateCheck.isDuplicate && duplicateCheck.existingExpense) {
+        console.log('⚠️ AddExpense: Factura duplicada detectada');
+        
+        let message = `⚠️ FACTURA DUPLICADA\n\n`;
+        message += `Ya existe una factura con estos datos:\n\n`;
+        message += `• Serie: ${serie || 'N/A'}\n`;
+        message += `• No. Factura: ${noinvoice || 'N/A'}\n`;
+        message += `• Fecha: ${formatDate(date)}\n`;
+        message += `• Monto: Q${parsedAmount.toFixed(2)}\n\n`;
+        
+        if (duplicateCheck.inLiquidation) {
+          const liqId = duplicateCheck.existingExpense.liquidationId?.slice(-6) || 'N/A';
+          message += `⚠️ IMPORTANTE: Esta factura ya está incluida en la liquidación #${liqId}.\n\n`;
+          message += `No se permite agregar facturas duplicadas que ya estén en liquidaciones.`;
+        } else {
+          message += `Gasto existente: ${duplicateCheck.existingExpense.description}\n\n`;
+          message += `¿Desea continuar y crear un gasto duplicado de todas formas?`;
+        }
+
+        // Si está en liquidación, no permitir continuar
+        if (duplicateCheck.inLiquidation) {
+          Alert.alert('Factura Duplicada', message);
+          return;
+        }
+
+        // Si no está en liquidación, preguntar si desea continuar
+        const shouldContinue = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'Factura Duplicada',
+            message,
+            [
+              {
+                text: 'Cancelar',
+                style: 'cancel',
+                onPress: () => resolve(false)
+              },
+              {
+                text: 'Continuar',
+                onPress: () => resolve(true)
+              }
+            ]
+          );
+        });
+
+        if (!shouldContinue) {
+          console.log('❌ AddExpense: Usuario canceló creación de duplicado');
+          return;
+        }
+        
+        console.log('⚠️ AddExpense: Usuario decidió continuar con duplicado');
+      }
 
       // CREAR OBJETO DEL GASTO
       const newExpense: Expense = {
@@ -188,6 +339,8 @@ export default function AddExpenseScreen() {
         serie: serie || '',
         centro: centro || '',
         cuenta: cuenta || '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
         ordenco: ordenco || '',
         imageuri: file?.uri || '',
         totiva: parseFloat(totiva) || 0,
@@ -211,55 +364,12 @@ export default function AddExpenseScreen() {
       alert('✅ Gasto guardado exitosamente!');
       router.back();
 
-      // PASO 3: SINCRONIZAR EN SEGUNDO PLANO (TRANSPARENTE - NO BLOQUEAR)
-      console.log('🔄 AddExpense: Iniciando autenticación y sincronización en segundo plano...');
+      // PASO 3: SINCRONIZAR EN SEGUNDO PLANO SI HAY CONEXIÓN
+      console.log('🔄 AddExpense: Iniciando sincronización automática en segundo plano...');
       
-      // Ejecutar todo el flujo de auth + sync en background
+      // Ejecutar sincronización de forma no bloqueante (sin await)
       (async () => {
-        try {
-          // Obtener PIN local
-          const userPIN = await AuthService.getPIN();
-          if (!userPIN) {
-            console.log('⚠️ AddExpense (BG): No se encontró PIN - sincronización pendiente');
-            return;
-          }
-
-          console.log('🔐 AddExpense (BG): PIN obtenido, intentando login...');
-          
-          // Intentar login
-          let loginResult = await BackendSyncService.loginAndGetToken(user.email, userPIN);
-          console.log('🔐 AddExpense (BG): Resultado de login:', loginResult);
-          
-          // Si login falla, registrar y volver a intentar
-          if (!loginResult.success || !loginResult.token) {
-            console.log('📝 AddExpense (BG): Login falló - registrando usuario...');
-            
-            const registerResult = await BackendSyncService.syncUserRegistration(user, userPIN);
-            console.log('📝 AddExpense (BG): Resultado de registro:', registerResult);
-            
-            if (registerResult.success) {
-              // Volver a intentar login después del registro
-              loginResult = await BackendSyncService.loginAndGetToken(user.email, userPIN);
-              console.log('🔐 AddExpense (BG): Login después de registro:', loginResult);
-            }
-          }
-          
-          // Si tenemos token, sincronizar
-          if (loginResult.success && loginResult.token) {
-            console.log('🔄 AddExpense (BG): Token obtenido - sincronizando gastos...');
-            const syncResult = await BackendSyncService.syncExpenses(user.email, loginResult.token);
-            
-            if (syncResult.success) {
-              console.log('✅ AddExpense (BG): Gasto sincronizado exitosamente en segundo plano');
-            } else {
-              console.log('⚠️ AddExpense (BG): No se pudo sincronizar - quedará pendiente:', syncResult.error);
-            }
-          } else {
-            console.log('⚠️ AddExpense (BG): No se pudo obtener token - sincronización pendiente');
-          }
-        } catch (bgError) {
-          console.log('⚠️ AddExpense (BG): Error en autenticación/sincronización (no crítico):', bgError);
-        }
+        await syncExpenseInBackground(user.email, user);
       })();
       
     } catch (error: unknown) {
@@ -276,13 +386,45 @@ export default function AddExpenseScreen() {
 
 // ... dentro de AddExpenseScreen ...
 
+// Función para preprocesar imagen y mejorar calidad para OCR
+const preprocessImageForOCR = async (imageUri: string): Promise<string> => {
+  try {
+    console.log('📸 Preprocesando imagen para mejorar OCR...');
+    
+    // Aplicar mejoras a la imagen:
+    // 1. Redimensionar a tamaño óptimo (mejora velocidad y precisión)
+    // 2. Aumentar contraste y brillo para mejor legibilidad
+    const processedImage = await ImageManipulator.manipulateAsync(
+      imageUri,
+      [
+        // Redimensionar manteniendo aspect ratio (max width 2048px)
+        { resize: { width: 2048 } },
+      ],
+      {
+        compress: 0.9,
+        format: ImageManipulator.SaveFormat.JPEG,
+      }
+    );
+    
+    console.log('✅ Imagen preprocesada exitosamente');
+    return processedImage.uri;
+  } catch (error) {
+    console.error('⚠️ Error en preprocesamiento, usando imagen original:', error);
+    return imageUri; // Fallback a imagen original si falla
+  }
+};
+
 const extractDataFromImage = async (imageUri: string) => {
   try {
     console.log("Iniciando reconocimiento de texto con ML Kit para:", imageUri);
     setIsLoading(true);
 
-    // 1. Usar ML Kit para reconocer texto
-    const result = await TextRecognition.recognize(imageUri);
+    // 1. Preprocesar imagen para mejorar calidad de OCR
+    const processedImageUri = await preprocessImageForOCR(imageUri);
+    console.log('🔍 Usando imagen procesada para OCR:', processedImageUri);
+
+    // 2. Usar ML Kit para reconocer texto
+    const result = await TextRecognition.recognize(processedImageUri);
     console.log("Resultado ML Kit:", JSON.stringify(result, null, 2));
 
     // 2. Obtener texto completo y líneas
@@ -324,6 +466,7 @@ const extractDataFromImage = async (imageUri: string) => {
 // === EXTRACCIÓN DE NIT ===
 // Patrones más amplios para NIT guatemalteco
 const nitPatterns = [
+  /N\.?I\.?T\.?\s*Emisor\s*:?\s*(\d{6,12}-?[0-9K]?)/i,  // Nuevo: "Nit Emisor: 110295609"
   /N\.?I\.?T\.?\s*:?\s*(\d{6,12}-?[0-9K]?)/i,
   /NIT\s*:?\s*(\d{6,12}-?[0-9K]?)/i,
   /\b(\d{6,12}-[0-9K])\b/,
@@ -804,10 +947,23 @@ function findFinalTotalByLines(lines: string[]): string | null {
     if (/total/i.test(line)) {
       console.log(`Línea ${i}: Encontrada línea con TOTAL - "${line}"`);
       
+      // Primero intentar extraer de la misma línea
       const total = extractTotalFromLine(line);
       if (total) {
         console.log(`TOTAL EXTRAÍDO: ${total}`);
         return total;
+      }
+      
+      // Si no hay número en la misma línea, buscar en las siguientes 2 líneas
+      // Caso: "TOTALES:" en una línea, y "3,111.00" en la siguiente
+      for (let j = 1; j <= 2 && i + j < lines.length; j++) {
+        const nextLine = lines[i + j].trim();
+        console.log(`    Buscando en línea siguiente ${i + j}: "${nextLine}"`);
+        const totalNext = extractNumberFromLine(nextLine);
+        if (totalNext) {
+          console.log(`TOTAL EXTRAÍDO de línea siguiente: ${totalNext}`);
+          return totalNext;
+        }
       }
     }
   }
@@ -834,19 +990,22 @@ function extractTotalFromLine(line: string): string | null {
     // Patrón 1: Números con moneda guatemalteca Q34.10 o Q34,10
     /Q\s*(\d+[.,]\d{2})/gi,
     
-    // Patrón 2: Números al final de línea con decimales 157.30 o 157,30
+    // Patrón 2: Números con separadores de miles y decimales 3,111.00 o 1.234,56
+    /(\d{1,3}(?:[.,]\d{3})+[.,]\d{2})/g,
+    
+    // Patrón 3: Números al final de línea con decimales 157.30 o 157,30
     /(\d+[.,]\d{2})\s*$/g,
     
-    // Patrón 3: Cualquier número con 2 decimales (más específico)
+    // Patrón 4: Cualquier número con 2 decimales (más específico)
     /(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/g,
     
-    // Patrón 4: Números simples con decimales 068.01, 216.00
+    // Patrón 5: Números simples con decimales 068.01, 216.00
     /(\d+[.,]\d{2})/g,
     
-    // Patrón 5: Números con 1 decimal
+    // Patrón 6: Números con 1 decimal
     /(\d+[.,]\d{1})/g,
     
-    // Patrón 6: Números enteros al final
+    // Patrón 7: Números enteros al final
     /(\d+)\s*$/g
   ];
 
@@ -876,6 +1035,9 @@ function extractTotalFromLine(line: string): string | null {
 function extractNumberFromLine(line: string): string | null {
   // Fallback más simple - buscar cualquier número decimal
   const patterns = [
+    // Números con separadores de miles: 3,111.00 o 1.234,56
+    /(\d{1,3}(?:[.,]\d{3})+[.,]\d{2})/g,
+    // Números simples con decimales
     /(\d+[.,]\d{2})/g,
     /(\d+[.,]\d{1})/g,
     /(\d+)\s*$/g
@@ -906,6 +1068,22 @@ function normalizeNumber(amount: string): string {
   // Contar puntos y comas
   const commas = (normalized.match(/,/g) || []).length;
   const dots = (normalized.match(/\./g) || []).length;
+  
+  console.log(`    Normalizando: "${amount}" (comas: ${commas}, puntos: ${dots})`);
+  
+  // Caso especial: 3,111.00 (coma de miles, punto decimal)
+  if (commas === 1 && dots === 1) {
+    const commaPos = normalized.indexOf(',');
+    const dotPos = normalized.indexOf('.');
+    
+    // Si la coma está antes del punto y el punto tiene 2 decimales después
+    if (commaPos < dotPos && dotPos === normalized.length - 3) {
+      // Eliminar la coma de miles y mantener el punto decimal
+      normalized = normalized.replace(',', '');
+      console.log(`    Formato miles detectado: ${normalized}`);
+      return normalized;
+    }
+  }
   
   // Si hay una sola coma y no hay puntos, probablemente es decimal
   if (commas === 1 && dots === 0) {
@@ -988,10 +1166,6 @@ const findFinalTotal = (allWords: Word[]): string | null => {
   return null;
 };
 
-
-// Asegúrate de tener el estado isLoading
-const [isLoading, setIsLoading] = useState(false);
-
   return (
     
   <View style={styles.outerContainer}>
@@ -1020,7 +1194,7 @@ const [isLoading, setIsLoading] = useState(false);
 
       <Text style={styles.label}>Fecha *</Text>
       <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
-        <Text style={styles.dateText}>{formatDate(date)}</Text>
+        <Text style={styles.dateText}>{formatDateDisplay(date)}</Text>
         <Ionicons name="calendar-outline" size={20} color="gray" />
       </TouchableOpacity>
       {showDatePicker && (
@@ -1028,16 +1202,20 @@ const [isLoading, setIsLoading] = useState(false);
       )}
 
       <Text style={styles.label}>Categoría *</Text>
-      <Picker selectedValue={category} onValueChange={handleCategoryChange} style={styles.picker}>
-        <Picker.Item label="Seleccionar categoría" value="" color="#000000" />
-         {categories.map((cat) => <Picker.Item key={cat.id} label={cat.name} value={cat.name} color="#000000" />)}
-      </Picker>
+      <View style={styles.pickerContainer}>
+        <Picker selectedValue={category} onValueChange={handleCategoryChange} style={styles.picker}>
+          <Picker.Item label="Seleccionar categoría" value="" />
+          {categories.map((cat) => <Picker.Item key={cat.id} label={cat.name} value={cat.name} />)}
+        </Picker>
+      </View>
 
       <Text style={styles.label}>Departamento *</Text>
-      <Picker selectedValue={department} onValueChange={setDepartment} style={styles.picker}>
-        <Picker.Item label="Seleccionar departamento" value="" color="#000000" />
-        {departments.map((dept) => <Picker.Item key={dept} label={dept} value={dept} color="#000000" />)}
-      </Picker>
+      <View style={styles.pickerContainer}>
+        <Picker selectedValue={department} onValueChange={setDepartment} style={styles.picker}>
+          <Picker.Item label="Seleccionar departamento" value="" />
+          {departments.map((dept) => <Picker.Item key={dept} label={dept} value={dept} />)}
+        </Picker>
+      </View>
 
       <Text style={styles.label}>Serie</Text>
       <TextInput style={styles.input} value={serie} onChangeText={setSerie} />
@@ -1064,9 +1242,11 @@ const [isLoading, setIsLoading] = useState(false);
       <TextInput style={styles.input} value={totiva} onChangeText={setTotiva} keyboardType="numeric"  readOnly/>
 
       <Text style={styles.label}>Moneda</Text>
-      <Picker selectedValue={currency} onValueChange={setCurrency} style={styles.picker}>
-        {currencies.map((curr) => <Picker.Item key={curr} label={curr} value={curr} />)}
-      </Picker>
+      <View style={styles.pickerContainer}>
+        <Picker selectedValue={currency} onValueChange={setCurrency} style={styles.picker}>
+          {currencies.map((curr) => <Picker.Item key={curr} label={curr} value={curr} />)}
+        </Picker>
+      </View>
 
       <Text style={styles.label}>Comprobante</Text>
       <TouchableOpacity style={styles.fileButton} onPress={handleChooseFile}>
@@ -1126,14 +1306,35 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: '#d1d5db', padding: 12, borderRadius: 8, marginBottom: 15, fontSize: 16, color: '#000000' },
   dateInput: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: '#d1d5db', padding: 12, borderRadius: 8, marginBottom: 15 },
   dateText: { fontSize: 16, color: '#374151' },
-  picker: { 
-    borderWidth: 1, 
-    borderColor: '#d1d5db', 
-    borderRadius: 8, 
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
     marginBottom: 15,
+    backgroundColor: '#ffffff',
+    overflow: 'hidden',
+    ...Platform.select({
+      android: {
+        paddingHorizontal: 0,
+      },
+      ios: {
+        paddingHorizontal: 8,
+      },
+    }),
+  },
+  picker: { 
+    width: '100%',
     height: 50,
-    color: '#000000', // Color del texto negro
-    backgroundColor: '#ffffff' // Fondo blanco para mejor contraste
+    color: '#1f2937',
+    backgroundColor: 'transparent',
+    ...Platform.select({
+      android: {
+        color: '#1f2937',
+      },
+      ios: {
+        color: '#1f2937',
+      },
+    }),
   },
   fileButton: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#d1d5db', padding: 12, borderRadius: 8, marginBottom: 15 },
   fileButtonText: { color: '#2563eb', marginRight: 10 },

@@ -29,6 +29,9 @@ export default function DashboardScreen() {
     totalAmountExpenses,
     totalAmountLiquidations,
     pendingAmountToLiquidate,
+    
+    // Métricas para managers
+    pendingLiquidationsForManager,
   } = useDashboardViewModel();
 
   if (isLoading) {
@@ -70,28 +73,75 @@ export default function DashboardScreen() {
         <Text style={styles.sectionTitle}>Resumen General</Text>
         <View style={styles.summaryCard}>
           <View style={styles.summaryRow}>
-            <View style={styles.summaryItem}>
+            <TouchableOpacity 
+              style={styles.summaryItem}
+              onPress={() => router.push('/(tabs)/expenses')}
+              activeOpacity={0.7}
+            >
               <Ionicons name="receipt-outline" size={24} color="#2563eb" />
               <Text style={styles.summaryValue}>{totalExpenses}</Text>
               <Text style={styles.summaryLabel}>Gastos</Text>
-            </View>
+              <Ionicons name="chevron-forward" size={14} color="#94a3b8" style={{ marginTop: 4 }} />
+            </TouchableOpacity>
             <View style={styles.summaryDivider} />
-            <View style={styles.summaryItem}>
+            <TouchableOpacity 
+              style={styles.summaryItem}
+              onPress={() => router.push({ pathname: './liquidations' })}
+              activeOpacity={0.7}
+            >
               <Ionicons name="folder-outline" size={24} color="#a855f7" />
               <Text style={styles.summaryValue}>{totalLiquidations}</Text>
               <Text style={styles.summaryLabel}>Liquidaciones</Text>
-            </View>
+              <Ionicons name="chevron-forward" size={14} color="#94a3b8" style={{ marginTop: 4 }} />
+            </TouchableOpacity>
           </View>
           
-          <View style={styles.amountContainer}>
+          <TouchableOpacity 
+            style={styles.amountContainer}
+            onPress={() => router.push('/(tabs)/expenses')}
+            activeOpacity={0.7}
+          >
             <Ionicons name="cash-outline" size={20} color="#059669" />
             <View style={styles.amountDetails}>
               <Text style={styles.amountLabel}>Total en Gastos</Text>
               <Text style={styles.amountValue}>Q{totalAmountExpenses.toFixed(2)}</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={16} color="#94a3b8" />
+          </TouchableOpacity>
         </View>
       </View>
+
+      {/* Alerta para MANAGERS: Liquidaciones pendientes de aprobar */}
+      {userRole === 'Jefe' && pendingLiquidationsForManager > 0 && (
+        <View style={styles.section}>
+          <TouchableOpacity 
+            style={styles.managerAlertCard}
+            onPress={() => router.push('/manager-approval')}
+          >
+            <View style={styles.managerAlertIcon}>
+              <Ionicons name="notifications" size={32} color="white" />
+              {pendingLiquidationsForManager > 0 && (
+                <View style={styles.managerAlertBadge}>
+                  <Text style={styles.managerAlertBadgeText}>
+                    {pendingLiquidationsForManager}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.managerAlertContent}>
+              <Text style={styles.managerAlertTitle}>
+                ¡Tienes liquidaciones pendientes!
+              </Text>
+              <Text style={styles.managerAlertSubtitle}>
+                {pendingLiquidationsForManager} liquidación{pendingLiquidationsForManager > 1 ? 'es' : ''} esperando tu aprobación
+              </Text>
+              <Text style={styles.managerAlertAction}>
+                Toca para revisar →
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Sección: Mis Gastos */}
       <View style={styles.section}>
@@ -152,7 +202,7 @@ export default function DashboardScreen() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Mis Liquidaciones</Text>
-          <TouchableOpacity onPress={() => router.push('/(tabs)/liquidations')}>
+          <TouchableOpacity onPress={() => router.push({ pathname: './liquidations' })}>
             <Text style={styles.viewAllText}>Ver todas →</Text>
           </TouchableOpacity>
         </View>
@@ -222,7 +272,7 @@ export default function DashboardScreen() {
           
           <TouchableOpacity 
             style={styles.quickActionButton}
-            onPress={() => router.push('/(tabs)/liquidations')}
+            onPress={() => router.push({ pathname: './liquidations' })}
           >
             <Ionicons name="folder" size={24} color="#a855f7" />
             <Text style={styles.quickActionText}>Liquidaciones</Text>
@@ -446,6 +496,69 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#3b82f6',
     marginTop: 2,
+  },
+  
+  // Manager Alert Card (para notificaciones de aprobación)
+  managerAlertCard: {
+    backgroundColor: '#3b82f6',
+    borderRadius: 16,
+    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  managerAlertIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  managerAlertBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    backgroundColor: '#ef4444',
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  managerAlertBadgeText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  managerAlertContent: {
+    flex: 1,
+  },
+  managerAlertTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: 'white',
+    marginBottom: 4,
+  },
+  managerAlertSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginBottom: 8,
+  },
+  managerAlertAction: {
+    fontSize: 13,
+    color: 'white',
+    fontWeight: '600',
+    opacity: 0.9,
   },
   
   // Liquidation Stats

@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { models } = require('../database/init');
 const { authenticateToken, canAccessUserData } = require('../middleware/auth');
+const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 const router = express.Router();
 
 const { User, Category, Expense, SyncLog } = models;
@@ -77,6 +78,8 @@ router.post('/full-sync', authenticateToken, [
       date: expense.date,
       category: expense.category,
       status: expense.status,
+      expenseStatus: expense.expenseStatus || 'draft',
+      liquidationId: expense.liquidationId || '',
       supplier: expense.supplier,
       vat_number: expense.vat_number,
       department: expense.department,
@@ -95,6 +98,8 @@ router.post('/full-sync', authenticateToken, [
       approvedBy: expense.approvedBy,
       rejectedAt: expense.rejectedAt,
       rejectedBy: expense.rejectedBy,
+      voidedAt: expense.voidedAt,
+      voidedReason: expense.voidedReason,
       createdAt: expense.createdAt,
       updatedAt: expense.updatedAt
     }));
@@ -228,9 +233,15 @@ router.post('/upload', authenticateToken, [
     // Procesar gastos
     for (const expenseData of expenses) {
       try {
-        // Si no tiene managerEmail, asignarlo desde el usuario
-        if (!expenseData.managerEmail && user.managerEmail) {
-          expenseData.managerEmail = user.managerEmail;
+        // Si no tiene managerEmail, buscarlo en ManagerEmployeeLink o en el usuario
+        if (!expenseData.managerEmail) {
+          const managerLink = await ManagerEmployeeLink.getDirectManager(userEmail);
+          if (managerLink) {
+            expenseData.managerEmail = managerLink.managerEmail;
+          } else if (user.managerEmail) {
+            // Fallback: usar el managerEmail del usuario si no hay relación definida
+            expenseData.managerEmail = user.managerEmail;
+          }
         }
 
         await Expense.findOneAndUpdate(
