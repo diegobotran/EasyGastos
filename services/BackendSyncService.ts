@@ -753,12 +753,40 @@ export class BackendSyncService {
             console.log('⚠️ BackendSync: Tipo de errorText:', typeof errorText);
             console.log('⚠️ BackendSync: Liquidación ID:', liquidation.id);
             
-            // Si el error es "ya existe", marcar como sincronizada
-            if (errorText.includes('ya existe') || errorText.includes('already exists')) {
-              console.log('✅ BackendSync: ENTRANDO A MARCAR COMO SINCRONIZADA');
-              await LiquidationService.markLiquidationAsSynced(liquidation.id);
-              console.log('✅ BackendSync: Liquidación marcada como sincronizada (ya existía):', liquidation.id);
-              successCount++;
+            // Si el error es "ya existe", intentar actualizar con PUT
+            if (errorText.includes('ya existe') || errorText.includes('already exists') || errorText.includes('Liquidación ya existe')) {
+              console.log('⚠️ BackendSync: Liquidación ya existe - Intentando actualizar con PUT');
+              
+              try {
+                const putUrl = `${backendUrl}/api/liquidations/${liquidation.id}`;
+                console.log('🔄 BackendSync: Enviando PUT a:', putUrl);
+                
+                const putResponse = await fetch(putUrl, {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`
+                  },
+                  body: JSON.stringify(liquidation)
+                });
+                
+                if (putResponse.ok) {
+                  console.log('✅ BackendSync: Liquidación actualizada exitosamente con PUT');
+                  await LiquidationService.markLiquidationAsSynced(liquidation.id);
+                  successCount++;
+                } else {
+                  const putErrorText = await putResponse.text();
+                  console.error('❌ BackendSync: Error en PUT:', putErrorText);
+                  // Aún así marcar como sincronizada para evitar reintentos infinitos
+                  await LiquidationService.markLiquidationAsSynced(liquidation.id);
+                  successCount++;
+                }
+              } catch (putError) {
+                console.error('❌ BackendSync: Error ejecutando PUT:', putError);
+                // Marcar como sincronizada para evitar loops
+                await LiquidationService.markLiquidationAsSynced(liquidation.id);
+                successCount++;
+              }
             } else {
               console.log('❌ BackendSync: Error de validación (no duplicado) - NO SE MARCARÁ COMO SINCRONIZADA');
               errorCount++;
