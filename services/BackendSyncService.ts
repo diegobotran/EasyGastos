@@ -755,11 +755,11 @@ export class BackendSyncService {
             
             // Si el error es "ya existe", intentar actualizar con PUT
             if (errorText.includes('ya existe') || errorText.includes('already exists') || errorText.includes('Liquidación ya existe')) {
-              console.log('⚠️ BackendSync: Liquidación ya existe - Intentando actualizar con PUT');
+              console.log('🔄 BackendSync: Liquidación ya existe en servidor - Actualizando cambios locales...');
               
               try {
                 const putUrl = `${backendUrl}/api/liquidations/${liquidation.id}`;
-                console.log('🔄 BackendSync: Enviando PUT a:', putUrl);
+                console.log('🔄 BackendSync: PUT a:', putUrl);
                 
                 const putResponse = await fetch(putUrl, {
                   method: 'PUT',
@@ -771,24 +771,24 @@ export class BackendSyncService {
                 });
                 
                 if (putResponse.ok) {
-                  console.log('✅ BackendSync: Liquidación actualizada exitosamente con PUT');
+                  console.log('✅ BackendSync: Liquidación actualizada - ID:', liquidation.id);
                   await LiquidationService.markLiquidationAsSynced(liquidation.id);
                   successCount++;
                 } else {
                   const putErrorText = await putResponse.text();
-                  console.error('❌ BackendSync: Error en PUT:', putErrorText);
-                  // Aún así marcar como sincronizada para evitar reintentos infinitos
+                  console.error('⚠️ BackendSync: No se pudo actualizar liquidación:', putErrorText);
+                  // Marcar como sincronizada para evitar reintentos infinitos
                   await LiquidationService.markLiquidationAsSynced(liquidation.id);
                   successCount++;
                 }
               } catch (putError) {
-                console.error('❌ BackendSync: Error ejecutando PUT:', putError);
+                console.error('⚠️ BackendSync: Error al actualizar liquidación:', putError);
                 // Marcar como sincronizada para evitar loops
                 await LiquidationService.markLiquidationAsSynced(liquidation.id);
                 successCount++;
               }
             } else {
-              console.log('❌ BackendSync: Error de validación (no duplicado) - NO SE MARCARÁ COMO SINCRONIZADA');
+              console.log('❌ BackendSync: Error de validación - NO SE SINCRONIZARÁ');
               errorCount++;
             }
           } else {
