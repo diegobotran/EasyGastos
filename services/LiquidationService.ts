@@ -8,45 +8,75 @@
 import { Platform } from 'react-native';
 import { Liquidation, LiquidationStatus, CreateLiquidationDTO } from '../models/Liquidation';
 import { getExpenseById, updateExpensesLiquidationStatus } from './ExpenseService';
+import { getCurrentDateISO } from '../utils/dateUtils';
+import * as SQLite from 'expo-sqlite';
 
-// Carga condicional de expo-sqlite para evitar errores en web
-let SQLite: any;
-if (Platform.OS !== 'web') {
-  try {
-    SQLite = require('expo-sqlite');
-  } catch (e) {
-    console.error("Error al cargar expo-sqlite. La base de datos no funcionará en móvil.", e);
-  }
-}
-
-const db = SQLite?.openDatabaseSync('easygastos.db');
+// Base de datos SQLite
+let db: SQLite.SQLiteDatabase | null = null;
+let isDBInitialized = false;
+let initPromise: Promise<void> | null = null;
 
 /**
  * Inicializa la tabla de liquidaciones en SQLite
  */
-export const initLiquidationsTable = () => {
-  try {
-    db.execSync(`
-      CREATE TABLE IF NOT EXISTS liquidations (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        employeeName TEXT NOT NULL,
-        createdDate TEXT NOT NULL,
-        expenseIds TEXT NOT NULL,
-        totalAmount REAL NOT NULL,
-        status TEXT NOT NULL,
-        managerComments TEXT,
-        submittedDate TEXT,
-        approvedDate TEXT,
-        rejectedDate TEXT,
-        synced INTEGER DEFAULT 0
-      )
-    `);
-    console.log('✅ Tabla liquidations inicializada correctamente');
-  } catch (error) {
-    console.error('❌ Error inicializando tabla liquidations:', error);
-    throw error;
+export const initLiquidationsTable = async (): Promise<void> => {
+  // Si ya está inicializada, devolver inmediatamente
+  if (isDBInitialized) {
+    console.log("✅ LiquidationService: BD ya inicializada");
+    return;
   }
+  
+  // Si hay una inicialización en progreso, esperar
+  if (initPromise) {
+    console.log("⏳ LiquidationService: Esperando inicialización en progreso...");
+    return initPromise;
+  }
+  
+  // Crear nueva promesa de inicialización
+  initPromise = (async () => {
+    if (Platform.OS === 'web') {
+      console.log("⚠️ LiquidationService: Plataforma web, no se usa SQLite");
+      isDBInitialized = true;
+      return;
+    }
+    
+    try {
+      console.log("🗄️ LiquidationService: Inicializando tabla liquidations...");
+      db = await SQLite.openDatabaseAsync('easygastos.db');
+      
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS liquidations (
+          id TEXT PRIMARY KEY,
+          userId TEXT NOT NULL,
+          employeeName TEXT NOT NULL,
+          createdDate TEXT NOT NULL,
+          expenseIds TEXT NOT NULL,
+          totalAmount REAL NOT NULL,
+          status TEXT NOT NULL,
+          managerEmail TEXT,
+          managerComments TEXT,
+          submittedDate TEXT,
+          approvedDate TEXT,
+          rejectedDate TEXT,
+          approverEmail TEXT,
+          rejectedBy TEXT,
+          csvGeneratedAt TEXT,
+          csvGeneratedBy TEXT,
+          synced INTEGER DEFAULT 0
+        )
+      `);
+      
+      console.log('✅ LiquidationService: Tabla liquidations inicializada correctamente');
+      isDBInitialized = true;
+    } catch (error) {
+      console.error('❌ LiquidationService: Error inicializando tabla liquidations:', error);
+      isDBInitialized = false;
+      initPromise = null;
+      throw error;
+    }
+  })();
+  
+  return initPromise;
 };
 
 /**
@@ -57,6 +87,12 @@ export const createLiquidation = async (
 ): Promise<Liquidation> => {
   try {
     console.log('📝 LiquidationService: Creando liquidación...', dto);
+
+    // Asegurar que la BD está inicializada
+    if (!isDBInitialized && Platform.OS !== 'web') {
+      console.log("⚠️ LiquidationService.createLiquidation: BD no inicializada, inicializando ahora...");
+      await initLiquidationsTable();
+    }
 
     // Validar que hay gastos seleccionados
     if (!dto.expenseIds || dto.expenseIds.length === 0) {
@@ -76,39 +112,42 @@ export const createLiquidation = async (
       id: Date.now().toString(),
       userId: dto.userId,
       employeeName: dto.employeeName,
-      createdDate: new Date().toISOString().split('T')[0],
+      createdDate: getCurrentDateISO(),
       expenseIds: dto.expenseIds,
       totalAmount,
-      status: 'draft'
+      status: 'draft',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
     };
 
+    if (!db) throw new Error("La base de datos no está inicializada.");
+
     // Insertar en SQLite
-    const stmt = db.prepareSync(`
-      INSERT INTO liquidations (
+    await db.runAsync(
+      `INSERT INTO liquidations (
         id, userId, employeeName, createdDate, expenseIds, 
         totalAmount, status, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-    `);
-
-    stmt.executeSync([
-      liquidation.id,
-      liquidation.userId,
-      liquidation.employeeName,
-      liquidation.createdDate,
-      JSON.stringify(liquidation.expenseIds),
-      liquidation.totalAmount,
-      liquidation.status
-    ]);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+      [
+        liquidation.id,
+        liquidation.userId,
+        liquidation.employeeName,
+        liquidation.createdDate,
+        JSON.stringify(liquidation.expenseIds),
+        liquidation.totalAmount,
+        liquidation.status
+      ]
+    );
 
     // Actualizar el estado de los gastos a 'in_liquidation'
     await updateExpensesLiquidationStatus(dto.expenseIds, 'in_liquidation');
     
     // También actualizar el campo liquidationId de cada gasto
     for (const expenseId of dto.expenseIds) {
-      const updateStmt = db.prepareSync(`
-        UPDATE expenses SET liquidationId = ?, needsSync = 1 WHERE id = ?
-      `);
-      updateStmt.executeSync([liquidation.id, expenseId]);
+      await db.runAsync(
+        `UPDATE expenses SET liquidationId = ?, needsSync = 1 WHERE id = ?`,
+        [liquidation.id, expenseId]
+      );
     }
 
     console.log('✅ Liquidación creada:', liquidation.id);
@@ -125,11 +164,17 @@ export const createLiquidation = async (
  */
 export const getLiquidations = async (userId: string): Promise<Liquidation[]> => {
   try {
-    const result = db.getAllSync(`
-      SELECT * FROM liquidations 
-      WHERE userId = ?
-      ORDER BY createdDate DESC
-    `, [userId]);
+    if (!db) {
+      console.warn('⚠️ LiquidationService: DB no inicializada');
+      return [];
+    }
+    
+    const result = await db.getAllAsync<any>(
+      `SELECT * FROM liquidations 
+       WHERE userId = ?
+       ORDER BY createdDate DESC`,
+      [userId]
+    );
 
     const liquidations: Liquidation[] = result.map((row: any) => ({
       id: row.id,
@@ -154,13 +199,19 @@ export const getLiquidations = async (userId: string): Promise<Liquidation[]> =>
 };
 
 /**
- * Obtiene una liquidación por ID
+ * Obtiene una liquidación por ID (validando que pertenece al usuario)
  */
-export const getLiquidationById = async (id: string): Promise<Liquidation | null> => {
+export const getLiquidationById = async (id: string, userId: string): Promise<Liquidation | null> => {
   try {
-    const result = db.getFirstSync(`
-      SELECT * FROM liquidations WHERE id = ?
-    `, [id]);
+    if (!db) {
+      console.warn('⚠️ LiquidationService: DB no inicializada');
+      return null;
+    }
+    
+    const result = await db.getFirstAsync<any>(
+      `SELECT * FROM liquidations WHERE id = ? AND userId = ?`,
+      [id, userId]
+    );
 
     if (!result) {
       return null;
@@ -192,10 +243,13 @@ export const getLiquidationById = async (id: string): Promise<Liquidation | null
  */
 export const addExpenseToLiquidation = async (
   liquidationId: string,
-  expenseId: string
+  expenseId: string,
+  userId: string
 ): Promise<boolean> => {
   try {
-    const liquidation = await getLiquidationById(liquidationId);
+    if (!db) throw new Error("La base de datos no está inicializada.");
+    
+    const liquidation = await getLiquidationById(liquidationId, userId);
     
     if (!liquidation) {
       throw new Error('Liquidación no encontrada');
@@ -220,13 +274,19 @@ export const addExpenseToLiquidation = async (
     const newExpenseIds = [...liquidation.expenseIds, expenseId];
     const newTotal = liquidation.totalAmount + expense.amount;
 
-    db.runSync(`
-      UPDATE liquidations 
-      SET expenseIds = ?, totalAmount = ?, synced = 0
-      WHERE id = ?
-    `, [JSON.stringify(newExpenseIds), newTotal, liquidationId]);
+    await db.runAsync(
+      `UPDATE liquidations 
+       SET expenseIds = ?, totalAmount = ?, synced = 0
+       WHERE id = ?`,
+      [JSON.stringify(newExpenseIds), newTotal, liquidationId]
+    );
+
+    // Actualizar el estado del gasto a 'in_liquidation' y asignarle la liquidationId
+    await updateExpensesLiquidationStatus([expenseId], 'in_liquidation');
+    await db.runAsync(`UPDATE expenses SET liquidationId = ?, needsSync = 1 WHERE id = ?`, [liquidationId, expenseId]);
 
     console.log('✅ Gasto agregado a la liquidación');
+    console.log('✅ Gasto marcado como "in_liquidation"');
     return true;
   } catch (error) {
     console.error('❌ Error agregando gasto a liquidación:', error);
@@ -239,10 +299,13 @@ export const addExpenseToLiquidation = async (
  */
 export const removeExpenseFromLiquidation = async (
   liquidationId: string,
-  expenseId: string
+  expenseId: string,
+  userId: string
 ): Promise<boolean> => {
   try {
-    const liquidation = await getLiquidationById(liquidationId);
+    if (!db) throw new Error("La base de datos no está inicializada.");
+    
+    const liquidation = await getLiquidationById(liquidationId, userId);
     
     if (!liquidation) {
       throw new Error('Liquidación no encontrada');
@@ -269,18 +332,30 @@ export const removeExpenseFromLiquidation = async (
 
     // Si ya no hay gastos, eliminar la liquidación
     if (newExpenseIds.length === 0) {
-      db.runSync(`DELETE FROM liquidations WHERE id = ?`, [liquidationId]);
+      await db.runAsync(`DELETE FROM liquidations WHERE id = ?`, [liquidationId]);
+      
+      // Regresar el gasto a estado 'draft' y limpiar liquidationId
+      await updateExpensesLiquidationStatus([expenseId], 'draft');
+      await db.runAsync(`UPDATE expenses SET liquidationId = NULL, needsSync = 1 WHERE id = ?`, [expenseId]);
+      
       console.log('✅ Liquidación eliminada (sin gastos)');
+      console.log('✅ Gasto regresado a estado "draft"');
       return true;
     }
 
-    db.runSync(`
-      UPDATE liquidations 
-      SET expenseIds = ?, totalAmount = ?, synced = 0
-      WHERE id = ?
-    `, [JSON.stringify(newExpenseIds), newTotal, liquidationId]);
+    await db.runAsync(
+      `UPDATE liquidations 
+       SET expenseIds = ?, totalAmount = ?, synced = 0
+       WHERE id = ?`,
+      [JSON.stringify(newExpenseIds), newTotal, liquidationId]
+    );
+
+    // Regresar el gasto a estado 'draft' y limpiar liquidationId
+    await updateExpensesLiquidationStatus([expenseId], 'draft');
+    await db.runAsync(`UPDATE expenses SET liquidationId = NULL, needsSync = 1 WHERE id = ?`, [expenseId]);
 
     console.log('✅ Gasto removido de la liquidación');
+    console.log('✅ Gasto regresado a estado "draft"');
     return true;
   } catch (error) {
     console.error('❌ Error removiendo gasto de liquidación:', error);
@@ -292,15 +367,23 @@ export const removeExpenseFromLiquidation = async (
  * Envía una liquidación al jefe para aprobación
  * Cambia el estado a 'submitted' y marca la fecha
  */
-export const submitLiquidation = async (liquidationId: string): Promise<boolean> => {
+export const submitLiquidation = async (liquidationId: string, userId: string): Promise<boolean> => {
   try {
-    const liquidation = await getLiquidationById(liquidationId);
+    if (!db) throw new Error("La base de datos no está inicializada.");
+    
+    const liquidation = await getLiquidationById(liquidationId, userId);
     
     if (!liquidation) {
       throw new Error('Liquidación no encontrada');
     }
 
+    // VALIDACIÓN ESTRICTA: Solo liquidaciones en 'draft' o 'rejected' pueden enviarse
     if (liquidation.status !== 'draft' && liquidation.status !== 'rejected') {
+      if (liquidation.status === 'submitted') {
+        throw new Error('Esta liquidación ya está en revisión. No se puede enviar nuevamente.');
+      } else if (liquidation.status === 'approved') {
+        throw new Error('Esta liquidación ya fue aprobada. No se puede modificar ni reenviar.');
+      }
       throw new Error('Solo se pueden enviar liquidaciones en borrador o rechazadas');
     }
 
@@ -308,13 +391,14 @@ export const submitLiquidation = async (liquidationId: string): Promise<boolean>
       throw new Error('La liquidación debe tener al menos un gasto');
     }
 
-    const submittedDate = new Date().toISOString().split('T')[0];
+    const submittedDate = getCurrentDateISO();
 
-    db.runSync(`
-      UPDATE liquidations 
-      SET status = 'submitted', submittedDate = ?, synced = 0
-      WHERE id = ?
-    `, [submittedDate, liquidationId]);
+    await db.runAsync(
+      `UPDATE liquidations 
+       SET status = 'submitted', submittedDate = ?, synced = 0
+       WHERE id = ?`,
+      [submittedDate, liquidationId]
+    );
 
     console.log('✅ Liquidación enviada al jefe');
     return true;
@@ -326,21 +410,59 @@ export const submitLiquidation = async (liquidationId: string): Promise<boolean>
 
 /**
  * Actualiza el estado de una liquidación (usado por el jefe para aprobar/rechazar)
+ * IMPORTANTE: Solo liquidaciones en estado 'submitted' pueden ser aprobadas/rechazadas
+ * NOTA: Esta función es usada por managers, no valida userId sino que carga la liquidación sin filtro
+ * para permitir que managers accedan a liquidaciones de sus empleados
  */
 export const updateLiquidationStatus = async (
   liquidationId: string,
   status: LiquidationStatus,
-  managerComments?: string
+  managerComments?: string,
+  fromSync: boolean = false
 ): Promise<boolean> => {
   try {
-    const liquidation = await getLiquidationById(liquidationId);
+    if (!db) throw new Error("La base de datos no está inicializada.");
+    
+    // Los managers necesitan acceder a liquidaciones de otros usuarios, así que usamos una consulta sin userId
+    const result = await db.getFirstAsync<any>(
+      `SELECT * FROM liquidations WHERE id = ?`,
+      [liquidationId]
+    );
+    
+    if (!result) {
+      throw new Error('Liquidación no encontrada');
+    }
+    
+    const liquidation: Liquidation = {
+      id: result.id,
+      userId: result.userId,
+      employeeName: result.employeeName,
+      createdDate: result.createdDate,
+      expenseIds: JSON.parse(result.expenseIds),
+      totalAmount: result.totalAmount,
+      status: result.status as LiquidationStatus,
+      managerComments: result.managerComments,
+      submittedDate: result.submittedDate,
+      approvedDate: result.approvedDate,
+      rejectedDate: result.rejectedDate
+    };
     
     if (!liquidation) {
       throw new Error('Liquidación no encontrada');
     }
 
+    // VALIDACIÓN ESTRICTA: Solo liquidaciones 'submitted' pueden cambiar a approved/rejected
+    if (status === 'approved' || status === 'rejected') {
+      if (liquidation.status !== 'submitted') {
+        const currentStatusText = liquidation.status === 'draft' ? 'borrador' :
+                                 liquidation.status === 'approved' ? 'ya aprobada' :
+                                 liquidation.status === 'rejected' ? 'rechazada' : 'desconocido';
+        throw new Error(`No se puede ${status === 'approved' ? 'aprobar' : 'rechazar'} una liquidación en estado "${currentStatusText}". Solo liquidaciones en revisión pueden ser aprobadas o rechazadas.`);
+      }
+    }
+
     let dateField = '';
-    const currentDate = new Date().toISOString().split('T')[0];
+    const currentDate = getCurrentDateISO();
 
     if (status === 'approved') {
       dateField = 'approvedDate';
@@ -348,18 +470,23 @@ export const updateLiquidationStatus = async (
       dateField = 'rejectedDate';
     }
 
+    // Solo marcar synced=0 si es cambio local, NO si viene del servidor
+    const syncValue = fromSync ? 1 : 0;
+    
     if (dateField) {
-      db.runSync(`
-        UPDATE liquidations 
-        SET status = ?, ${dateField} = ?, managerComments = ?, synced = 0
-        WHERE id = ?
-      `, [status, currentDate, managerComments || null, liquidationId]);
+      await db.runAsync(
+        `UPDATE liquidations 
+         SET status = ?, ${dateField} = ?, managerComments = ?, synced = ?
+         WHERE id = ?`,
+        [status, currentDate, managerComments || null, syncValue, liquidationId]
+      );
     } else {
-      db.runSync(`
-        UPDATE liquidations 
-        SET status = ?, managerComments = ?, synced = 0
-        WHERE id = ?
-      `, [status, managerComments || null, liquidationId]);
+      await db.runAsync(
+        `UPDATE liquidations 
+         SET status = ?, managerComments = ?, synced = ?
+         WHERE id = ?`,
+        [status, managerComments || null, syncValue, liquidationId]
+      );
     }
 
     // Actualizar el estado de los gastos según la decisión del jefe
@@ -371,7 +498,7 @@ export const updateLiquidationStatus = async (
       // Si se rechaza → gastos vuelven a 'draft' y se limpia liquidationId
       await updateExpensesLiquidationStatus(liquidation.expenseIds, 'draft');
       for (const expenseId of liquidation.expenseIds) {
-        db.runSync(`UPDATE expenses SET liquidationId = NULL WHERE id = ?`, [expenseId]);
+        await db.runAsync(`UPDATE expenses SET liquidationId = NULL WHERE id = ?`, [expenseId]);
       }
       console.log(`✅ ${liquidation.expenseIds.length} gasto(s) regresados a 'draft'`);
     }
@@ -386,26 +513,32 @@ export const updateLiquidationStatus = async (
 
 /**
  * Elimina una liquidación (solo si está en estado 'draft')
+ * Las liquidaciones en revisión (submitted) o aprobadas/rechazadas NO se pueden eliminar
  */
-export const deleteLiquidation = async (liquidationId: string): Promise<boolean> => {
+export const deleteLiquidation = async (liquidationId: string, userId: string): Promise<boolean> => {
   try {
-    const liquidation = await getLiquidationById(liquidationId);
+    if (!db) throw new Error("La base de datos no está inicializada.");
+    
+    const liquidation = await getLiquidationById(liquidationId, userId);
     
     if (!liquidation) {
       throw new Error('Liquidación no encontrada');
     }
 
+    // VALIDACIÓN ESTRICTA: Solo liquidaciones en 'draft' pueden eliminarse
     if (liquidation.status !== 'draft') {
-      throw new Error('Solo se pueden eliminar liquidaciones en borrador');
+      const statusText = liquidation.status === 'submitted' ? 'en revisión' : 
+                        liquidation.status === 'approved' ? 'aprobada' : 'rechazada';
+      throw new Error(`No se puede eliminar una liquidación ${statusText}. Solo liquidaciones en borrador pueden eliminarse.`);
     }
 
     // Regresar los gastos a estado 'draft' y limpiar liquidationId
     await updateExpensesLiquidationStatus(liquidation.expenseIds, 'draft');
     for (const expenseId of liquidation.expenseIds) {
-      db.runSync(`UPDATE expenses SET liquidationId = NULL WHERE id = ?`, [expenseId]);
+      await db.runAsync(`UPDATE expenses SET liquidationId = NULL WHERE id = ?`, [expenseId]);
     }
 
-    db.runSync(`DELETE FROM liquidations WHERE id = ?`, [liquidationId]);
+    await db.runAsync(`DELETE FROM liquidations WHERE id = ?`, [liquidationId]);
 
     console.log('✅ Liquidación eliminada');
     console.log(`✅ ${liquidation.expenseIds.length} gasto(s) regresados a 'draft'`);
@@ -421,27 +554,71 @@ export const deleteLiquidation = async (liquidationId: string): Promise<boolean>
  */
 export const getLiquidationsNeedingSync = async (userId: string): Promise<Liquidation[]> => {
   try {
-    const result = db.getAllSync(`
-      SELECT * FROM liquidations 
-      WHERE userId = ? AND synced = 0
-      ORDER BY createdDate DESC
-    `, [userId]);
+    if (!db) {
+      console.warn('⚠️ LiquidationService: DB no inicializada');
+      return [];
+    }
+    
+    console.log(`🔍 Buscando liquidaciones pendientes de sincronización para: ${userId}`);
+    
+    const result = await db.getAllAsync<any>(
+      `SELECT * FROM liquidations 
+       WHERE userId = ? AND synced = 0
+       ORDER BY createdDate DESC`,
+      [userId]
+    );
 
-    const liquidations: Liquidation[] = result.map((row: any) => ({
-      id: row.id,
-      userId: row.userId,
-      employeeName: row.employeeName,
-      createdDate: row.createdDate,
-      expenseIds: JSON.parse(row.expenseIds),
-      totalAmount: row.totalAmount,
-      status: row.status as LiquidationStatus,
-      managerComments: row.managerComments,
-      submittedDate: row.submittedDate,
-      approvedDate: row.approvedDate,
-      rejectedDate: row.rejectedDate
-    }));
+    console.log(`📊 Liquidaciones en BD con synced=0: ${result.length}`);
 
-    console.log(`📤 ${liquidations.length} liquidaciones pendientes de sincronizar`);
+    const liquidations: Liquidation[] = [];
+    
+    for (const row of result) {
+      console.log(`📋 Liquidación ${row.id}: synced=${row.synced}, status=${row.status}`);
+      const expenseIds = JSON.parse(row.expenseIds);
+      
+      // CRÍTICO: Verificar que ningún gasto esté anulado antes de sincronizar la liquidación
+      console.log(`🔍 Verificando ${expenseIds.length} gastos de liquidación ${row.id}...`);
+      let hasVoidedExpenses = false;
+      
+      for (const expenseId of expenseIds) {
+        const expenseRow = await db.getFirstAsync<any>(
+          'SELECT expenseStatus, voidedAt FROM expenses WHERE id = ?',
+          [expenseId]
+        );
+        
+        if (expenseRow && expenseRow.expenseStatus === 'voided') {
+          console.warn(`⚠️ Liquidación ${row.id} contiene gasto anulado: ${expenseId}`);
+          console.warn(`⚠️ Esta liquidación NO será sincronizada hasta que se resuelva`);
+          hasVoidedExpenses = true;
+          break;
+        }
+      }
+      
+      // Solo incluir liquidaciones que NO tengan gastos anulados
+      if (!hasVoidedExpenses) {
+        liquidations.push({
+          id: row.id,
+          userId: row.userId,
+          employeeName: row.employeeName,
+          createdDate: row.createdDate,
+          expenseIds: expenseIds,
+          totalAmount: row.totalAmount,
+          status: row.status as LiquidationStatus,
+          managerComments: row.managerComments,
+          submittedDate: row.submittedDate,
+          approvedDate: row.approvedDate,
+          rejectedDate: row.rejectedDate
+        });
+        console.log(`✅ Liquidación ${row.id} incluida para sincronización`);
+      } else {
+        // IMPORTANTE: Si la liquidación tiene gastos anulados, marcarla como sincronizada
+        // para que no siga intentando sincronizarse indefinidamente
+        console.warn(`⚠️ Liquidación ${row.id} tiene gastos anulados, marcando como sincronizada para evitar reintentos`);
+        await markLiquidationAsSynced(row.id);
+      }
+    }
+
+    console.log(`📤 ${liquidations.length} liquidaciones válidas pendientes de sincronizar`);
     return liquidations;
   } catch (error) {
     console.error('❌ Error obteniendo liquidaciones pendientes:', error);
@@ -454,11 +631,23 @@ export const getLiquidationsNeedingSync = async (userId: string): Promise<Liquid
  */
 export const markLiquidationAsSynced = async (liquidationId: string): Promise<void> => {
   try {
-    db.runSync(`
-      UPDATE liquidations SET synced = 1 WHERE id = ?
-    `, [liquidationId]);
+    if (!db) throw new Error("La base de datos no está inicializada.");
     
-    console.log(`✅ Liquidación ${liquidationId} marcada como sincronizada`);
+    console.log(`🔄 Marcando liquidación ${liquidationId} como sincronizada...`);
+    
+    const result = await db.runAsync(
+      `UPDATE liquidations SET synced = 1 WHERE id = ?`,
+      [liquidationId]
+    );
+    
+    console.log(`✅ Liquidación ${liquidationId} marcada como sincronizada (rows affected: ${result.changes})`);
+    
+    // Verificar que se actualizó
+    const verification = await db.getFirstAsync<any>(
+      'SELECT synced FROM liquidations WHERE id = ?',
+      [liquidationId]
+    );
+    console.log(`🔍 Verificación - Liquidación ${liquidationId}: synced=${verification?.synced}`);
   } catch (error) {
     console.error('❌ Error marcando liquidación como sincronizada:', error);
     throw error;
@@ -469,9 +658,9 @@ export const markLiquidationAsSynced = async (liquidationId: string): Promise<vo
  * Genera datos CSV para una liquidación aprobada
  * Retorna un array de objetos con los datos de cada gasto
  */
-export const generateCSVData = async (liquidationId: string): Promise<any[]> => {
+export const generateCSVData = async (liquidationId: string, userId: string): Promise<any[]> => {
   try {
-    const liquidation = await getLiquidationById(liquidationId);
+    const liquidation = await getLiquidationById(liquidationId, userId);
     
     if (!liquidation) {
       throw new Error('Liquidación no encontrada');
@@ -531,5 +720,6 @@ export const LiquidationService = {
   deleteLiquidation,
   getLiquidationsNeedingSync,
   markLiquidationAsSynced,
-  generateCSVData
+  generateCSVData,
+  getDB: () => db
 };

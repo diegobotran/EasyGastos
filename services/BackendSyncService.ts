@@ -691,6 +691,9 @@ export class BackendSyncService {
       
       const localLiquidations = await LiquidationService.getLiquidationsNeedingSync(userEmail);
       console.log('📁 BackendSync: Liquidaciones que necesitan sincronización:', localLiquidations.length);
+      if (localLiquidations.length > 0) {
+        console.log('📋 BackendSync: IDs pendientes:', localLiquidations.map(l => `${l.id} (synced=${l.synced})`).join(', '));
+      }
       
       if (localLiquidations.length === 0) {
         console.log('✅ BackendSync: No hay liquidaciones pendientes de sincronización');
@@ -1073,10 +1076,12 @@ export class BackendSyncService {
             const newStatus = liquidation.status;
             
             // Actualizar el estado de la liquidación usando los parámetros correctos
+            // fromSync=true para NO marcar synced=0 (ya viene sincronizada del servidor)
             await LiquidationService.updateLiquidationStatus(
               liquidation.id,
               liquidation.status,
-              liquidation.managerComments || undefined
+              liquidation.managerComments || undefined,
+              true // fromSync=true
             );
             
             // NOTIFICACIÓN: Si cambió a 'approved' o 'rejected', notificar al usuario

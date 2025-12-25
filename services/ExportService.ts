@@ -14,6 +14,11 @@ export const generateLiquidationCSV = async (
   try {
     console.log('📄 Generando CSV de liquidación:', liquidation.id);
 
+    // Validación: SOLO liquidaciones aprobadas pueden generar CSV
+    if (liquidation.status !== 'approved') {
+      throw new Error(`No se puede generar CSV. La liquidación debe estar APROBADA (estado actual: ${liquidation.status})`);
+    }
+
     // Obtener datos del usuario
     const employeeName = liquidation.employeeName || 'N/A';
     const employeeCode = liquidation.userId?.slice(-6) || 'N/A';
@@ -126,6 +131,11 @@ export const generateDetailedLiquidationCSV = async (
 ): Promise<void> => {
   try {
     console.log('📄 Generando CSV detallado de liquidación:', liquidation.id);
+
+    // Validación: SOLO liquidaciones aprobadas pueden generar CSV
+    if (liquidation.status !== 'approved') {
+      throw new Error(`No se puede generar CSV. La liquidación debe estar APROBADA (estado actual: ${liquidation.status})`);
+    }
 
     let csvContent = '';
 

@@ -1,31 +1,45 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { Category } from '../models/Category';
+import * as SQLite from 'expo-sqlite';
 
-// Carga condicional de expo-sqlite para evitar errores en web
-let SQLite;
-if (Platform.OS !== 'web') {
-  try {
-    SQLite = require('expo-sqlite');
-  } catch (e) {
-    console.error("Error al cargar expo-sqlite. La base de datos no funcionará en móvil.", e);
-  }
-}
+// Base de datos SQLite
+let db: SQLite.SQLiteDatabase | null = null;
 
-const db = SQLite ? SQLite.openDatabase('easygastos.db') : null;
+// Flag para rastrear si la BD está inicializada
+let isDBInitialized = false;
+let initPromise: Promise<void> | null = null;
 
 /**
  * Inicializa la tabla de categorías en la base de datos si no existe.
  */
-export const initDB = () => {
-  return new Promise<void>((resolve, reject) => {
-    if (!db) {
-      console.log("DB no disponible, saltando inicialización de tabla categories.");
-      return resolve();
+export const initDB = async (): Promise<void> => {
+  // Si ya está inicializada, devolver inmediatamente
+  if (isDBInitialized) {
+    console.log("✅ CategoryService: BD ya inicializada");
+    return;
+  }
+  
+  // Si hay una inicialización en progreso, esperar
+  if (initPromise) {
+    console.log("⏳ CategoryService: Esperando inicialización en progreso...");
+    return initPromise;
+  }
+  
+  // Crear nueva promesa de inicialización
+  initPromise = (async () => {
+    if (Platform.OS === 'web') {
+      console.log("⚠️ CategoryService: Plataforma web, usando AsyncStorage");
+      isDBInitialized = true;
+      return;
     }
-    db.transaction((tx: any) => {
-      tx.executeSql(
-        `CREATE TABLE IF NOT EXISTS categories (
+    
+    try {
+      console.log("🗄️ CategoryService: Inicializando tabla categories...");
+      db = await SQLite.openDatabaseAsync('easygastos.db');
+      
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS categories (
           id TEXT PRIMARY KEY NOT NULL,
           userEmail TEXT NOT NULL,
           name TEXT NOT NULL,
@@ -33,23 +47,25 @@ export const initDB = () => {
           centro TEXT,
           cuenta TEXT,
           ordenco TEXT,
+          createdAt INTEGER,
+          updatedAt INTEGER,
           needsSync BOOLEAN NOT NULL DEFAULT 1,
           lastSync INTEGER,
           serverUpdatedAt INTEGER
-        );`,
-        [],
-        () => {
-          console.log("Tabla 'categories' verificada/creada con éxito.");
-          resolve();
-        },
-        (_: any, error: any): boolean => {
-          console.error("Error al crear la tabla 'categories'", error);
-          reject(error);
-          return false;
-        }
-      );
-    });
-  });
+        );
+      `);
+      
+      console.log("✅ CategoryService: Tabla 'categories' verificada/creada con éxito.");
+      isDBInitialized = true;
+    } catch (error) {
+      console.error("❌ CategoryService: Error al crear la tabla 'categories'", error);
+      isDBInitialized = false;
+      initPromise = null;
+      throw error;
+    }
+  })();
+  
+  return initPromise;
 };
 
 const STORAGE_KEY_PREFIX = '@EasyGastos_Categories_';
@@ -66,7 +82,16 @@ export const addCategory = async (category: Category, userEmail: string): Promis
         needsSync: category.needsSync
     });
     
-    // Asegurar que la nueva categoría necesita sincronización
+    // Asegurar que la BD está inicializada antes de intentar guardar
+    if (!isDBInitialized && Platform.OS !== 'web') {
+        console.log("⚠️ CategoryService.addCategory: BD no inicializada, inicializando ahora...");
+        await initDB();
+    }
+    
+    // Asegurar que la nueva categoría necesita sincronización y agregar timestamps
+    const now = Date.now();
+    category.createdAt = now;
+    category.updatedAt = now;
     category.needsSync = true;
     category.lastSync = undefined;
     category.serverUpdatedAt = undefined;
@@ -81,34 +106,26 @@ export const addCategory = async (category: Category, userEmail: string): Promis
         console.log('💾 CategoryService: Categoría guardada en AsyncStorage exitosamente');
     } else {
         console.log('💾 CategoryService: Guardando en SQLite');
-        if (!db) return Promise.reject("La base de datos no está inicializada.");
-        return new Promise((resolve, reject) => {
-            db.transaction((tx: any) => {
-                tx.executeSql(
-                    `INSERT INTO categories 
-                     (id, userEmail, name, icon, centro, cuenta, ordenco, needsSync, lastSync, serverUpdatedAt) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL)`,
-                    [
-                        category.id, 
-                        userEmail, 
-                        category.name, 
-                        category.icon || null,
-                        category.centro || null,
-                        category.cuenta || null,
-                        category.ordenco || null
-                    ],
-                    () => {
-                        console.log('💾 CategoryService: Categoría guardada en SQLite exitosamente');
-                        resolve();
-                    },
-                    (_: any, error: any): boolean => { 
-                        console.error('❌ CategoryService: Error guardando en SQLite:', error);
-                        reject(error); 
-                        return false; 
-                    }
-                );
-            });
-        });
+        if (!db) throw new Error("La base de datos no está inicializada.");
+        
+        await db.runAsync(
+            `INSERT INTO categories 
+             (id, userEmail, name, icon, centro, cuenta, ordenco, createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL)`,
+            [
+                category.id, 
+                userEmail, 
+                category.name, 
+                category.icon || null,
+                category.centro || null,
+                category.cuenta || null,
+                category.ordenco || null,
+                category.createdAt || Date.now(),
+                category.updatedAt || Date.now()
+            ]
+        );
+        
+        console.log('💾 CategoryService: Categoría guardada en SQLite exitosamente');
     }
 };
 
@@ -125,24 +142,15 @@ export const getCategories = async (userEmail: string): Promise<Category[]> => {
         console.log('📂 CategoryService: AsyncStorage - Categorías encontradas:', categories.length);
         return categories;
     } else {
-        if (!db) return Promise.reject("La base de datos no está inicializada.");
-        return new Promise((resolve, reject) => {
-            db.transaction((tx: any) => {
-                tx.executeSql(
-                    'SELECT * FROM categories WHERE userEmail = ?',
-                    [userEmail],
-                    (_: any, { rows }: any) => {
-                        console.log('📂 CategoryService: SQLite - Categorías encontradas:', rows._array.length);
-                        resolve(rows._array);
-                    },
-                    (_: any, error: any): boolean => { 
-                        console.error('❌ CategoryService: Error obteniendo categorías de SQLite:', error);
-                        reject(error); 
-                        return false; 
-                    }
-                );
-            });
-        });
+        if (!db) throw new Error("La base de datos no está inicializada.");
+        
+        const categories = await db.getAllAsync<Category>(
+            'SELECT * FROM categories WHERE userEmail = ?',
+            [userEmail]
+        );
+        
+        console.log('📂 CategoryService: SQLite - Categorías encontradas:', categories.length);
+        return categories;
     }
 };
 
@@ -150,6 +158,10 @@ export const getCategories = async (userEmail: string): Promise<Category[]> => {
  * Actualiza una categoría existente.
  */
 export const updateCategory = async (category: Category, userEmail: string): Promise<void> => {
+  // Actualizar timestamp de modificación
+  category.updatedAt = Date.now();
+  category.needsSync = true;
+
   if (Platform.OS === 'web' || !db) {
         const key = `${STORAGE_KEY_PREFIX}${userEmail}`;
         let items = await getCategories(userEmail);
@@ -159,17 +171,21 @@ export const updateCategory = async (category: Category, userEmail: string): Pro
             await AsyncStorage.setItem(key, JSON.stringify(items));
         }
     } else {
-    if (!db) return Promise.reject("La base de datos no está inicializada.");
-        return new Promise((resolve, reject) => {
-            db.transaction((tx: any) => {
-                tx.executeSql(
-                    'UPDATE categories SET name = ?, icon = ? WHERE id = ? AND userEmail = ?',
-                    [category.name, category.icon, category.id, userEmail],
-                    () => resolve(),
-                    (_: any, error: any): boolean => { reject(error); return false; }
-                );
-            });
-        });
+        if (!db) throw new Error("La base de datos no está inicializada.");
+        
+        await db.runAsync(
+            'UPDATE categories SET name = ?, icon = ?, centro = ?, cuenta = ?, ordenco = ?, updatedAt = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
+            [
+              category.name, 
+              category.icon || null, 
+              category.centro || null,
+              category.cuenta || null,
+              category.ordenco || null,
+              category.updatedAt,
+              category.id, 
+              userEmail
+            ]
+        );
     }
 };
 
@@ -183,17 +199,12 @@ export const deleteCategory = async (id: string, userEmail: string): Promise<voi
         const filtered = items.filter(i => i.id !== id);
         await AsyncStorage.setItem(key, JSON.stringify(filtered));
     } else {
-    if (!db) return Promise.reject("La base de datos no está inicializada.");
-        return new Promise((resolve, reject) => {
-            db.transaction((tx: any) => {
-                tx.executeSql(
-                    'DELETE FROM categories WHERE id = ? AND userEmail = ?',
-                    [id, userEmail],
-                    () => resolve(),
-                    (_: any, error: any): boolean => { reject(error); return false; }
-                );
-            });
-        });
+        if (!db) throw new Error("La base de datos no está inicializada.");
+        
+        await db.runAsync(
+            'DELETE FROM categories WHERE id = ? AND userEmail = ?',
+            [id, userEmail]
+        );
     }
 };
 
@@ -213,40 +224,28 @@ export const getCategoriesNeedingSync = async (userEmail: string): Promise<Categ
     console.log('🔍 CategoryService: AsyncStorage - Categorías que necesitan sync:', needingSync.length, needingSync.map(c => c.name));
     return needingSync;
   } else {
-    if (!db) return Promise.reject("La base de datos no está inicializada.");
-    return new Promise((resolve, reject) => {
-      db.transaction((tx: any) => {
-        tx.executeSql(
-          'SELECT * FROM categories WHERE userEmail = ? AND needsSync = 1',
-          [userEmail],
-          (_: any, results: any) => {
-            const categories: Category[] = [];
-            for (let i = 0; i < results.rows.length; i++) {
-              const row = results.rows.item(i);
-              categories.push({
-                id: row.id,
-                name: row.name,
-                icon: row.icon,
-                centro: row.centro,
-                cuenta: row.cuenta,
-                ordenco: row.ordenco,
-                email: row.userEmail,
-                needsSync: Boolean(row.needsSync),
-                lastSync: row.lastSync,
-                serverUpdatedAt: row.serverUpdatedAt
-              });
-            }
-            console.log('🔍 CategoryService: SQLite - Categorías que necesitan sync:', categories.length, categories.map(c => c.name));
-            resolve(categories);
-          },
-          (_: any, error: any): boolean => {
-            console.error("Error al obtener categorías que necesitan sincronización", error);
-            reject(error);
-            return false;
-          }
-        );
-      });
-    });
+    if (!db) throw new Error("La base de datos no está inicializada.");
+    
+    const rows = await db.getAllAsync<any>(
+      'SELECT * FROM categories WHERE userEmail = ? AND needsSync = 1',
+      [userEmail]
+    );
+    
+    const categories: Category[] = rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      icon: row.icon,
+      centro: row.centro,
+      cuenta: row.cuenta,
+      ordenco: row.ordenco,
+      email: row.userEmail,
+      needsSync: Boolean(row.needsSync),
+      lastSync: row.lastSync,
+      serverUpdatedAt: row.serverUpdatedAt
+    }));
+    
+    console.log('🔍 CategoryService: SQLite - Categorías que necesitan sync:', categories.length, categories.map(c => c.name));
+    return categories;
   }
 };
 
@@ -275,21 +274,12 @@ export const markCategoryAsSynced = async (categoryId: string): Promise<void> =>
       }
     }
   } else {
-    if (!db) return Promise.reject("La base de datos no está inicializada.");
-    return new Promise((resolve, reject) => {
-      db.transaction((tx: any) => {
-        tx.executeSql(
-          'UPDATE categories SET needsSync = 0, lastSync = ? WHERE id = ?',
-          [now, categoryId],
-          () => resolve(),
-          (_: any, error: any): boolean => {
-            console.error("Error al marcar categoría como sincronizada", error);
-            reject(error);
-            return false;
-          }
-        );
-      });
-    });
+    if (!db) throw new Error("La base de datos no está inicializada.");
+    
+    await db.runAsync(
+      'UPDATE categories SET needsSync = 0, lastSync = ? WHERE id = ?',
+      [now, categoryId]
+    );
   }
 };
 
@@ -314,32 +304,23 @@ export const upsertCategoryFromServer = async (serverCategory: Category): Promis
     
     await AsyncStorage.setItem(key, JSON.stringify(categories));
   } else {
-    if (!db) return Promise.reject("La base de datos no está inicializada.");
-    return new Promise((resolve, reject) => {
-      db.transaction((tx: any) => {
-        tx.executeSql(
-          `INSERT OR REPLACE INTO categories 
-           (id, userEmail, name, icon, centro, cuenta, ordenco, needsSync, lastSync, serverUpdatedAt) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-          [
-            serverCategory.id,
-            serverCategory.email,
-            serverCategory.name,
-            serverCategory.icon || null,
-            serverCategory.centro || null,
-            serverCategory.cuenta || null,
-            serverCategory.ordenco || null,
-            Date.now(),
-            serverCategory.serverUpdatedAt || Date.now()
-          ],
-          () => resolve(),
-          (_: any, error: any): boolean => {
-            console.error("Error al insertar/actualizar categoría desde servidor", error);
-            reject(error);
-            return false;
-          }
-        );
-      });
-    });
+    if (!db) throw new Error("La base de datos no está inicializada.");
+    
+    await db.runAsync(
+      `INSERT OR REPLACE INTO categories 
+       (id, userEmail, name, icon, centro, cuenta, ordenco, needsSync, lastSync, serverUpdatedAt) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      [
+        serverCategory.id,
+        serverCategory.email,
+        serverCategory.name,
+        serverCategory.icon || null,
+        serverCategory.centro || null,
+        serverCategory.cuenta || null,
+        serverCategory.ordenco || null,
+        Date.now(),
+        serverCategory.serverUpdatedAt || Date.now()
+      ]
+    );
   }
 };
