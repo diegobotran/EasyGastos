@@ -39,16 +39,22 @@ export default function ManagerApprovalScreen() {
   const [comments, setComments] = useState('');
 
   const loadPendingLiquidations = async () => {
-    if (!user?.email) return;
+    if (!user?.email) {
+      console.error('❌ ManagerApproval: No hay usuario o email');
+      return;
+    }
 
     try {
       setIsLoading(true);
+      
+      console.log('🔑 ManagerApproval: Obteniendo token para:', user.email);
+      console.log('🔑 ManagerApproval: PIN disponible:', user.pin ? 'SÍ' : 'NO');
       
       // Primero obtener el token de autenticación
       const loginResult = await BackendSyncService.loginAndGetToken(user.email, user.pin || '');
       
       if (!loginResult.success || !loginResult.token) {
-        console.error('Error obteniendo token:', loginResult.error);
+        console.error('❌ ManagerApproval: Error obteniendo token:', loginResult.error);
         setIsOffline(true);
         setPendingLiquidations([]);
         setSummary({ pendingCount: 0, totalAmount: 0, employeeCount: 0 });
@@ -57,10 +63,15 @@ export default function ManagerApprovalScreen() {
         return;
       }
 
+      console.log('✅ ManagerApproval: Token obtenido exitosamente');
+      
       // Obtener liquidaciones pendientes para este manager
+      console.log('📋 ManagerApproval: Solicitando liquidaciones pendientes...');
       const liquidations = await BackendSyncService.getPendingLiquidationsForManager(user.email, loginResult.token);
       
-      if (liquidations && liquidations.length >= 0) {
+      console.log('📋 ManagerApproval: Liquidaciones recibidas:', liquidations?.length || 0);
+      
+      if (liquidations && Array.isArray(liquidations)) {
         // Conectado exitosamente
         setIsOffline(false);
         setPendingLiquidations(liquidations);
@@ -75,8 +86,10 @@ export default function ManagerApprovalScreen() {
           employeeCount: uniqueEmployees,
           departmentName: user.department
         });
+        
+        console.log(`✅ ManagerApproval: ${liquidations.length} liquidaciones cargadas`);
       } else {
-        console.error('Error obteniendo liquidaciones');
+        console.error('❌ ManagerApproval: Respuesta inválida del servidor');
         setIsOffline(true);
         setPendingLiquidations([]);
         setSummary({ pendingCount: 0, totalAmount: 0, employeeCount: 0 });

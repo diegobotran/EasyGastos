@@ -7,6 +7,7 @@ import * as CategoryService from '../services/CategoryService';
 import * as ExpenseService from '../services/ExpenseService';
 import * as NotificationService from '../services/NotificationService';
 import { reloadBackendURL } from '../config/backend';
+import { AuthProvider } from '../context/AuthContext';
 
 // Mantener el splash visible mientras carga la app
 SplashScreen.preventAutoHideAsync();
@@ -141,6 +142,7 @@ export default function RootLayoutNav() {
   // While the check is running, we can show a loading screen or return null.
   // Returning the Stack directly is also fine as the redirect is fast.
   return (
+    <AuthProvider>
       <Stack>
         <Stack.Screen name="setup" options={{ headerShown: false }} />
         <Stack.Screen name="unlock" options={{ headerShown: false }} />
@@ -152,6 +154,8 @@ export default function RootLayoutNav() {
           headerShown: true // Make sure the header is visible
         }} 
       />
+      <Stack.Screen name="manager-approval" options={{ title: 'Aprobación de Liquidaciones' }} />
       </Stack>
+    </AuthProvider>
   );
 }
