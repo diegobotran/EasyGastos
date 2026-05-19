@@ -171,6 +171,25 @@ export const useManagerSync = (options: UseManagerSyncOptions = {}) => {
         }
       }
 
+      // IMPORTANTE: TODOS los usuarios (managers y empleados) deben sincronizar sus liquidaciones propias
+      // Esto permite que los empleados vean cuando sus liquidaciones fueron aprobadas/rechazadas
+      if (authTokenRef.current) {
+        console.log('📥 ManagerSync: Descargando liquidaciones propias del usuario...');
+        const userLiquidationsResult = await BackendSyncService.downloadLiquidationsFromBackend(
+          user.email,
+          authTokenRef.current
+        );
+
+        if (userLiquidationsResult.success) {
+          console.log('✅ ManagerSync: Liquidaciones del usuario sincronizadas -', userLiquidationsResult.count);
+          if (userLiquidationsResult.count > 0) {
+            console.log('📢 ManagerSync: El usuario tiene', userLiquidationsResult.count, 'liquidaciones actualizadas');
+          }
+        } else {
+          console.log('⚠️ ManagerSync: Error sincronizando liquidaciones del usuario:', userLiquidationsResult.error);
+        }
+      }
+
       console.log('🔄 ManagerSync: ========== FIN SINCRONIZACIÓN AUTOMÁTICA ==========');
     } catch (error) {
       console.error('🚨 ManagerSync: Error en sincronización automática:', error);

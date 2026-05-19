@@ -27,6 +27,7 @@ const validateExpense = [
   body('notes').optional().trim(),
   body('noinvoice').optional().trim(),
   body('serie').optional().trim(),
+  body('uuid').optional().trim(), // UUID de factura FEL
   body('centro').optional().trim(),
   body('cuenta').optional().trim(),
   body('ordenco').optional().trim(),

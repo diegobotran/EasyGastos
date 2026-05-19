@@ -421,6 +421,16 @@ export default function ExpensesScreen() {
           contentContainerStyle={styles.listContent}
         />
       )}
+
+      {/* Botón flotante para chat con IA */}
+      {!liquidationMode && (
+        <TouchableOpacity 
+          style={styles.floatingChatButton}
+          onPress={() => router.push('../expense-chat')}
+        >
+          <Ionicons name="chatbubbles" size={28} color="white" />
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -660,5 +670,21 @@ const styles = StyleSheet.create({
     color: '#64748b',
     textAlign: 'center',
     marginTop: 8,
+  },
+  floatingChatButton: {
+    position: 'absolute',
+    right: 20,
+    bottom: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#f59e0b',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 8,
   },
 });

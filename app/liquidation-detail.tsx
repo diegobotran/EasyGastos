@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -30,6 +31,7 @@ export default function LiquidationDetailScreen() {
   const [userEmail, setUserEmail] = useState('');
   const [showAddExpenseModal, setShowAddExpenseModal] = useState(false);
   const [availableExpenses, setAvailableExpenses] = useState<Expense[]>([]);
+  const [employeeComments, setEmployeeComments] = useState('');
 
   const liquidationId = params.liquidationId as string;
 
@@ -155,14 +157,25 @@ export default function LiquidationDetailScreen() {
   const handleSubmitToManager = async () => {
     if (!liquidation) return;
 
-    Alert.alert(
-      'Enviar al Jefe',
-      `¿Desea enviar esta liquidación al jefe?
+    // Preparar mensaje con las notas del empleado si existen
+    let alertMessage = `¿Desea enviar esta liquidación al jefe?
 
 Total: Q${liquidation.totalAmount.toFixed(2)}
-Gastos: ${expenses.length}
+Gastos: ${expenses.length}`;
+    
+    if (employeeComments.trim()) {
+      alertMessage += `\n\nNotas incluidas: "${employeeComments.trim().substring(0, 50)}${employeeComments.length > 50 ? '...' : ''}"'`;
+    }
+    
+    if (liquidation.status === 'draft') {
+      alertMessage += '\n\nUna vez enviada, no podrá modificarla hasta que el jefe la revise.';
+    } else if (liquidation.status === 'rejected') {
+      alertMessage += '\n\nSe reenviará la liquidación corregida al jefe.';
+    }
 
-Una vez enviada, no podrá modificarla hasta que el jefe la revise.`,
+    Alert.alert(
+      'Enviar al Jefe',
+      alertMessage,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -172,15 +185,28 @@ Una vez enviada, no podrá modificarla hasta que el jefe la revise.`,
             try {
               console.log('📤 LiquidationDetail: Enviando liquidación al jefe...');
               
+              // Guardar las notas del empleado si existen (por ahora en el campo comments)
+              if (employeeComments.trim()) {
+                // TODO: Agregar campo employeeComments en el modelo Liquidation
+                console.log('📝 Notas del empleado:', employeeComments);
+              }
+              
               // PASO 1: Guardar localmente primero (cambiar status a 'submitted')
               await submitLiquidation(liquidation.id, userEmail);
               console.log('✅ LiquidationDetail: Liquidación guardada localmente como "enviada"');
               
               // PASO 2: Notificar al usuario inmediatamente
+              const successMessage = liquidation.status === 'rejected'
+                ? 'La liquidación corregida fue reenviada al jefe. Se sincronizará automáticamente cuando tenga conexión.'
+                : 'La liquidación fue enviada al jefe. Se sincronizará automáticamente cuando tenga conexión.';
+              
               Alert.alert(
                 '✅ Enviado', 
-                'La liquidación fue enviada al jefe. Se sincronizará automáticamente cuando tenga conexión.',
-                [{ text: 'OK', onPress: () => loadLiquidationData() }]
+                successMessage,
+                [{ text: 'OK', onPress: () => {
+                  setEmployeeComments(''); // Limpiar las notas
+                  loadLiquidationData();
+                }}]
               );
               
               // PASO 3: Sincronizar en segundo plano (sin await, no bloqueante)
@@ -624,6 +650,27 @@ Una vez enviada, no podrá modificarla hasta que el jefe la revise.`,
           </View>
         )}
 
+        {/* Campo de comentarios para el empleado (solo en liquidaciones rechazadas) */}
+        {liquidation.status === 'rejected' && (
+          <View style={styles.commentsCard}>
+            <View style={styles.commentsHeader}>
+              <Ionicons name="create-outline" size={20} color="#2563eb" />
+              <Text style={styles.commentsTitle}>Notas para el Jefe (Opcional)</Text>
+            </View>
+            <Text style={styles.commentsHint}>Agregue comentarios explicando las correcciones realizadas:</Text>
+            <TextInput
+              style={styles.commentsInput}
+              placeholder="Ej: He corregido los montos según sus observaciones..."
+              placeholderTextColor="#94a3b8"
+              multiline
+              numberOfLines={4}
+              value={employeeComments}
+              onChangeText={setEmployeeComments}
+              textAlignVertical="top"
+            />
+          </View>
+        )}
+
         {/* Lista de Gastos */}
         <View style={styles.expensesCard}>
           <View style={styles.expensesHeader}>
@@ -874,8 +921,30 @@ const styles = StyleSheet.create({
   },
   commentsText: {
     fontSize: 14,
-    color: '#475569',
+    color: '#1e293b',
     lineHeight: 20,
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  commentsHint: {
+    fontSize: 13,
+    color: '#64748b',
+    marginBottom: 8,
+    fontStyle: 'italic',
+  },
+  commentsInput: {
+    fontSize: 14,
+    color: '#1e293b',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    padding: 12,
+    minHeight: 100,
+    maxHeight: 150,
   },
   expensesCard: {
     backgroundColor: 'white',

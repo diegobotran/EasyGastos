@@ -7,7 +7,7 @@ echo "🚀 Actualizando Backend en Servidor Remoto"
 echo "=========================================="
 
 # Variables (ajustar según tu configuración)
-SERVER_IP="3.82.200.97"
+SERVER_IP="23.20.116.61"
 SERVER_USER="ubuntu"  # o el usuario que uses
 BACKEND_DIR="/home/ubuntu/easygastos-backend"  # ajustar según tu instalación
 

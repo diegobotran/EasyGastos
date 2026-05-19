@@ -1,0 +1,7 @@
+# Archivos Excel de facturas SAT
+*.xlsx
+*.xls
+*.csv
+
+# Pero mantener este README
+!README.md

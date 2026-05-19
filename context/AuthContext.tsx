@@ -5,7 +5,10 @@ import * as AuthService from '../services/AuthService';
 // Define what the context will provide
 interface AuthContextType {
   user: User | null;
+  pin: string | null;
   isLoading: boolean;
+  setUserAndPin: (user: User, pin: string) => void;
+  clearAuth: () => void;
 }
 
 // Create the context
@@ -14,6 +17,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // Create the Provider component
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [pin, setPin] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -23,14 +27,29 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const loadedUser = await AuthService.getLastLoggedInUser();
       if (loadedUser) {
         setUser(loadedUser);
+        // También cargar el PIN desde SecureStore cuando se inicia la app
+        const loadedPin = await AuthService.getPIN();
+        if (loadedPin) {
+          setPin(loadedPin);
+        }
       }
       setIsLoading(false);
     };
     loadUser();
   }, []);
 
+  const setUserAndPin = (newUser: User, newPin: string) => {
+    setUser(newUser);
+    setPin(newPin);
+  };
+
+  const clearAuth = () => {
+    setUser(null);
+    setPin(null);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, isLoading }}>
+    <AuthContext.Provider value={{ user, pin, isLoading, setUserAndPin, clearAuth }}>
       {children}
     </AuthContext.Provider>
   );

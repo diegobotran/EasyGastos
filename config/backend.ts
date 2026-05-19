@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const BackendConfig = {
   // URL del backend por defecto
-  DEFAULT_URL: 'http://3.82.200.97:3000',
+  DEFAULT_URL: 'http://23.20.116.61:3000',
   
   // Obtener URL configurada o usar default
   getBaseUrl: async (): Promise<string> => {
@@ -44,13 +44,13 @@ export const BackendConfig = {
   
   // Configuraciones específicas por entorno
   development: {
-    baseUrl: 'http://3.82.200.97:3000',
+    baseUrl: 'http://23.20.116.61:3000',
     timeout: 10000,
     retries: 3
   },
   
   production: {
-    baseUrl: 'http://3.82.200.97:3000',
+    baseUrl: 'http://23.20.116.61:3000',
     timeout: 15000,
     retries: 5
   },

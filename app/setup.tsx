@@ -13,7 +13,9 @@ import {
   View 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Picker } from '@react-native-picker/picker';
 import { useSetupViewModel } from '../hooks/useSetupViewModel';
+import { SOCIEDADES } from '../constants/Sociedades';
 
 const SetupScreen = () => {
   const router = useRouter();
@@ -65,6 +67,40 @@ const SetupScreen = () => {
               autoCapitalize="words"
               editable={!viewModel.isLoading}
             />
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Ionicons name="id-card-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Código de Empleado"
+              placeholderTextColor="#94a3b8"
+              value={viewModel.employeeCode}
+              onChangeText={viewModel.setEmployeeCode}
+              autoCapitalize="characters"
+              editable={!viewModel.isLoading}
+            />
+          </View>
+        </View>
+
+        {/* Sección de Sociedad */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Sociedad</Text>
+          <Text style={styles.sectionSubtitle}>Selecciona tu código de sociedad</Text>
+          
+          <View style={styles.pickerContainer}>
+            <Ionicons name="business-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <Picker
+              selectedValue={viewModel.sociedad}
+              onValueChange={(itemValue) => viewModel.setSociedad(itemValue)}
+              style={styles.picker}
+              enabled={!viewModel.isLoading}
+            >
+              <Picker.Item label="Selecciona una sociedad..." value="" />
+              {SOCIEDADES.map((soc) => (
+                <Picker.Item key={soc.code} label={soc.label} value={soc.code} />
+              ))}
+            </Picker>
           </View>
         </View>
 
@@ -257,6 +293,22 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     marginBottom: 10,
     paddingHorizontal: 14,
+  },
+  pickerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 10,
+    paddingHorizontal: 14,
+    paddingRight: 0,
+  },
+  picker: {
+    flex: 1,
+    height: 48,
+    color: '#1e293b',
   },
   inputIcon: {
     marginRight: 10,

@@ -11,8 +11,10 @@ export interface User {
   email: string;
   firstName: string;
   lastName: string;
+  employeeCode?: string;
   department?: string;
   managerEmail?: string;
+  sociedad?: string;
   pin?: string;
   needsSync: boolean;
   lastSync: number;

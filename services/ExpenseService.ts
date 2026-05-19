@@ -55,6 +55,7 @@ export const initDB = async (): Promise<void> => {
           notes TEXT,
           noinvoice TEXT,
           serie TEXT,
+          uuid TEXT,
           centro TEXT,
           cuenta TEXT,
           ordenco TEXT,
@@ -103,6 +104,20 @@ export const initDB = async (): Promise<void> => {
         console.log("✅ Columna updatedAt agregada");
       } catch (e) {
         console.log("ℹ️ Columna updatedAt ya existe o no se pudo agregar");
+      }
+      
+      try {
+        await db.execAsync(`ALTER TABLE expenses ADD COLUMN synced INTEGER DEFAULT 0;`);
+        console.log("✅ Columna synced agregada");
+      } catch (e) {
+        console.log("ℹ️ Columna synced ya existe o no se pudo agregar");
+      }
+      
+      try {
+        await db.execAsync(`ALTER TABLE expenses ADD COLUMN uuid TEXT;`);
+        console.log("✅ Columna uuid (número de autorización FEL) agregada");
+      } catch (e) {
+        console.log("ℹ️ Columna uuid ya existe o no se pudo agregar");
       }
       
       console.log("✅ ExpenseService: Tabla 'expenses' verificada/creada con éxito.");
@@ -252,9 +267,9 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
         await db.runAsync(
             `INSERT INTO expenses 
              (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, 
-              department, notes, noinvoice, serie, centro, cuenta, ordenco, managerEmail, 
+              department, notes, noinvoice, serie, uuid, centro, cuenta, ordenco, managerEmail, 
               createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?)`,
             [
                 expense.id, 
                 userEmail, 
@@ -270,6 +285,7 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
                 expense.notes || null, 
                 expense.noinvoice || null, 
                 expense.serie || null, 
+                expense.uuid || null,
                 expense.centro || null, 
                 expense.cuenta || null, 
                 expense.ordenco || null,
@@ -341,7 +357,7 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         if (!db) throw new Error("La base de datos no está inicializada.");
         
         await db.runAsync(
-            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, status = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, centro = ?, cuenta = ?, ordenco = ? WHERE id = ? AND userEmail = ?',
+            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, status = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ? WHERE id = ? AND userEmail = ?',
             [
                 expense.description, 
                 expense.amount, 
@@ -354,6 +370,7 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
                 expense.notes || null, 
                 expense.noinvoice, 
                 expense.serie, 
+                expense.uuid || null,
                 expense.centro, 
                 expense.cuenta, 
                 expense.ordenco, 
@@ -591,8 +608,8 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
        (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, 
         department, notes, noinvoice, serie, centro, cuenta, ordenco, managerEmail, liquidationId,
         voidedAt, voidedReason, createdAt, updatedAt,
-        needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+        needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency, synced) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1)`,
       [
         serverExpense.id,
         serverExpense.email,

@@ -10,6 +10,7 @@ import { Liquidation, LiquidationStatus, CreateLiquidationDTO } from '../models/
 import { getExpenseById, updateExpensesLiquidationStatus } from './ExpenseService';
 import { getCurrentDateISO } from '../utils/dateUtils';
 import * as SQLite from 'expo-sqlite';
+import { getUser } from './AuthService';
 
 // Base de datos SQLite
 let db: SQLite.SQLiteDatabase | null = null;
@@ -670,22 +671,30 @@ export const generateCSVData = async (liquidationId: string, userId: string): Pr
       throw new Error('Solo se pueden generar CSV de liquidaciones aprobadas');
     }
 
+    // Obtener datos del usuario para codigo_empleado y sociedad
+    const user = await getUser();
+    const codigoEmpleado = user?.employeeCode || '';
+    const sociedad = user?.sociedad || '';
+
     const csvData = [];
 
     for (const expenseId of liquidation.expenseIds) {
       const expense = await getExpenseById(expenseId, liquidation.userId);
       if (expense) {
+        // Usar expenseStatus en lugar de status para mostrar el estado correcto
+        const estadoTexto = expense.expenseStatus === 'approved' ? 'APROBADO' :
+                           expense.expenseStatus === 'voided' ? 'ANULADO' :
+                           expense.expenseStatus === 'in_liquidation' ? 'EN_LIQUIDACION' : 'BORRADOR';
+        
         csvData.push({
           liquidacion_id: liquidation.id,
           gasto_id: expense.id,
           fecha: expense.date,
-          descripcion: expense.description,
           monto: expense.amount,
           categoria: expense.category,
+          departamento: expense.department,
           proveedor: expense.supplier,
           ruc: expense.vat_number,
-          departamento: expense.department,
-          notas: expense.notes || '',
           noinvoice: expense.noinvoice || '',
           serie: expense.serie || '',
           centro: expense.centro || '',
@@ -693,8 +702,11 @@ export const generateCSVData = async (liquidationId: string, userId: string): Pr
           ordenco: expense.ordenco || '',
           total_iva: expense.totiva || 0,
           moneda: expense.currency,
-          estado: expense.status,
+          notas: expense.notes || '',
+          estado: estadoTexto,
           empleado: liquidation.employeeName,
+          codigo_empleado: codigoEmpleado,
+          sociedad: sociedad,
           fecha_aprobacion: liquidation.approvedDate
         });
       }
@@ -704,6 +716,48 @@ export const generateCSVData = async (liquidationId: string, userId: string): Pr
     return csvData;
   } catch (error) {
     console.error('❌ Error generando datos CSV:', error);
+    throw error;
+  }
+};
+
+/**
+ * Inserta una liquidación que viene del backend (usada en sincronización)
+ * NO actualiza el estado de los gastos ya que vienen del backend
+ */
+export const insertLiquidationFromBackend = async (liquidation: any): Promise<void> => {
+  try {
+    if (!db) {
+      await initLiquidationsTable();
+      if (!db) {
+        throw new Error('No se pudo inicializar la base de datos');
+      }
+    }
+
+    await db.runAsync(
+      `INSERT OR REPLACE INTO liquidations (
+        id, userId, employeeName, createdDate, expenseIds, 
+        totalAmount, status, managerEmail, managerComments, submittedDate,
+        approvedDate, rejectedDate, synced
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      [
+        liquidation.id,
+        liquidation.userId,
+        liquidation.employeeName,
+        liquidation.createdDate,
+        JSON.stringify(liquidation.expenseIds || []),
+        liquidation.totalAmount,
+        liquidation.status,
+        liquidation.managerEmail || null,
+        liquidation.managerComments || null,
+        liquidation.submittedDate || null,
+        liquidation.approvedDate || null,
+        liquidation.rejectedDate || null
+      ]
+    );
+
+    console.log(`✅ LiquidationService: Liquidación ${liquidation.id} insertada desde backend`);
+  } catch (error) {
+    console.error('❌ LiquidationService: Error insertando liquidación desde backend:', error);
     throw error;
   }
 };
@@ -721,5 +775,6 @@ export const LiquidationService = {
   getLiquidationsNeedingSync,
   markLiquidationAsSynced,
   generateCSVData,
+  insertLiquidationFromBackend,
   getDB: () => db
 };

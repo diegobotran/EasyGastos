@@ -10,7 +10,7 @@ const USER_EMAIL = 'mauricio.suarez@ronesdeguatemala.com';
 const USER_PIN = '1011';
 
 // IMPORTANTE: Usar la URL real del backend (AWS)
-let BACKEND_URL = process.env.BACKEND_URL || 'http://3.82.200.97:3000';
+let BACKEND_URL = process.env.BACKEND_URL || 'http://23.20.116.61:3000';
 
 console.log('🔐 ====== TEST REAL DE SINCRONIZACIÓN ======\n');
 console.log(`📧 Usuario: ${USER_EMAIL}`);

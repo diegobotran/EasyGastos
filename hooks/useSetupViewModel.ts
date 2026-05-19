@@ -23,6 +23,8 @@ export const useSetupViewModel = () => {
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [confirmEmail, setConfirmEmail] = useState('');
+  const [sociedad, setSociedad] = useState('');
+  const [employeeCode, setEmployeeCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +34,7 @@ export const useSetupViewModel = () => {
   
   const handleSaveProfile = async () => {
     // VALIDACIÓN 1: Campos obligatorios
-    if (!profile.firstName || !profile.lastName || !profile.email || !confirmEmail || !pin || !confirmPin) {
+    if (!profile.firstName || !profile.lastName || !profile.email || !confirmEmail || !pin || !confirmPin || !sociedad || !employeeCode) {
       setError("Por favor, llene todos los campos.");
       return;
     }
@@ -91,29 +93,40 @@ export const useSetupViewModel = () => {
         email: profile.email,
         firstName: profile.firstName,
         lastName: profile.lastName,
+        employeeCode: employeeCode,
         department: '',
         managerEmail: '',
+        sociedad: sociedad,
         needsSync: true,
         lastSync: Date.now()
       };
 
-      // PASO 2: Guardar localmente PRIMERO (offline-first)
-      console.log('💾 Setup: Guardando usuario localmente...');
-      await AuthService.saveUserAndPin(user, pin);
-      console.log('✅ Setup: Usuario guardado localmente');
-
-      // PASO 3: Sincronizar con backend
+      // PASO 2: Sincronizar con backend PRIMERO para validar PIN
       if (userExists) {
-        console.log('🔄 Setup: Usuario existe - Actualizando PIN en backend...');
-        // El usuario existe, syncUserRegistration actualizará el PIN
+        console.log('🔄 Setup: Usuario existe - Verificando PIN en backend...');
+        // El usuario existe, verificar que el PIN sea correcto antes de guardar localmente
         const result = await BackendSyncService.syncUserRegistration(user, pin);
         
         if (result.success) {
-          console.log('✅ Setup: PIN actualizado exitosamente en backend');
+          console.log('✅ Setup: PIN verificado exitosamente en backend');
+        } else if (result.code === 'PIN_MISMATCH') {
+          // ⚠️ Usuario existe pero con PIN diferente - NO guardar localmente
+          console.log('⚠️ Setup: PIN diferente detectado');
+          setError(
+            'Este correo ya está registrado con un PIN diferente.\n\n' +
+            '¿Ya te habías registrado antes? Si olvidaste tu PIN, contacta al administrador.'
+          );
+          setIsLoading(false);
+          return; // Detener el proceso SIN guardar localmente
         } else {
-          console.log('⚠️ Setup: Error actualizando PIN (no crítico):', result.error);
-          // No bloqueamos el flujo, el usuario puede usar la app offline
+          console.log('⚠️ Setup: Error verificando PIN (continuando offline):', result.error);
+          // Error de red - permitir uso offline
         }
+
+        // PASO 2.1: Guardar localmente después de validar
+        console.log('💾 Setup: Guardando usuario localmente...');
+        await AuthService.saveUserAndPin(user, pin);
+        console.log('✅ Setup: Usuario guardado localmente');
 
         // PASO 3.1: DESCARGAR DATOS EN BACKGROUND (sin bloquear)
         console.log('📥 Setup: Iniciando descarga de datos en background...');
@@ -176,13 +189,27 @@ export const useSetupViewModel = () => {
         
         if (result.success) {
           console.log('✅ Setup: Usuario registrado exitosamente en backend');
+        } else if (result.code === 'PIN_MISMATCH') {
+          // ⚠️ Alguien más registró este email mientras tanto - NO guardar localmente
+          console.log('⚠️ Setup: PIN diferente detectado en nuevo registro');
+          setError(
+            'Este correo fue registrado recientemente con otro PIN.\n\n' +
+            'Si no fuiste tú, contacta al administrador.'
+          );
+          setIsLoading(false);
+          return; // Detener el proceso SIN guardar localmente
         } else {
-          console.log('⚠️ Setup: Error registrando usuario (no crítico):', result.error);
-          // No bloqueamos el flujo, el usuario puede usar la app offline
+          console.log('⚠️ Setup: Error registrando usuario (continuando offline):', result.error);
+          // Error de red - permitir uso offline
         }
+        
+        // PASO 2.2: Guardar localmente después de registrar
+        console.log('💾 Setup: Guardando usuario localmente...');
+        await AuthService.saveUserAndPin(user, pin);
+        console.log('✅ Setup: Usuario guardado localmente');
       }
 
-      // PASO 4: Establecer como último usuario logueado y navegar
+      // PASO 3: Establecer como último usuario logueado y navegar
       await AuthService.setLastLoggedInUser(profile.email);
       console.log('✅ Setup: Proceso completado - Navegando a unlock...');
       
@@ -201,12 +228,16 @@ export const useSetupViewModel = () => {
     pin,
     confirmPin,
     confirmEmail,
+    sociedad,
+    employeeCode,
     isLoading,
     error,
     updateProfileField,
     setPin,
     setConfirmPin,
     setConfirmEmail,
+    setSociedad,
+    setEmployeeCode,
     handleSaveProfile,
   };
 };

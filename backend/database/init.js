@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 // Configuración de MongoDB
-const MONGODB_URI = 'mongodb://localhost:27017';
+const MONGODB_URI = 'mongodb://localhost:27018';
 const DATABASE_NAME = 'easygastos';
 
 // Esquemas de Mongoose
@@ -10,8 +10,11 @@ const userSchema = new mongoose.Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
   pin: { type: String, required: true },
+  employeeCode: { type: String, default: null },
   department: { type: String, default: null },
   managerEmail: { type: String, default: null },
+  sociedad: { type: String, default: null }, // Código de sociedad (ej: "1000", "2000")
+  nitEmpresa: { type: String, default: null }, // NIT de la empresa/sociedad (para filtrar facturas SAT)
   isManager: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
   lastLoginAt: { type: Date, default: null },
@@ -61,6 +64,7 @@ const expenseSchema = new mongoose.Schema({
   notes: { type: String, default: null },
   noinvoice: { type: String, default: null },
   serie: { type: String, default: null },
+  uuid: { type: String, default: null }, // UUID de factura FEL para validación SAT
   centro: { type: String, default: null },
   cuenta: { type: String, default: null },
   ordenco: { type: String, default: null },
@@ -128,6 +132,24 @@ const configSchema = new mongoose.Schema({
   collection: 'config'
 });
 
+const chatConversationSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true },
+  userId: { type: String, required: true }, // Email del usuario
+  title: { type: String, required: true },
+  messages: [{
+    id: { type: String, required: true },
+    type: { type: String, required: true, enum: ['user', 'assistant'] },
+    text: { type: String, required: true },
+    timestamp: { type: String, required: true } // ISO string
+  }],
+  expensesCount: { type: Number, default: 0 },
+  needsSync: { type: Boolean, default: false },
+  lastSync: { type: Date, default: null }
+}, {
+  timestamps: true, // createdAt y updatedAt
+  collection: 'chat_conversations'
+});
+
 // Crear índices
 userSchema.index({ email: 1 });
 userSchema.index({ department: 1 });
@@ -149,6 +171,10 @@ liquidationSchema.index({ createdDate: -1 });
 syncLogSchema.index({ userEmail: 1 });
 syncLogSchema.index({ createdAt: -1 });
 
+chatConversationSchema.index({ userId: 1 });
+chatConversationSchema.index({ userId: 1, updatedAt: -1 });
+chatConversationSchema.index({ updatedAt: -1 }); // Para filtrar por fecha
+
 // Importar el modelo ManagerEmployeeLink
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 
@@ -159,6 +185,8 @@ const Expense = mongoose.model('Expense', expenseSchema);
 const Liquidation = mongoose.model('Liquidation', liquidationSchema);
 const SyncLog = mongoose.model('SyncLog', syncLogSchema);
 const Config = mongoose.model('Config', configSchema);
+const ChatConversation = mongoose.model('ChatConversation', chatConversationSchema);
+
 
 // Función para crear collections explícitamente si no existen
 const createCollectionsIfNotExist = async () => {
@@ -174,7 +202,8 @@ const createCollectionsIfNotExist = async () => {
       { name: 'expenses', model: Expense },
       { name: 'sync_logs', model: SyncLog },
       { name: 'config', model: Config },
-      { name: 'manageremployeelinks', model: ManagerEmployeeLink }
+      { name: 'manageremployeelinks', model: ManagerEmployeeLink },
+      { name: 'chat_conversations', model: ChatConversation }
     ];
     
     // Obtener collections existentes
@@ -374,7 +403,8 @@ const getDatabaseStats = async () => {
       expenses: await Expense.countDocuments(),
       liquidations: await Liquidation.countDocuments(),
       syncLogs: await SyncLog.countDocuments(),
-      managerLinks: await ManagerEmployeeLink.countDocuments({ isActive: true })
+      managerLinks: await ManagerEmployeeLink.countDocuments({ isActive: true }),
+      chatConversations: await ChatConversation.countDocuments()
     };
     
     return stats;
@@ -405,6 +435,7 @@ module.exports = {
     Liquidation,
     SyncLog,
     Config,
-    ManagerEmployeeLink
+    ManagerEmployeeLink,
+    ChatConversation
   }
 };

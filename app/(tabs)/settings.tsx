@@ -10,6 +10,7 @@ import * as ExpenseService from '../../services/ExpenseService';
 import * as UpdateService from '../../services/UpdateService';
 import * as SettingsService from '../../services/SettingsService';
 import { SETTINGS_CONSTRAINTS } from '../../models/Settings';
+import { SOCIEDADES } from '../../constants/Sociedades';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -29,6 +30,13 @@ export default function SettingsScreen() {
   const [adminPassword, setAdminPassword] = useState('');
   const [maxExpenseAmount, setMaxExpenseAmount] = useState('3500.00');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [userSociedad, setUserSociedad] = useState<string | null>(null);
+  const [temporarySociedad, setTemporarySociedad] = useState<string | null>(null);
+  const [showResetPinModal, setShowResetPinModal] = useState(false);
+  const [resetPinEmail, setResetPinEmail] = useState('');
+  const [newResetPin, setNewResetPin] = useState('');
+  const [confirmResetPin, setConfirmResetPin] = useState('');
+  const [isResettingPin, setIsResettingPin] = useState(false);
   
   const ADMIN_PASSWORD = '101104';
 
@@ -82,6 +90,15 @@ export default function SettingsScreen() {
       // Cargar configuraciones de la app
       const maxAmount = await SettingsService.getMaxExpenseAmount();
       setMaxExpenseAmount(maxAmount.toFixed(2));
+      
+      // Cargar sociedad del usuario
+      if (user) {
+        setUserSociedad(user.sociedad || null);
+      }
+      
+      // Cargar sociedad temporal configurada
+      const tempSociedad = await SettingsService.getTemporarySociedad();
+      setTemporarySociedad(tempSociedad);
     } catch (error) {
       console.error('Error cargando datos de usuario:', error);
     }
@@ -541,6 +558,29 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleSociedadChange = async (sociedad: string) => {
+    try {
+      const sociedadValue = sociedad === '' ? null : sociedad;
+      setTemporarySociedad(sociedadValue);
+      await SettingsService.setTemporarySociedad(sociedadValue);
+      
+      if (sociedadValue) {
+        Alert.alert(
+          '✅ Sociedad Temporal Configurada',
+          `Ahora reportarás gastos para la sociedad ${sociedadValue}.\n\nPuedes cambiarla en cualquier momento desde esta pantalla.`
+        );
+      } else {
+        Alert.alert(
+          '✅ Sociedad Restaurada',
+          `Volverás a reportar gastos con tu sociedad registrada${userSociedad ? ` (${userSociedad})` : ''}.`
+        );
+      }
+    } catch (error) {
+      console.error('Error al guardar sociedad temporal:', error);
+      Alert.alert('Error', 'No se pudo guardar la configuración de sociedad');
+    }
+  };
+
   const handleCheckUpdate = async () => {
     if (isCheckingUpdate) return;
     
@@ -557,6 +597,125 @@ export default function SettingsScreen() {
     } finally {
       setIsCheckingUpdate(false);
       setUpdateProgress(0);
+    }
+  };
+
+  const handleOpenResetPinModal = () => {
+    setResetPinEmail('');
+    setNewResetPin('');
+    setConfirmResetPin('');
+    setShowResetPinModal(true);
+  };
+
+  const handleResetPin = async () => {
+    console.log('🔓 Settings: ========== RESETEANDO PIN ==========');
+    
+    // Validaciones
+    if (!resetPinEmail || resetPinEmail.trim() === '') {
+      Alert.alert('Error', 'Por favor ingrese su correo electrónico para confirmar.');
+      return;
+    }
+
+    if (!newResetPin || newResetPin.trim() === '') {
+      Alert.alert('Error', 'Por favor ingrese el nuevo PIN.');
+      return;
+    }
+    
+    if (newResetPin.length !== 4) {
+      Alert.alert('Error', 'El nuevo PIN debe ser de 4 dígitos.');
+      return;
+    }
+
+    if (!confirmResetPin || confirmResetPin.trim() === '') {
+      Alert.alert('Error', 'Por favor confirme el nuevo PIN.');
+      return;
+    }
+
+    if (newResetPin !== confirmResetPin) {
+      Alert.alert('Error', 'Los PINs no coinciden. Por favor verifique.');
+      return;
+    }
+
+    if (!/^\d{4}$/.test(newResetPin)) {
+      Alert.alert('Error', 'El PIN debe contener solo números.');
+      return;
+    }
+
+    // Verificar que el email ingresado coincida con el usuario actual
+    const user = await AuthService.getLastLoggedInUser();
+    if (!user) {
+      Alert.alert('Error', 'No hay usuario logueado.');
+      return;
+    }
+
+    if (user.email.toLowerCase() !== resetPinEmail.toLowerCase().trim()) {
+      Alert.alert(
+        'Error de Verificación',
+        'El correo electrónico ingresado no coincide con el usuario actual.\n\n' +
+        'Por favor verifique e intente nuevamente.'
+      );
+      return;
+    }
+
+    setIsResettingPin(true);
+
+    try {
+      console.log('🔓 Settings: Usuario verificado:', user.email);
+      console.log('🔓 Settings: Reseteando PIN...');
+
+      // PASO 1: Resetear PIN localmente
+      console.log('📱 Settings: Actualizando PIN local...');
+      await AuthService.updatePin(user.email, newResetPin);
+      await AuthService.savePIN(newResetPin);
+      console.log('✅ Settings: PIN local reseteado exitosamente');
+
+      // PASO 2: Intentar actualizar en backend (opcional si no hay conexión)
+      console.log('☁️ Settings: Intentando resetear PIN en backend...');
+      
+      try {
+        // Intentar login con el nuevo PIN para verificar
+        const loginResult = await BackendSyncService.loginAndGetToken(user.email, newResetPin);
+        
+        if (!loginResult.success) {
+          // Si el login falla, significa que el usuario existe pero con PIN diferente
+          // Intentar registrar/actualizar el usuario con el nuevo PIN
+          console.log('📝 Settings: Actualizando usuario en backend con nuevo PIN...');
+          const registerResult = await BackendSyncService.syncUserRegistration(user, newResetPin);
+          
+          if (registerResult.success) {
+            console.log('✅ Settings: PIN actualizado en backend exitosamente');
+          } else {
+            console.warn('⚠️ Settings: No se pudo actualizar en backend, solo local');
+          }
+        } else {
+          console.log('✅ Settings: PIN verificado en backend');
+        }
+      } catch (backendError) {
+        console.warn('⚠️ Settings: Error en backend, continuando solo con reseteo local:', backendError);
+      }
+
+      // Limpiar campos y cerrar modal
+      setResetPinEmail('');
+      setNewResetPin('');
+      setConfirmResetPin('');
+      setShowResetPinModal(false);
+
+      Alert.alert(
+        '✅ PIN Reseteado',
+        'Tu PIN ha sido reseteado exitosamente.\n\n' +
+        '📱 PIN actualizado localmente\n' +
+        '☁️ Se sincronizará con el servidor en la próxima conexión\n\n' +
+        'Por favor usa tu nuevo PIN para iniciar sesión.'
+      );
+
+    } catch (error) {
+      console.error('❌ Settings: Error reseteando PIN:', error);
+      Alert.alert(
+        'Error',
+        'No se pudo resetear el PIN. Por favor intente nuevamente o contacte al administrador.'
+      );
+    } finally {
+      setIsResettingPin(false);
     }
   };
 
@@ -666,6 +825,15 @@ export default function SettingsScreen() {
         )}
       </TouchableOpacity>
 
+      {/* Botón de Reseteo de PIN */}
+      <TouchableOpacity 
+        style={styles.resetPinButton}
+        onPress={handleOpenResetPinModal}
+      >
+        <Ionicons name="key-outline" size={20} color="#dc2626" />
+        <Text style={styles.resetPinButtonText}>¿Olvidaste tu PIN? Resetear aquí</Text>
+      </TouchableOpacity>
+
       {/* SEPARADOR */}
       <View style={styles.separator} />
 
@@ -726,8 +894,58 @@ export default function SettingsScreen() {
       {/* SEPARADOR */}
       <View style={styles.separator} />
 
+      {/* SECCIÓN: Sociedad para Reportar Gastos */}
+      <Text style={styles.sectionTitle}>🏢 Sociedad para Reportar Gastos</Text>
+      
+      <View style={styles.settingGroup}>
+        <Text style={styles.settingLabel}>Sociedad Registrada</Text>
+        <Text style={styles.settingValue}>
+          {userSociedad || 'No configurada'}
+        </Text>
+        
+        <Text style={[styles.settingLabel, { marginTop: 16 }]}>
+          Sociedad Temporal (Opcional)
+        </Text>
+        <Text style={styles.settingHint}>
+          Selecciona otra sociedad para reportar gastos temporalmente
+        </Text>
+        
+        <View style={styles.pickerContainer}>
+          <Ionicons name="business-outline" size={20} color="#64748b" style={{ marginRight: 10 }} />
+          <Picker
+            selectedValue={temporarySociedad || ''}
+            onValueChange={handleSociedadChange}
+            style={styles.picker}
+          >
+            <Picker.Item 
+              label={`Usar mi sociedad${userSociedad ? ` (${userSociedad})` : ''}`} 
+              value="" 
+            />
+            {SOCIEDADES.map((soc) => (
+              <Picker.Item 
+                key={soc.code} 
+                label={`${soc.label}${soc.code === userSociedad ? ' (Tu sociedad)' : ''}`} 
+                value={soc.code} 
+              />
+            ))}
+          </Picker>
+        </View>
+        
+        {temporarySociedad && temporarySociedad !== userSociedad && (
+          <View style={styles.warningBox}>
+            <Ionicons name="information-circle" size={20} color="#f59e0b" />
+            <Text style={styles.warningText}>
+              Los gastos se reportarán con la sociedad {temporarySociedad}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* SEPARADOR */}
+      <View style={styles.separator} />
+
       {/* SECCIÓN: Sincronización */}
-      <Text style={styles.sectionTitle}>🔄 Sincronización</Text>
+      <Text style={styles.sectionTitle}>🔄 Sincronización de Datos</Text>
 
       <TouchableOpacity 
         style={[styles.syncButton, isSyncing && styles.syncButtonDisabled]} 
@@ -740,9 +958,17 @@ export default function SettingsScreen() {
           <Ionicons name="sync-outline" size={20} color="white" />
         )}
         <Text style={styles.buttonText}>
-          {isSyncing ? 'Sincronizando...' : 'Sincronizar'}
+          {isSyncing ? 'Sincronizando...' : 'Sincronizar Datos'}
         </Text>
       </TouchableOpacity>
+
+      {/* Descripción de sincronización de datos */}
+      <View style={styles.infoCard}>
+        <Ionicons name="information-circle-outline" size={16} color="#64748b" />
+        <Text style={styles.infoCardText}>
+          Sincroniza tus gastos, categorías y liquidaciones con el servidor
+        </Text>
+      </View>
 
       {/* Estado de sincronización */}
       {syncStatus && (
@@ -761,9 +987,13 @@ export default function SettingsScreen() {
         <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
       </TouchableOpacity>
 
-      {/* BOTÓN DE ACTUALIZACIÓN - DESACTIVADO TEMPORALMENTE
-      <TouchableOpacity 
-        styotón de actualización de app */}
+      {/* SEPARADOR */}
+      <View style={styles.separator} />
+
+      {/* SECCIÓN: Actualización de la App */}
+      <Text style={styles.sectionTitle}>📱 Actualización de la Aplicación</Text>
+
+      {/* Botón de actualización de app */}
       <TouchableOpacity 
         style={[styles.updateAppButton, isCheckingUpdate && styles.updateAppButtonDisabled]}
         onPress={handleCheckUpdate}
@@ -779,11 +1009,19 @@ export default function SettingsScreen() {
         ) : (
           <>
             <Ionicons name="download-outline" size={20} color="#2563eb" />
-            <Text style={styles.updateAppText}>Buscar Actualización</Text>
+            <Text style={styles.updateAppText}>Buscar Actualización de App</Text>
             <Text style={styles.updateAppVersion}>v{UpdateService.getCurrentVersion()}</Text>
           </>
         )}
       </TouchableOpacity>
+
+      {/* Descripción de actualización de app */}
+      <View style={[styles.infoCard, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
+        <Ionicons name="information-circle-outline" size={16} color="#2563eb" />
+        <Text style={[styles.infoCardText, { color: '#1e40af' }]}>
+          Descarga e instala nuevas versiones de la aplicación cuando estén disponibles
+        </Text>
+      </View>
 
       {/* Última sincronización */}
       {lastSyncTime && (
@@ -840,6 +1078,139 @@ export default function SettingsScreen() {
                 onPress={verifyAdminPassword}
               >
                 <Text style={styles.adminModalConfirmText}>Aceptar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal de Reseteo de PIN */}
+      <Modal
+        visible={showResetPinModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowResetPinModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.resetPinModalContent}>
+            <View style={styles.resetPinModalHeader}>
+              <Ionicons name="key" size={40} color="#dc2626" />
+              <Text style={styles.resetPinModalTitle}>Resetear PIN</Text>
+            </View>
+            
+            <Text style={styles.resetPinModalDescription}>
+              Para resetear tu PIN, primero confirma tu identidad ingresando tu correo electrónico:
+            </Text>
+            
+            <View style={styles.resetPinInputContainer}>
+              <Ionicons name="mail-outline" size={20} color="#64748b" style={styles.resetPinInputIcon} />
+              <TextInput
+                style={styles.resetPinInput}
+                placeholder="correo@ejemplo.com"
+                value={resetPinEmail}
+                onChangeText={(text) => setResetPinEmail(text.toLowerCase())}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoComplete="email"
+                editable={!isResettingPin}
+                placeholderTextColor="#94a3b8"
+              />
+            </View>
+
+            <Text style={styles.resetPinModalLabel}>Nuevo PIN (4 dígitos):</Text>
+            <View style={styles.resetPinInputContainer}>
+              <Ionicons name="lock-closed-outline" size={20} color="#64748b" style={styles.resetPinInputIcon} />
+              <TextInput
+                style={[
+                  styles.resetPinInput,
+                  newResetPin && newResetPin.length !== 4 && styles.inputError
+                ]}
+                placeholder="••••"
+                value={newResetPin}
+                onChangeText={setNewResetPin}
+                keyboardType="numeric"
+                secureTextEntry
+                maxLength={4}
+                editable={!isResettingPin}
+                placeholderTextColor="#94a3b8"
+              />
+            </View>
+
+            {newResetPin && newResetPin.length !== 4 && (
+              <View style={styles.resetPinValidationWarning}>
+                <Ionicons name="alert-circle" size={14} color="#dc2626" />
+                <Text style={styles.resetPinValidationText}>El PIN debe tener 4 dígitos</Text>
+              </View>
+            )}
+
+            <Text style={styles.resetPinModalLabel}>Confirmar Nuevo PIN:</Text>
+            <View style={styles.resetPinInputContainer}>
+              <Ionicons name="lock-closed-outline" size={20} color="#64748b" style={styles.resetPinInputIcon} />
+              <TextInput
+                style={[
+                  styles.resetPinInput,
+                  confirmResetPin && newResetPin !== confirmResetPin && styles.inputError,
+                  confirmResetPin && newResetPin === confirmResetPin && newResetPin.length === 4 && styles.inputSuccess
+                ]}
+                placeholder="••••"
+                value={confirmResetPin}
+                onChangeText={setConfirmResetPin}
+                keyboardType="numeric"
+                secureTextEntry
+                maxLength={4}
+                editable={!isResettingPin}
+                placeholderTextColor="#94a3b8"
+              />
+            </View>
+
+            {confirmResetPin && newResetPin !== confirmResetPin && (
+              <View style={styles.resetPinValidationWarning}>
+                <Ionicons name="alert-circle" size={14} color="#dc2626" />
+                <Text style={styles.resetPinValidationText}>Los PINs no coinciden</Text>
+              </View>
+            )}
+
+            {confirmResetPin && newResetPin === confirmResetPin && newResetPin.length === 4 && (
+              <View style={styles.resetPinValidationSuccess}>
+                <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                <Text style={styles.resetPinValidationSuccessText}>Los PINs coinciden ✓</Text>
+              </View>
+            )}
+            
+            <View style={styles.resetPinModalButtons}>
+              <TouchableOpacity
+                style={styles.resetPinModalCancelButton}
+                onPress={() => {
+                  setShowResetPinModal(false);
+                  setResetPinEmail('');
+                  setNewResetPin('');
+                  setConfirmResetPin('');
+                }}
+                disabled={isResettingPin}
+              >
+                <Text style={styles.resetPinModalCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[
+                  styles.resetPinModalConfirmButton,
+                  (isResettingPin || !resetPinEmail || !newResetPin || newResetPin.length !== 4 || newResetPin !== confirmResetPin) && 
+                  styles.resetPinModalConfirmButtonDisabled
+                ]}
+                onPress={handleResetPin}
+                disabled={isResettingPin || !resetPinEmail || !newResetPin || newResetPin.length !== 4 || newResetPin !== confirmResetPin}
+              >
+                {isResettingPin ? (
+                  <>
+                    <ActivityIndicator size="small" color="white" />
+                    <Text style={styles.resetPinModalConfirmText}>Reseteando...</Text>
+                  </>
+                ) : (
+                  <>
+                    <Ionicons name="checkmark" size={20} color="white" />
+                    <Text style={styles.resetPinModalConfirmText}>Resetear PIN</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -903,7 +1274,6 @@ const styles = StyleSheet.create({
   },
   subtitle: { fontSize: 13, color: '#64748b', marginBottom: 15 },
   toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
-  picker: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, marginBottom: 5 },
   updateButton: { 
     flexDirection: 'row', 
     backgroundColor: '#2563eb', 
@@ -1156,6 +1526,206 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   adminModalConfirmText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  settingGroup: {
+    marginBottom: 16,
+  },
+  settingLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 6,
+  },
+  settingValue: {
+    fontSize: 15,
+    color: '#64748b',
+    marginBottom: 12,
+  },
+  settingHint: {
+    fontSize: 13,
+    color: '#94a3b8',
+    marginBottom: 10,
+  },
+  pickerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingLeft: 12,
+    marginBottom: 12,
+  },
+  picker: {
+    flex: 1,
+    height: 48,
+    color: '#1e293b',
+  },
+  infoCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    borderRadius: 8,
+    gap: 10,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  infoCardText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  warningBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef3c7',
+    borderLeftWidth: 4,
+    borderLeftColor: '#f59e0b',
+    padding: 12,
+    borderRadius: 8,
+    gap: 10,
+  },
+  warningText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#92400e',
+    fontWeight: '500',
+  },
+  resetPinButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 10,
+    marginBottom: 20,
+    gap: 8,
+  },
+  resetPinButtonText: {
+    fontSize: 14,
+    color: '#dc2626',
+    fontWeight: '600',
+  },
+  resetPinModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    margin: 20,
+    maxWidth: 400,
+    width: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  resetPinModalHeader: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  resetPinModalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#dc2626',
+    marginTop: 8,
+  },
+  resetPinModalDescription: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  resetPinModalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 8,
+    marginTop: 8,
+  },
+  resetPinInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    marginBottom: 4,
+    backgroundColor: '#f8fafc',
+  },
+  resetPinInputIcon: {
+    marginRight: 8,
+  },
+  resetPinInput: {
+    flex: 1,
+    padding: 12,
+    fontSize: 16,
+    color: '#1e293b',
+  },
+  resetPinValidationWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  resetPinValidationText: {
+    fontSize: 12,
+    color: '#dc2626',
+  },
+  resetPinValidationSuccess: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  resetPinValidationSuccessText: {
+    fontSize: 12,
+    color: '#059669',
+    fontWeight: '600',
+  },
+  resetPinModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  resetPinModalCancelButton: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  resetPinModalCancelText: {
+    color: '#64748b',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  resetPinModalConfirmButton: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: '#dc2626',
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  resetPinModalConfirmButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
+  resetPinModalConfirmText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',

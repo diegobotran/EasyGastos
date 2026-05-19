@@ -1,10 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     FlatList,
+    Image,
     Modal,
     RefreshControl,
     StyleSheet,
@@ -27,16 +29,28 @@ interface ManagerSummary {
 }
 
 export default function ManagerApprovalScreen() {
-  const { user } = useAuth();
+  const { user, pin } = useAuth();
+  const router = useRouter();
   const [pendingLiquidations, setPendingLiquidations] = useState<Liquidation[]>([]);
   const [summary, setSummary] = useState<ManagerSummary>({ pendingCount: 0, totalAmount: 0, employeeCount: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [imageModalVisible, setImageModalVisible] = useState(false);
   const [selectedLiquidation, setSelectedLiquidation] = useState<Liquidation | null>(null);
+  const [liquidationExpenses, setLiquidationExpenses] = useState<any[]>([]);
+  const [selectedExpenseImage, setSelectedExpenseImage] = useState<string | null>(null);
+  const [backendUrl, setBackendUrl] = useState<string>('');
   const [approvalAction, setApprovalAction] = useState<boolean>(true);
   const [comments, setComments] = useState('');
+
+  // Cargar URL del backend al iniciar
+  const loadBackendUrl = async () => {
+    const config = await BackendSyncService.getBackendConfig();
+    setBackendUrl(config.url);
+  };
 
   const loadPendingLiquidations = async () => {
     if (!user?.email) {
@@ -44,14 +58,29 @@ export default function ManagerApprovalScreen() {
       return;
     }
 
+    if (!pin) {
+      console.error('❌ ManagerApproval: No hay PIN disponible - requiere desbloquear la app primero');
+      setIsOffline(true);
+      setPendingLiquidations([]);
+      setSummary({ pendingCount: 0, totalAmount: 0, employeeCount: 0 });
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
     try {
       setIsLoading(true);
       
+      // Cargar URL del backend si no está cargada
+      if (!backendUrl) {
+        await loadBackendUrl();
+      }
+      
       console.log('🔑 ManagerApproval: Obteniendo token para:', user.email);
-      console.log('🔑 ManagerApproval: PIN disponible:', user.pin ? 'SÍ' : 'NO');
+      console.log('🔑 ManagerApproval: PIN disponible:', pin ? 'SÍ' : 'NO');
       
       // Primero obtener el token de autenticación
-      const loginResult = await BackendSyncService.loginAndGetToken(user.email, user.pin || '');
+      const loginResult = await BackendSyncService.loginAndGetToken(user.email, pin);
       
       if (!loginResult.success || !loginResult.token) {
         console.error('❌ ManagerApproval: Error obteniendo token:', loginResult.error);
@@ -87,6 +116,12 @@ export default function ManagerApprovalScreen() {
           departmentName: user.department
         });
         
+        // Si no hay liquidaciones pendientes, limpiar el badge
+        if (liquidations.length === 0) {
+          await NotificationService.clearBadge();
+          console.log('✅ No hay liquidaciones pendientes - Badge limpiado');
+        }
+        
         console.log(`✅ ManagerApproval: ${liquidations.length} liquidaciones cargadas`);
       } else {
         console.error('❌ ManagerApproval: Respuesta inválida del servidor');
@@ -109,11 +144,16 @@ export default function ManagerApprovalScreen() {
   const handleApproval = async (liquidationId: string, approve: boolean, comments?: string) => {
     if (!user?.email) return;
 
+    if (!pin) {
+      Alert.alert('Error', 'No hay PIN disponible. Por favor, desbloquee la app primero.');
+      return;
+    }
+
     try {
       console.log(`${approve ? '✅' : '❌'} ManagerApproval: ${approve ? 'Aprobando' : 'Rechazando'} liquidación...`);
       
       // Obtener token de autenticación
-      const loginResult = await BackendSyncService.loginAndGetToken(user.email, user.pin || '');
+      const loginResult = await BackendSyncService.loginAndGetToken(user.email, pin);
       
       if (!loginResult.success || !loginResult.token) {
         Alert.alert('Sin Conexión', 'No se pudo conectar al servidor. Por favor, verifique su conexión a internet.');
@@ -126,6 +166,10 @@ export default function ManagerApprovalScreen() {
         : await BackendSyncService.rejectLiquidation(liquidationId, comments || '', loginResult.token);
 
       if (result.success) {
+        // Limpiar badge de notificaciones inmediatamente
+        await NotificationService.clearBadge();
+        console.log('✅ Badge de notificaciones limpiado');
+        
         Alert.alert(
           '✅ Completado', 
           `Liquidación ${approve ? 'aprobada' : 'rechazada'} correctamente.\n\nEl empleado recibirá la notificación cuando sincronice.`,
@@ -145,6 +189,58 @@ export default function ManagerApprovalScreen() {
     setApprovalAction(approve);
     setComments('');
     setModalVisible(true);
+  };
+
+  const showLiquidationDetail = async (liquidation: Liquidation) => {
+    setSelectedLiquidation(liquidation);
+    setDetailModalVisible(true);
+    setLiquidationExpenses([]); // Limpiar lista previa
+    
+    // Cargar los gastos desde el backend (NO desde la BD local)
+    if (!pin) {
+      console.error('❌ No hay PIN para obtener gastos');
+      return;
+    }
+    
+    try {
+      console.log('📋 Obteniendo gastos de liquidación:', liquidation.id);
+      
+      // Obtener token
+      const loginResult = await BackendSyncService.loginAndGetToken(user!.email, pin);
+      if (!loginResult.success || !loginResult.token) {
+        console.error('❌ Error obteniendo token para gastos');
+        return;
+      }
+      
+      // Obtener gastos de la liquidación desde el backend
+      const { url: backendUrl } = await BackendSyncService.getBackendConfig();
+      const response = await fetch(`${backendUrl}/api/liquidations/${liquidation.id}/expenses`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${loginResult.token}`
+        }
+      });
+      
+      if (response.ok) {
+        const expenses = await response.json();
+        console.log('✅ Gastos obtenidos:', expenses.length);
+        setLiquidationExpenses(expenses);
+      } else {
+        console.error('❌ Error obteniendo gastos:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Error cargando gastos:', error);
+      setLiquidationExpenses([]);
+    }
+  };
+
+  const viewExpenseDetail = (expense: any) => {
+    // Navegar a la pantalla de detalle del gasto pasando el objeto completo
+    router.push({
+      pathname: '/expense-detail',
+      params: { expense: JSON.stringify(expense) }
+    });
   };
 
   const confirmApproval = () => {
@@ -176,7 +272,7 @@ export default function ManagerApprovalScreen() {
           <Text style={styles.employeeName}>{item.employeeName}</Text>
           <Text style={styles.liquidationId}>ID: {item.id}</Text>
         </View>
-        <Text style={styles.amount}>{item.totalAmount.toFixed(2)}€</Text>
+        <Text style={styles.amount}>{item.currency || 'Q'}{item.totalAmount.toFixed(2)}</Text>
       </View>
       
       <View style={[styles.statusBadge, { backgroundColor: getLiquidationStatusColor(item.status) + '20' }]}>
@@ -199,6 +295,15 @@ export default function ManagerApprovalScreen() {
           Enviado: {new Date(item.submittedDate).toLocaleDateString('es-ES')}
         </Text>
       )}
+      
+      {/* Botón para ver detalle de gastos */}
+      <TouchableOpacity 
+        style={styles.detailButton}
+        onPress={() => showLiquidationDetail(item)}
+      >
+        <Ionicons name="list-outline" size={18} color="#2563eb" />
+        <Text style={styles.detailButtonText}>Ver Gastos</Text>
+      </TouchableOpacity>
       
       <View style={styles.actionButtons}>
         <TouchableOpacity 
@@ -231,7 +336,7 @@ export default function ManagerApprovalScreen() {
         </View>
         
         <View style={styles.summaryItem}>
-          <Text style={styles.summaryValue}>{summary.totalAmount.toFixed(2)}€</Text>
+          <Text style={styles.summaryValue}>{pendingLiquidations[0]?.currency || 'Q'}{summary.totalAmount.toFixed(2)}</Text>
           <Text style={styles.summaryLabel}>Monto Total</Text>
         </View>
         
@@ -292,6 +397,90 @@ export default function ManagerApprovalScreen() {
         showsVerticalScrollIndicator={false}
       />
       
+      {/* Modal para ver detalle de gastos */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={detailModalVisible}
+        onRequestClose={() => setDetailModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '80%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Detalle de Gastos</Text>
+              <TouchableOpacity onPress={() => setDetailModalVisible(false)}>
+                <Ionicons name="close" size={28} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            
+            {selectedLiquidation && (
+              <View style={styles.liquidationSummary}>
+                <Text style={styles.liquidationSummaryText}>
+                  Liquidación ID: {selectedLiquidation.id}
+                </Text>
+                <Text style={styles.liquidationSummaryText}>
+                  Empleado: {selectedLiquidation.employeeName}
+                </Text>
+                <Text style={[styles.liquidationSummaryText, { fontWeight: 'bold', fontSize: 18 }]}>
+                  Total: {selectedLiquidation.currency || 'Q'}{selectedLiquidation.totalAmount.toFixed(2)}
+                </Text>
+              </View>
+            )}
+            
+            <FlatList
+              data={liquidationExpenses}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item: expense }) => (
+                <TouchableOpacity 
+                  style={styles.expenseDetailCard}
+                  onPress={() => viewExpenseDetail(expense)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.expenseDetailHeader}>
+                    <Text style={styles.expenseDetailDescription} numberOfLines={2}>
+                      {expense.description}
+                    </Text>
+                    <Text style={styles.expenseDetailAmount}>
+                      {expense.currency}{expense.amount.toFixed(2)}
+                    </Text>
+                  </View>
+                  <View style={styles.expenseDetailInfo}>
+                    <Text style={styles.expenseDetailText}>
+                      <Ionicons name="pricetag-outline" size={12} /> {expense.category}
+                    </Text>
+                    <Text style={styles.expenseDetailText}>
+                      <Ionicons name="calendar-outline" size={12} /> {new Date(expense.date).toLocaleDateString('es-ES')}
+                    </Text>
+                  </View>
+                  {expense.supplier && (
+                    <Text style={styles.expenseDetailText}>
+                      <Ionicons name="storefront-outline" size={12} /> {expense.supplier}
+                    </Text>
+                  )}
+                  
+                  {/* Indicador para ver detalle */}
+                  <View style={styles.viewDetailIndicator}>
+                    <Ionicons name="eye-outline" size={14} color="#2563eb" />
+                    <Text style={styles.viewDetailText}>Toca para ver detalle completo</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <Text style={styles.emptyMessage}>Cargando gastos...</Text>
+              }
+              showsVerticalScrollIndicator={true}
+            />
+            
+            <TouchableOpacity 
+              style={styles.closeDetailButton}
+              onPress={() => setDetailModalVisible(false)}
+            >
+              <Text style={styles.closeDetailButtonText}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      
       {/* Modal para comentarios de aprobación */}
       <Modal
         animationType="slide"
@@ -307,7 +496,7 @@ export default function ManagerApprovalScreen() {
             
             {selectedLiquidation && (
               <View style={styles.expenseInfo}>
-                <Text style={styles.expenseAmount}>{selectedLiquidation.totalAmount.toFixed(2)}€</Text>
+                <Text style={styles.expenseAmount}>{selectedLiquidation.currency || 'Q'}{selectedLiquidation.totalAmount.toFixed(2)}</Text>
                 <Text style={styles.expenseDescription}>
                   Liquidación ID: {selectedLiquidation.id}
                 </Text>
@@ -581,6 +770,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
+    color: '#1f2937',
+    backgroundColor: '#ffffff',
     minHeight: 80,
     marginBottom: 20,
   },
@@ -629,6 +820,101 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 12,
+    fontWeight: '600',
+  },
+  detailButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginTop: 12,
+    marginBottom: 8,
+    gap: 6,
+  },
+  detailButtonText: {
+    color: '#2563eb',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  liquidationSummary: {
+    backgroundColor: '#f0f9ff',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  liquidationSummaryText: {
+    fontSize: 14,
+    color: '#1e40af',
+    marginBottom: 4,
+  },
+  expenseDetailCard: {
+    backgroundColor: '#f9fafb',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#2563eb',
+  },
+  expenseDetailHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 10,
+  },
+  expenseDetailDescription: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  expenseDetailAmount: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#059669',
+  },
+  expenseDetailInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  expenseDetailText: {
+    fontSize: 13,
+    color: '#6b7280',
+  },
+  viewDetailIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    gap: 6,
+  },
+  viewDetailText: {
+    fontSize: 12,
+    color: '#2563eb',
+    fontWeight: '500',
+  },
+  closeDetailButton: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  closeDetailButtonText: {
+    color: 'white',
+    fontSize: 16,
     fontWeight: '600',
   },
 });

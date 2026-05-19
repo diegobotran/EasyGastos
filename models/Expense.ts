@@ -29,6 +29,7 @@ export interface Expense {
   notes?: string;
   noinvoice: string;
   serie: string;
+  uuid?: string;  // UUID/Número de Autorización de factura FEL (Factura Electrónica en Línea)
   centro: string;
   cuenta: string;
   ordenco: string;
@@ -45,6 +46,7 @@ export interface Expense {
   needsSync?: boolean;
   lastSync?: number;
   serverUpdatedAt?: number;
+  synced?: number;  // 1 = sincronizado con backend, 0 = solo local
 }
 
 // Helper para obtener el texto del estado de liquidación

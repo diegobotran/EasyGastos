@@ -18,6 +18,9 @@ const managerLinksRoutes = require('./routes/manager-links');
 const liquidationsRoutes = require('./routes/liquidations');
 const uploadsRoutes = require('./routes/uploads');
 const appRoutes = require('./routes/app');
+const chatHistoryRoutes = require('./routes/chat-history');
+const satRoutes = require('./routes/sat');
+const sociedadesRoutes = require('./routes/sociedades');
 
 // Inicializar base de datos
 const { initDatabase } = require('./database/init');
@@ -70,7 +73,8 @@ app.get('/', (req, res) => {
       expenses: '/api/expenses',
       sync: '/api/sync',
       managerLinks: '/api/manager-links',
-      liquidations: '/api/liquidations'
+      liquidations: '/api/liquidations',
+      chatHistory: '/api/chat-history'
     },
     documentation: {
       health: 'GET /health - Health check',
@@ -147,6 +151,9 @@ app.use('/api/expenses', expenseRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/manager-links', managerLinksRoutes);
 app.use('/api/liquidations', liquidationsRoutes);
+app.use('/api/chat-history', chatHistoryRoutes);
+app.use('/api/sat', satRoutes);
+app.use('/api/sociedades', sociedadesRoutes);
 // Rutas para subir archivos (imágenes de comprobantes)
 app.use('/api/uploads', uploadsRoutes);
 // Rutas para actualizaciones de la app móvil

@@ -1,6 +1,6 @@
 const fetch = require('node-fetch');
 
-const BACKEND_URL = 'http://3.82.200.97:3000';
+const BACKEND_URL = 'http://23.20.116.61:3000';
 const MANAGER_EMAIL = 'jsuarezc1@gmail.com';
 const MANAGER_PIN = '1234';
 

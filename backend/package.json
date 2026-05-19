@@ -9,7 +9,9 @@
     "init-db": "node scripts/init-database.js",
     "check-db": "node check-database.js",
     "create-sample-data": "node create-sample-data.js",
-    "reset-db": "node scripts/reset-database.js"
+    "reset-db": "node scripts/reset-database.js",
+    "import-sat": "node scripts/import-sat-facturas.js",
+    "import-sat-clean": "node scripts/import-sat-facturas.js --clean"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -23,7 +25,9 @@
     "mongodb": "^6.3.0",
     "mongoose": "^8.0.3",
     "morgan": "^1.10.0",
-    "uuid": "^9.0.1"
+    "multer": "^2.1.1",
+    "uuid": "^9.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

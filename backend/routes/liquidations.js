@@ -5,7 +5,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireManager, canAccessUserData } = require('../middleware/auth');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 
-const { Liquidation, Expense } = models;
+const { Liquidation, Expense, User } = models;
 
 /**
  * @route   POST /api/liquidations
@@ -59,10 +59,25 @@ router.post('/',
         return res.status(400).json({ error: 'Liquidación ya existe' });
       }
 
-      // VALIDACIÓN CRÍTICA: Verificar que ningún gasto esté anulado
+      // VALIDACIÓN CRÍTICA: Verificar que TODOS los gastos existan en el backend
       console.log('🔍 Verificando estado de gastos antes de crear liquidación...');
+      console.log('🔍 ExpenseIds a buscar:', expenseIds);
       const expensesToInclude = await Expense.find({ id: { $in: expenseIds } });
-      console.log('📊 Gastos encontrados:', expensesToInclude.length);
+      console.log('📊 Gastos encontrados en BD:', expensesToInclude.length);
+      console.log('📊 Gastos esperados:', expenseIds.length);
+      
+      // VALIDACIÓN: Todos los gastos deben existir en el backend
+      if (expensesToInclude.length !== expenseIds.length) {
+        const foundIds = expensesToInclude.map(e => e.id);
+        const missingIds = expenseIds.filter(id => !foundIds.includes(id));
+        console.error('❌ CRÍTICO: Algunos gastos NO existen en el backend:', missingIds);
+        return res.status(400).json({ 
+          error: 'Algunos gastos no existen en el sistema. Por favor, sincroniza tus gastos primero y vuelve a intentar.',
+          missingExpenseIds: missingIds,
+          found: expensesToInclude.length,
+          expected: expenseIds.length
+        });
+      }
       
       const voidedExpenses = expensesToInclude.filter(exp => exp.expenseStatus === 'voided');
       if (voidedExpenses.length > 0) {
@@ -79,8 +94,8 @@ router.post('/',
         });
       }
 
-      // Verificar que ningún gasto esté ya en otra liquidación
-      const expensesInLiquidation = expensesToInclude.filter(exp => exp.liquidationId && exp.liquidationId !== '');
+      // Verificar que ningún gasto esté ya en otra liquidación (excepto esta misma)
+      const expensesInLiquidation = expensesToInclude.filter(exp => exp.liquidationId && exp.liquidationId !== '' && exp.liquidationId !== id);
       if (expensesInLiquidation.length > 0) {
         console.error('❌ Gastos ya están en otra liquidación:', expensesInLiquidation.map(e => ({
           id: e.id,
@@ -174,7 +189,20 @@ router.get('/manager/:managerEmail', authenticateToken, requireManager, async (r
       .sort({ submittedDate: -1 })
       .lean();
 
-    res.json(liquidations);
+    // Agregar la moneda del primer gasto de cada liquidación
+    const liquidationsWithCurrency = await Promise.all(
+      liquidations.map(async (liq) => {
+        if (liq.expenseIds && liq.expenseIds.length > 0) {
+          const firstExpense = await Expense.findOne({ id: liq.expenseIds[0] }).lean();
+          if (firstExpense && firstExpense.currency) {
+            liq.currency = firstExpense.currency;
+          }
+        }
+        return liq;
+      })
+    );
+
+    res.json(liquidationsWithCurrency);
   } catch (error) {
     console.error('Error obteniendo liquidaciones para el manager:', error);
     res.status(500).json({ error: 'Error del servidor' });
@@ -199,6 +227,33 @@ router.get('/:id', authenticateToken, async (req, res) => {
     res.json(liquidation);
   } catch (error) {
     console.error('Error obteniendo liquidación:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+/**
+ * @route   GET /api/liquidations/:id/expenses
+ * @desc    Obtener todos los gastos de una liquidación
+ * @access  Private (autenticado)
+ */
+router.get('/:id/expenses', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const liquidation = await Liquidation.findOne({ id }).lean();
+    
+    if (!liquidation) {
+      return res.status(404).json({ error: 'Liquidación no encontrada' });
+    }
+
+    // Obtener todos los gastos de la liquidación
+    const expenses = await Expense.find({ 
+      id: { $in: liquidation.expenseIds } 
+    }).lean();
+
+    res.json(expenses);
+  } catch (error) {
+    console.error('Error obteniendo gastos de liquidación:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -441,6 +496,11 @@ router.get('/:id/csv', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Solo se puede generar CSV de liquidaciones aprobadas' });
     }
 
+    // Obtener datos del usuario para codigo_empleado y sociedad
+    const user = await User.findOne({ email: liquidation.userId });
+    const codigoEmpleado = user?.employeeCode || '';
+    const sociedad = user?.sociedad || '';
+
     // Obtener los gastos de la liquidación
     const expenses = await Expense.find({ 
       id: { $in: liquidation.expenseIds } 
@@ -451,6 +511,8 @@ router.get('/:id/csv', authenticateToken, async (req, res) => {
       liquidation_id: liquidation.id,
       expense_id: expense.id,
       employee: liquidation.employeeName,
+      codigo_empleado: codigoEmpleado,
+      sociedad: sociedad,
       date: expense.date,
       description: expense.description,
       amount: expense.amount,

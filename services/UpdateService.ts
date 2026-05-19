@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import { Platform, Linking, Alert } from 'react-native';
+import Constants from 'expo-constants';
 import { getAPI_BASE_URL } from '../config/backend';
 
 /**
@@ -27,16 +28,19 @@ export interface UpdateCheckResult {
 }
 
 /**
- * Obtiene la versión actual de la app
+ * Obtiene la versión actual de la app desde expo-constants
  */
 export const getCurrentVersion = (): string => {
-  // En producción, esto debería venir de app.json o Constants.expoConfig
-  return '1.0.1';
+  // Leer desde Constants.expoConfig (app.json)
+  return Constants.expoConfig?.version || '1.0.1';
 };
 
+/**
+ * Obtiene el build number actual desde expo-constants
+ */
 export const getCurrentBuildNumber = (): number => {
-  // En producción, esto debería venir de app.json o Constants.expoConfig
-  return 2;
+  // Leer desde Constants.expoConfig.android.versionCode (app.json)
+  return Constants.expoConfig?.android?.versionCode || 2;
 };
 
 /**

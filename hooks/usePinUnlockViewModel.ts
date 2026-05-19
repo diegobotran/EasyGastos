@@ -5,7 +5,7 @@ import { BackendSyncService } from '../services/BackendSyncService';
 const PIN_LENGTH = 4;
 
 interface UsePinUnlockViewModelProps {
-  onUnlockSuccess: () => void;
+  onUnlockSuccess: (user: any, pin: string) => void;
   email: string; // The email of the user to verify
 }
 
@@ -44,15 +44,17 @@ export const usePinUnlockViewModel = ({ onUnlockSuccess, email }: UsePinUnlockVi
     const isValid = await AuthService.verifyPin(email, pin);
     
     if (isValid) {
-      // ✅ PIN CORRECTO - Sincronizar datos del usuario en background
-      console.log('🔓 Unlock: PIN correcto - Sincronizando datos en background...');
+      // ✅ PIN CORRECTO - Obtener usuario y pasar al callback
+      console.log('🔓 Unlock: PIN correcto - Obteniendo datos del usuario...');
+      const user = await AuthService.getLastLoggedInUser();
       
       // Ejecutar sincronización completa en background (NO BLOQUEA el UI)
-      syncUserDataInBackground(email).catch(err => {
+      syncUserDataInBackground(email, pin).catch(err => {
         console.error('⚠️ Unlock: Error en sincronización de datos (no crítico):', err);
       });
       
-      onUnlockSuccess();
+      // Pasar el usuario y PIN al callback
+      onUnlockSuccess(user, pin);
     } else {
       setError('PIN Incorrecto. Intente de nuevo.');
       setPin('');
@@ -68,14 +70,14 @@ export const usePinUnlockViewModel = ({ onUnlockSuccess, email }: UsePinUnlockVi
    * - El usuario hace login en un nuevo dispositivo
    * - Se necesita recuperar datos del servidor
    */
-  const syncUserDataInBackground = async (userEmail: string) => {
+  const syncUserDataInBackground = async (userEmail: string, userPin: string) => {
     try {
       console.log('🔄 Unlock: ========== SINCRONIZACIÓN COMPLETA DE DATOS ==========');
       console.log('📧 Unlock: Usuario:', userEmail);
       
       // Paso 1: Obtener token de autenticación
       console.log('🔐 Unlock: Obteniendo token de autenticación...');
-      const loginResult = await BackendSyncService.loginAndGetToken(userEmail, pin);
+      const loginResult = await BackendSyncService.loginAndGetToken(userEmail, userPin);
       if (!loginResult.success || !loginResult.token) {
         console.warn('⚠️ Unlock: No se pudo obtener token - Sincronización abortada');
         return;

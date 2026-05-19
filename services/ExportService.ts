@@ -34,11 +34,14 @@ export const generateLiquidationCSV = async (
     csvContent += `\n`;
     csvContent += `REINTEGRO A FAVOR DE:,${employeeName}\n`;
     csvContent += `CODIGO,${employeeCode}\n`;
+    csvContent += `APROBADO POR:,${liquidation.approverName || 'Pendiente'}\n`;
     csvContent += `\n`;
 
     // === ENCABEZADOS DE TABLA ===
     csvContent += [
       'No',
+      'CATEGORIA',
+      'DEPARTAMENTO',
       'CUENTA CONTABLE',
       'AFECTO IVA',
       'MONTO',
@@ -51,13 +54,15 @@ export const generateLiquidationCSV = async (
       'FECHA DE FACTURA',
       'NIT',
       'NOMBRE DEL PROVEEDOR',
-      'DESCRIPCION'
+      'NOTAS'
     ].join(',') + '\n';
 
     // === DATOS DE GASTOS ===
     expenses.forEach((expense, index) => {
       const row = [
         (index + 1).toString(), // No
+        expense.category || '', // CATEGORIA
+        expense.department || '', // DEPARTAMENTO
         expense.cuenta || '', // CUENTA CONTABLE
         expense.totiva > 0 ? '12' : '0', // AFECTO IVA (si tiene IVA, marcar 12)
         expense.amount.toFixed(2), // MONTO
@@ -70,7 +75,7 @@ export const generateLiquidationCSV = async (
         expense.date || '', // FECHA DE FACTURA
         expense.vat_number || 'C/F', // NIT
         expense.supplier || '', // NOMBRE DEL PROVEEDOR
-        expense.description || '' // DESCRIPCION
+        expense.notes || '' // NOTAS (solo lo que el usuario escribió)
       ];
 
       // Escapar commas en los campos de texto
@@ -161,7 +166,6 @@ export const generateDetailedLiquidationCSV = async (
     csvContent += [
       'No',
       'ID Gasto',
-      'Descripcion',
       'Monto',
       'Fecha',
       'Categoria',
@@ -183,7 +187,6 @@ export const generateDetailedLiquidationCSV = async (
       const row = [
         (index + 1).toString(),
         expense.id.slice(-8),
-        expense.description,
         `Q${expense.amount.toFixed(2)}`,
         expense.date,
         expense.category,

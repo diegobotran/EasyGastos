@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const { models } = require('../database/init');
 const { authenticateToken, generateToken, canAccessUserData, optionalAuth, requireManager } = require('../middleware/auth');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
+const Sociedad = require('../models/Sociedad');
 const router = express.Router();
 
 const { User, SyncLog } = models;
@@ -14,7 +15,9 @@ const validateUserRegistration = [
   body('firstName').trim().isLength({ min: 1 }).escape(),
   body('lastName').trim().isLength({ min: 1 }).escape(),
   body('pin').isLength({ min: 4, max: 4 }).isNumeric(),
-  body('department').optional().trim().escape()
+  body('employeeCode').optional().trim().escape(),
+  body('department').optional().trim().escape(),
+  body('sociedad').optional().trim().escape()
 ];
 
 const validateUserProfile = [
@@ -32,22 +35,52 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { email, firstName, lastName, pin, department } = req.body;
+    const { email, firstName, lastName, pin, employeeCode, department, sociedad } = req.body;
 
     // Verificar si el usuario ya existe
     const existingUser = await User.findOne({ email });
     
-    // Encriptar PIN
-    const hashedPin = await bcrypt.hash(pin, 10);
+    // Encriptar PIN (se hará después de validar)
+    // const hashedPin = await bcrypt.hash(pin, 10);
 
     if (existingUser) {
-      // ===== USUARIO EXISTE: ACTUALIZAR DATOS Y PIN =====
-      console.log(`🔄 Usuario ${email} ya existe - Actualizando datos y PIN`);
+      // ===== USUARIO EXISTE: VERIFICAR PIN ANTES DE ACTUALIZAR =====
+      console.log(`🔍 Usuario ${email} ya existe - Verificando PIN...`);
+      
+      // Verificar si el PIN enviado coincide con el PIN existente
+      const pinMatch = await bcrypt.compare(pin, existingUser.pin);
+      
+      if (!pinMatch) {
+        // ⚠️ PIN DIFERENTE - Posible nuevo registro en otro dispositivo o PIN olvidado
+        console.log(`⚠️ Usuario ${email} intenta registrar con PIN DIFERENTE`);
+        
+        return res.status(409).json({
+          error: 'Usuario ya registrado con otro PIN',
+          code: 'PIN_MISMATCH',
+          message: 'Este correo ya está registrado. Si olvidaste tu PIN, contacta al administrador.',
+          suggestion: 'Intenta con tu PIN anterior o solicita ayuda al administrador.'
+        });
+      }
+      
+      // ✅ PIN CORRECTO - Actualizar solo datos (NO el PIN)
+      console.log(`✅ Usuario ${email} - PIN correcto, actualizando información`);
       
       existingUser.firstName = firstName;
       existingUser.lastName = lastName;
-      existingUser.pin = hashedPin; // Actualizar PIN
+      // NO actualizar PIN aquí (ya es correcto)
+      existingUser.employeeCode = employeeCode;
       existingUser.department = department;
+      existingUser.sociedad = sociedad;
+      
+      // Asignar automáticamente el NIT de la empresa basado en el código de sociedad
+      if (sociedad) {
+        const nitEmpresa = await Sociedad.getNitByCodigo(sociedad);
+        if (nitEmpresa) {
+          existingUser.nitEmpresa = nitEmpresa;
+          console.log(`🏢 NIT de empresa asignado: ${nitEmpresa} (Sociedad: ${sociedad})`);
+        }
+      }
+      
       existingUser.lastLoginAt = new Date();
 
       // Verificar si este usuario ES manager (aparece como managerEmail en links)
@@ -101,7 +134,9 @@ router.post('/register', validateUserRegistration, async (req, res) => {
           email,
           firstName,
           lastName,
+          employeeCode,
           department,
+          sociedad,
           managerEmail: existingUser.managerEmail
         }
       });
@@ -109,6 +144,9 @@ router.post('/register', validateUserRegistration, async (req, res) => {
 
     // ===== USUARIO NUEVO: REGISTRAR =====
     console.log(`📝 Registrando nuevo usuario: ${email}`);
+    
+    // Encriptar PIN para nuevo usuario
+    const hashedPin = await bcrypt.hash(pin, 10);
 
     // Verificar si este usuario ES manager (aparece como managerEmail en links)
     const isManagerCount = await ManagerEmployeeLink.countDocuments({ 
@@ -142,13 +180,25 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       }
     }
 
+    // Asignar automáticamente el NIT de la empresa basado en el código de sociedad
+    let nitEmpresa = null;
+    if (sociedad) {
+      nitEmpresa = await Sociedad.getNitByCodigo(sociedad);
+      if (nitEmpresa) {
+        console.log(`🏢 NIT de empresa asignado: ${nitEmpresa} (Sociedad: ${sociedad})`);
+      }
+    }
+
     // Crear usuario
     const newUser = new User({
       email,
       firstName,
       lastName,
       pin: hashedPin,
+      employeeCode,
       department,
+      sociedad,
+      nitEmpresa,
       managerEmail,
       isManager,
       lastLoginAt: new Date()
@@ -177,7 +227,9 @@ router.post('/register', validateUserRegistration, async (req, res) => {
         email,
         firstName,
         lastName,
+        employeeCode,
         department,
+        sociedad,
         managerEmail
       }
     });

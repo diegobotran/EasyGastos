@@ -153,29 +153,45 @@ export default function DashboardScreen() {
         </View>
         
         <View style={styles.statsGrid}>
-          <View style={[styles.statCard, styles.statCardDraft]}>
+          <TouchableOpacity 
+            style={[styles.statCard, styles.statCardDraft]}
+            onPress={() => router.push('/(tabs)/expenses')}
+            activeOpacity={0.7}
+          >
             <Ionicons name="create-outline" size={20} color="#64748b" />
             <Text style={styles.statValue}>{expensesDraft}</Text>
-            <Text style={styles.statLabel}>Borradores</Text>
-          </View>
+            <Text style={styles.statLabel}>Borrador</Text>
+          </TouchableOpacity>
           
-          <View style={[styles.statCard, styles.statCardPending]}>
+          <TouchableOpacity 
+            style={[styles.statCard, styles.statCardPending]}
+            onPress={() => router.push('/(tabs)/expenses')}
+            activeOpacity={0.7}
+          >
             <Ionicons name="time-outline" size={20} color="#d97706" />
             <Text style={styles.statValue}>{expensesPendingManager}</Text>
-            <Text style={styles.statLabel}>Enviados</Text>
-          </View>
+            <Text style={styles.statLabel}>En Liquidación</Text>
+          </TouchableOpacity>
           
-          <View style={[styles.statCard, styles.statCardApproved]}>
+          <TouchableOpacity 
+            style={[styles.statCard, styles.statCardApproved]}
+            onPress={() => router.push('/(tabs)/expenses')}
+            activeOpacity={0.7}
+          >
             <Ionicons name="checkmark-circle-outline" size={20} color="#059669" />
             <Text style={styles.statValue}>{expensesApproved}</Text>
-            <Text style={styles.statLabel}>Aprobados</Text>
-          </View>
+            <Text style={styles.statLabel}>Autorizados</Text>
+          </TouchableOpacity>
           
-          <View style={[styles.statCard, styles.statCardRejected]}>
+          <TouchableOpacity 
+            style={[styles.statCard, styles.statCardRejected]}
+            onPress={() => router.push('/(tabs)/expenses')}
+            activeOpacity={0.7}
+          >
             <Ionicons name="close-circle-outline" size={20} color="#dc2626" />
             <Text style={styles.statValue}>{expensesRejected}</Text>
             <Text style={styles.statLabel}>Rechazados</Text>
-          </View>
+          </TouchableOpacity>
         </View>
 
         {/* Alerta: Gastos listos para liquidar */}
@@ -208,7 +224,11 @@ export default function DashboardScreen() {
         </View>
         
         <View style={styles.liquidationStats}>
-          <View style={styles.liquidationStatItem}>
+          <TouchableOpacity 
+            style={styles.liquidationStatItem}
+            onPress={() => router.push({ pathname: './liquidations' })}
+            activeOpacity={0.7}
+          >
             <View style={styles.liquidationStatIcon}>
               <Ionicons name="create-outline" size={18} color="#64748b" />
             </View>
@@ -216,9 +236,14 @@ export default function DashboardScreen() {
               <Text style={styles.liquidationStatValue}>{liquidationsDraft}</Text>
               <Text style={styles.liquidationStatLabel}>Borradores</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
+          </TouchableOpacity>
           
-          <View style={styles.liquidationStatItem}>
+          <TouchableOpacity 
+            style={styles.liquidationStatItem}
+            onPress={() => router.push({ pathname: './liquidations' })}
+            activeOpacity={0.7}
+          >
             <View style={[styles.liquidationStatIcon, { backgroundColor: '#fef3c7' }]}>
               <Ionicons name="send" size={18} color="#d97706" />
             </View>
@@ -226,9 +251,14 @@ export default function DashboardScreen() {
               <Text style={styles.liquidationStatValue}>{liquidationsSubmitted}</Text>
               <Text style={styles.liquidationStatLabel}>Enviadas</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
+          </TouchableOpacity>
           
-          <View style={styles.liquidationStatItem}>
+          <TouchableOpacity 
+            style={styles.liquidationStatItem}
+            onPress={() => router.push({ pathname: './liquidations' })}
+            activeOpacity={0.7}
+          >
             <View style={[styles.liquidationStatIcon, { backgroundColor: '#d1fae5' }]}>
               <Ionicons name="checkmark-circle" size={18} color="#059669" />
             </View>
@@ -236,17 +266,23 @@ export default function DashboardScreen() {
               <Text style={styles.liquidationStatValue}>{liquidationsApproved}</Text>
               <Text style={styles.liquidationStatLabel}>Aprobadas</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
+          </TouchableOpacity>
         </View>
 
         {totalAmountLiquidations > 0 && (
-          <View style={styles.liquidationTotalCard}>
+          <TouchableOpacity 
+            style={styles.liquidationTotalCard}
+            onPress={() => router.push({ pathname: './liquidations' })}
+            activeOpacity={0.7}
+          >
             <Ionicons name="wallet-outline" size={20} color="#a855f7" />
             <View style={styles.liquidationTotalInfo}>
               <Text style={styles.liquidationTotalLabel}>Total Liquidado</Text>
               <Text style={styles.liquidationTotalValue}>Q{totalAmountLiquidations.toFixed(2)}</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
+          </TouchableOpacity>
         )}
       </View>
 
@@ -276,6 +312,14 @@ export default function DashboardScreen() {
           >
             <Ionicons name="folder" size={24} color="#a855f7" />
             <Text style={styles.quickActionText}>Liquidaciones</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.quickActionButton}
+            onPress={() => router.push('../expense-chat')}
+          >
+            <Ionicons name="chatbubbles" size={24} color="#f59e0b" />
+            <Text style={styles.quickActionText}>Asistente IA</Text>
           </TouchableOpacity>
         </View>
       </View>

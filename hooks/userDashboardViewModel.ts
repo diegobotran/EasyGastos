@@ -21,6 +21,7 @@ export const useDashboardViewModel = () => {
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const appState = useRef(AppState.currentState);
   const authTokenRef = useRef<string | null>(null);
+  const lastLoadTimestampRef = useRef<number>(0);
 
   /**
    * 🔄 SINCRONIZACIÓN PERIÓDICA DE DATOS DEL USUARIO
@@ -110,6 +111,15 @@ export const useDashboardViewModel = () => {
 
 
   const loadExpenses = async () => {
+    // Evitar recargas frecuentes - solo recargar si han pasado más de 30 segundos
+    const now = Date.now();
+    const timeSinceLastLoad = now - lastLoadTimestampRef.current;
+    
+    if (timeSinceLastLoad < 30000) { // 30 segundos
+      console.log(`⏭️ Dashboard: Omitiendo recarga (hace ${Math.round(timeSinceLastLoad / 1000)}s)`);
+      return;
+    }
+    
     console.log('📊 Dashboard: Iniciando carga de gastos...');
     setIsLoading(true);
     try {
@@ -127,6 +137,7 @@ export const useDashboardViewModel = () => {
         console.log('📊 Dashboard: Liquidaciones cargadas:', liquidationsData.length, 'liquidaciones');
         setExpenses(expensesData);
         setLiquidations(liquidationsData);
+        lastLoadTimestampRef.current = Date.now();
       } else {
         console.log('⚠️ Dashboard: Sin usuario, no se cargan datos');
         setExpenses([]);
@@ -184,8 +195,14 @@ export const useDashboardViewModel = () => {
 
   useFocusEffect(
     React.useCallback(() => {
-      loadExpenses();
-      loadUserGreeting();
+      // Solo cargar si es la primera vez o si hace más de 30 segundos
+      const timeSinceLastLoad = Date.now() - lastLoadTimestampRef.current;
+      if (lastLoadTimestampRef.current === 0 || timeSinceLastLoad > 30000) {
+        loadExpenses();
+        loadUserGreeting();
+      } else {
+        console.log(`⏭️ Dashboard: Omitiendo recarga en focus (hace ${Math.round(timeSinceLastLoad / 1000)}s)`);
+      }
     }, [])
   );
 
@@ -194,22 +211,23 @@ export const useDashboardViewModel = () => {
   const activeExpenses = expenses.filter(exp => exp.expenseStatus !== 'voided');
   
   const totalExpenses = activeExpenses.length;
-  const expensesDraft = activeExpenses.filter(exp => exp.status === 'BORRADOR').length;
-  const expensesPendingManager = activeExpenses.filter(exp => exp.status === 'ENVIADO_JEFE').length;
-  const expensesApproved = activeExpenses.filter(exp => 
-    exp.status === 'APROBADO_JEFE' || 
-    exp.status === 'APROBADO_FINANZAS' || 
-    exp.status === 'CONTABILIZADO'
-  ).length;
+  
+  // Usar expenseStatus (flujo de liquidación) en lugar de status (flujo de aprobación)
+  // para mantener consistencia con la pantalla de gastos
+  const expensesDraft = activeExpenses.filter(exp => exp.expenseStatus === 'draft').length;
+  const expensesPendingManager = activeExpenses.filter(exp => exp.expenseStatus === 'in_liquidation').length;
+  const expensesApproved = activeExpenses.filter(exp => exp.expenseStatus === 'approved').length;
+  
+  // Los rechazados se cuentan por el campo status ya que no hay expenseStatus='rejected'
   const expensesRejected = activeExpenses.filter(exp => 
     exp.status === 'RECHAZADO_JEFE' || 
     exp.status === 'RECHAZADO_FINANZAS' || 
     exp.status === 'ERROR_SAP'
   ).length;
   
-  // Gastos disponibles para liquidación (aprobados por jefe pero no en liquidación)
+  // Gastos disponibles para liquidación (en draft y sin liquidationId)
   const expensesAvailableForLiquidation = activeExpenses.filter(exp => 
-    exp.status === 'APROBADO_JEFE' && !exp.liquidationId
+    exp.expenseStatus === 'draft' && !exp.liquidationId
   ).length;
 
   // ========== MÉTRICAS DE LIQUIDACIONES ==========
