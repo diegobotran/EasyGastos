@@ -63,9 +63,35 @@ export const initLiquidationsTable = async (): Promise<void> => {
           rejectedBy TEXT,
           csvGeneratedAt TEXT,
           csvGeneratedBy TEXT,
+          sapDocNumber TEXT,
+          sapSyncStatus TEXT,
+          sapReferenceId TEXT,
+          sapResponseMessage TEXT,
+          sapSyncedAt TEXT,
           synced INTEGER DEFAULT 0
         )
       `);
+
+      const liquidationColumns = [
+        ['approverEmail', 'TEXT'],
+        ['rejectedBy', 'TEXT'],
+        ['csvGeneratedAt', 'TEXT'],
+        ['csvGeneratedBy', 'TEXT'],
+        ['sapDocNumber', 'TEXT'],
+        ['sapSyncStatus', 'TEXT'],
+        ['sapReferenceId', 'TEXT'],
+        ['sapResponseMessage', 'TEXT'],
+        ['sapSyncedAt', 'TEXT']
+      ];
+
+      for (const [columnName, columnType] of liquidationColumns) {
+        try {
+          await db.execAsync(`ALTER TABLE liquidations ADD COLUMN ${columnName} ${columnType};`);
+          console.log(`✅ Columna ${columnName} agregada en liquidations`);
+        } catch (error) {
+          console.log(`ℹ️ Columna ${columnName} ya existe o no se pudo agregar`);
+        }
+      }
       
       console.log('✅ LiquidationService: Tabla liquidations inicializada correctamente');
       isDBInitialized = true;
@@ -127,8 +153,8 @@ export const createLiquidation = async (
     await db.runAsync(
       `INSERT INTO liquidations (
         id, userId, employeeName, createdDate, expenseIds, 
-        totalAmount, status, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+        totalAmount, status, sapSyncStatus, synced
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       [
         liquidation.id,
         liquidation.userId,
@@ -136,7 +162,8 @@ export const createLiquidation = async (
         liquidation.createdDate,
         JSON.stringify(liquidation.expenseIds),
         liquidation.totalAmount,
-        liquidation.status
+        liquidation.status,
+        liquidation.sapSyncStatus || 'PENDING'
       ]
     );
 
@@ -185,6 +212,15 @@ export const getLiquidations = async (userId: string): Promise<Liquidation[]> =>
       expenseIds: JSON.parse(row.expenseIds),
       totalAmount: row.totalAmount,
       status: row.status as LiquidationStatus,
+      approverEmail: row.approverEmail,
+      rejectedBy: row.rejectedBy,
+      csvGeneratedAt: row.csvGeneratedAt,
+      csvGeneratedBy: row.csvGeneratedBy,
+      sapDocNumber: row.sapDocNumber,
+      sapSyncStatus: row.sapSyncStatus,
+      sapReferenceId: row.sapReferenceId,
+      sapResponseMessage: row.sapResponseMessage,
+      sapSyncedAt: row.sapSyncedAt,
       managerComments: row.managerComments,
       submittedDate: row.submittedDate,
       approvedDate: row.approvedDate,
@@ -226,6 +262,15 @@ export const getLiquidationById = async (id: string, userId: string): Promise<Li
       expenseIds: JSON.parse(result.expenseIds),
       totalAmount: result.totalAmount,
       status: result.status as LiquidationStatus,
+      approverEmail: result.approverEmail,
+      rejectedBy: result.rejectedBy,
+      csvGeneratedAt: result.csvGeneratedAt,
+      csvGeneratedBy: result.csvGeneratedBy,
+      sapDocNumber: result.sapDocNumber,
+      sapSyncStatus: result.sapSyncStatus,
+      sapReferenceId: result.sapReferenceId,
+      sapResponseMessage: result.sapResponseMessage,
+      sapSyncedAt: result.sapSyncedAt,
       managerComments: result.managerComments,
       submittedDate: result.submittedDate,
       approvedDate: result.approvedDate,
@@ -442,6 +487,15 @@ export const updateLiquidationStatus = async (
       expenseIds: JSON.parse(result.expenseIds),
       totalAmount: result.totalAmount,
       status: result.status as LiquidationStatus,
+      approverEmail: result.approverEmail,
+      rejectedBy: result.rejectedBy,
+      csvGeneratedAt: result.csvGeneratedAt,
+      csvGeneratedBy: result.csvGeneratedBy,
+      sapDocNumber: result.sapDocNumber,
+      sapSyncStatus: result.sapSyncStatus,
+      sapReferenceId: result.sapReferenceId,
+      sapResponseMessage: result.sapResponseMessage,
+      sapSyncedAt: result.sapSyncedAt,
       managerComments: result.managerComments,
       submittedDate: result.submittedDate,
       approvedDate: result.approvedDate,
@@ -605,6 +659,15 @@ export const getLiquidationsNeedingSync = async (userId: string): Promise<Liquid
           expenseIds: expenseIds,
           totalAmount: row.totalAmount,
           status: row.status as LiquidationStatus,
+          approverEmail: row.approverEmail,
+          rejectedBy: row.rejectedBy,
+          csvGeneratedAt: row.csvGeneratedAt,
+          csvGeneratedBy: row.csvGeneratedBy,
+          sapDocNumber: row.sapDocNumber,
+          sapSyncStatus: row.sapSyncStatus,
+          sapReferenceId: row.sapReferenceId,
+          sapResponseMessage: row.sapResponseMessage,
+          sapSyncedAt: row.sapSyncedAt,
           managerComments: row.managerComments,
           submittedDate: row.submittedDate,
           approvedDate: row.approvedDate,
@@ -737,8 +800,10 @@ export const insertLiquidationFromBackend = async (liquidation: any): Promise<vo
       `INSERT OR REPLACE INTO liquidations (
         id, userId, employeeName, createdDate, expenseIds, 
         totalAmount, status, managerEmail, managerComments, submittedDate,
-        approvedDate, rejectedDate, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        approvedDate, rejectedDate, approverEmail, rejectedBy,
+        csvGeneratedAt, csvGeneratedBy, sapDocNumber, sapSyncStatus,
+        sapReferenceId, sapResponseMessage, sapSyncedAt, synced
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         liquidation.id,
         liquidation.userId,
@@ -751,7 +816,16 @@ export const insertLiquidationFromBackend = async (liquidation: any): Promise<vo
         liquidation.managerComments || null,
         liquidation.submittedDate || null,
         liquidation.approvedDate || null,
-        liquidation.rejectedDate || null
+        liquidation.rejectedDate || null,
+        liquidation.approverEmail || null,
+        liquidation.rejectedBy || null,
+        liquidation.csvGeneratedAt || null,
+        liquidation.csvGeneratedBy || null,
+        liquidation.sapDocNumber || null,
+        liquidation.sapSyncStatus || null,
+        liquidation.sapReferenceId || null,
+        liquidation.sapResponseMessage || null,
+        liquidation.sapSyncedAt || null
       ]
     );
 

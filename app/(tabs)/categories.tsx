@@ -1,24 +1,59 @@
 import { Category } from '../../models/Category';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useState } from 'react';
+import { Picker } from '@react-native-picker/picker';
+import React, { useEffect, useState } from 'react';
 import { Alert, FlatList, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useCategoryViewModel } from '../../hooks/useCategoryViewModel';
 import * as AuthService from '../../services/AuthService';
 import { BackendSyncService } from '../../services/BackendSyncService';
 import * as SecureStore from 'expo-secure-store';
+import { CENTRO_OPTIONS, CUENTA_OPTIONS, ORDENCO_OPTIONS, SOCIEDAD_OPTIONS } from '../../constants/AccountingCatalogs';
 
 export default function CategoryScreen() {
-  const { categories, isLoading, addCategory, removeCategory, updateCategory } = useCategoryViewModel();
+  const { categories, isLoading, addCategory, removeCategory, updateCategory, countDraftExpensesUsingCategory } = useCategoryViewModel();
   const [name, setName] = useState('');
+  const [defaultSociedad, setDefaultSociedad] = useState('');
+  const [sociedad, setSociedad] = useState('');
   const [centro, setCentro] = useState('');
   const [cuenta, setCuenta] = useState('');
   const [ordenco, setOrdenco] = useState('');
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
 
+  const resetForm = () => {
+    setName('');
+    setSociedad(defaultSociedad);
+    setCentro('');
+    setCuenta('');
+    setOrdenco('');
+  };
+
+  const closeEditModal = () => {
+    setEditModalVisible(false);
+    setEditingCategory(null);
+    resetForm();
+  };
+
+  useEffect(() => {
+    const loadUserSociedad = async () => {
+      const user = await AuthService.getLastLoggedInUser();
+      const defaultSociedad = user?.sociedad && SOCIEDAD_OPTIONS.includes(user.sociedad as typeof SOCIEDAD_OPTIONS[number])
+        ? user.sociedad
+        : '';
+      setDefaultSociedad(defaultSociedad);
+      setSociedad(defaultSociedad);
+    };
+
+    loadUserSociedad();
+  }, []);
+
   const handleAddCategory = async () => {
     if (!name) {
       alert('El nombre de la categoría es requerido.');
+      return;
+    }
+    if (!sociedad || !centro || !cuenta || !ordenco) {
+      Alert.alert('Datos incompletos', 'Para crear una categoría debes completar obligatoriamente Sociedad, Centro, Cuenta y Orden CO.');
       return;
     }
     if (categories.some(cat => cat.name.toLowerCase() === name.toLowerCase())) {
@@ -31,13 +66,14 @@ export default function CategoryScreen() {
       
       // PASO 1: SIEMPRE agregar la categoría LOCALMENTE primero (offline-first)
       console.log('💾 Categories: Agregando categoría LOCALMENTE (offline-first)...');
-      addCategory(name, centro, cuenta, ordenco);
+      const wasAdded = await addCategory(name, sociedad, centro, cuenta, ordenco);
+
+      if (!wasAdded) {
+        return;
+      }
       
       // Limpiar el formulario inmediatamente
-      setName('');
-      setCentro('');
-      setCuenta('');
-      setOrdenco('');
+      resetForm();
 
       // Notificar al usuario de inmediato
       Alert.alert('Éxito', '✅ Categoría agregada localmente');
@@ -145,15 +181,20 @@ export default function CategoryScreen() {
   const handleEditCategory = (category: Category) => {
     setEditingCategory(category);
     setName(category.name);
+    setSociedad(category.sociedad || '');
     setCentro(category.centro || '');
     setCuenta(category.cuenta || '');
     setOrdenco(category.ordenco || '');
     setEditModalVisible(true);
   };
 
-  const handleUpdateCategory = async () => {
+  const performUpdateCategory = async () => {
     if (!name || !editingCategory) {
       alert('El nombre de la categoría es requerido.');
+      return;
+    }
+    if (!sociedad || !centro || !cuenta || !ordenco) {
+      Alert.alert('Datos incompletos', 'Para actualizar una categoría debes completar obligatoriamente Sociedad, Centro, Cuenta y Orden CO.');
       return;
     }
     if (categories.some(cat => cat.id !== editingCategory.id && cat.name.toLowerCase() === name.toLowerCase())) {
@@ -163,16 +204,48 @@ export default function CategoryScreen() {
     const updatedCategory = {
       ...editingCategory,
       name,
+      sociedad,
       centro,
       cuenta,
       ordenco,
     };
-    await updateCategory(updatedCategory);
-    setEditModalVisible(false);
-    setName('');
-    setCentro('');
-    setCuenta('');
-    setOrdenco('');
+    const updatedDraftExpenses = await updateCategory(updatedCategory);
+    closeEditModal();
+
+    if (updatedDraftExpenses > 0) {
+      Alert.alert('Categoría actualizada', `La categoría fue actualizada y ${updatedDraftExpenses} gasto(s) en borrador ligado(s) a ella también actualizaron su snapshot contable.`);
+      return;
+    }
+
+    Alert.alert('Categoría actualizada', 'La categoría fue actualizada exitosamente.');
+  };
+
+  const handleUpdateCategory = async () => {
+    if (!editingCategory) {
+      return;
+    }
+
+    const impactedDraftExpenses = await countDraftExpensesUsingCategory(editingCategory.name);
+
+    if (impactedDraftExpenses === 0) {
+      await performUpdateCategory();
+      return;
+    }
+
+    const title = 'Actualizar categoría y gastos en borrador';
+    const message = `Esta categoría está asociada a ${impactedDraftExpenses} gasto(s) en borrador. Si continúas, se actualizarán automáticamente el nombre de la categoría y los datos contables snapshot de esos gastos. Esto no afectará liquidaciones ni gastos fuera de borrador.`;
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(message)) {
+        await performUpdateCategory();
+      }
+      return;
+    }
+
+    Alert.alert(title, message, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Continuar', onPress: () => { void performUpdateCategory(); } },
+    ]);
   };
 
   if (isLoading) {
@@ -192,30 +265,42 @@ export default function CategoryScreen() {
           onChangeText={setName} 
           placeholderTextColor="#888888"
         />
-        <TextInput 
-          style={styles.input} 
-          placeholder="Centro (opcional)" 
-          value={centro} 
-          onChangeText={text => setCentro(text.replace(/[^0-9]/g, ''))} 
-          keyboardType="numeric"
-          placeholderTextColor="#888888"
-        />
-        <TextInput 
-          style={styles.input} 
-          placeholder="Cuenta (opcional)" 
-          value={cuenta} 
-          onChangeText={text => setCuenta(text.replace(/[^0-9]/g, ''))} 
-          keyboardType="numeric"
-          placeholderTextColor="#888888"
-        />
-        <TextInput 
-          style={styles.input} 
-          placeholder="Orden CO (opcional)" 
-          value={ordenco} 
-          onChangeText={text => setOrdenco(text.replace(/[^0-9]/g, ''))} 
-          keyboardType="numeric"
-          placeholderTextColor="#888888"
-        />
+        <View style={styles.pickerContainerField}>
+          <Picker
+            selectedValue={sociedad}
+            onValueChange={(value) => setSociedad(value)}
+            style={styles.pickerField}
+          >
+            <Picker.Item label="Seleccionar sociedad *" value="" />
+            {SOCIEDAD_OPTIONS.map((item) => (
+              <Picker.Item key={item} label={item} value={item} />
+            ))}
+          </Picker>
+        </View>
+        <View style={styles.pickerContainerField}>
+          <Picker selectedValue={centro} onValueChange={(value) => setCentro(value)} style={styles.pickerField}>
+            <Picker.Item label="Seleccionar centro *" value="" />
+            {CENTRO_OPTIONS.map((item) => (
+              <Picker.Item key={item} label={item} value={item} />
+            ))}
+          </Picker>
+        </View>
+        <View style={styles.pickerContainerField}>
+          <Picker selectedValue={cuenta} onValueChange={(value) => setCuenta(value)} style={styles.pickerField}>
+            <Picker.Item label="Seleccionar cuenta *" value="" />
+            {CUENTA_OPTIONS.map((item) => (
+              <Picker.Item key={item} label={item} value={item} />
+            ))}
+          </Picker>
+        </View>
+        <View style={styles.pickerContainerField}>
+          <Picker selectedValue={ordenco} onValueChange={(value) => setOrdenco(value)} style={styles.pickerField}>
+            <Picker.Item label="Seleccionar orden CO *" value="" />
+            {ORDENCO_OPTIONS.map((item) => (
+              <Picker.Item key={item} label={item} value={item} />
+            ))}
+          </Picker>
+        </View>
         <TouchableOpacity style={styles.addButton} onPress={handleAddCategory}>
           <Ionicons name="add" size={20} color="white" />
           <Text style={styles.addButtonText}>Agregar Categoría</Text>
@@ -231,6 +316,7 @@ export default function CategoryScreen() {
           {/* 1. A new container for all the text info */}
           <View style={styles.categoryInfoContainer}>
             <Text style={styles.categoryName}>{item.name}</Text>
+            <Text style={styles.categoryDetail}>Sociedad: {item.sociedad || 'N/A'}</Text>
             <Text style={styles.categoryDetail}>Centro: {item.centro || 'N/A'}</Text>
             <Text style={styles.categoryDetail}>Cuenta: {item.cuenta || 'N/A'}</Text>
             <Text style={styles.categoryDetail}>Orden CO: {item.ordenco || 'N/A'}</Text>
@@ -266,34 +352,42 @@ export default function CategoryScreen() {
             onChangeText={setName} 
             placeholderTextColor="#888888"
           />
-          <TextInput 
-            style={styles.input} 
-            placeholder="Centro (opcional)" 
-            value={centro} 
-            onChangeText={text => setCentro(text.replace(/[^0-9]/g, ''))} 
-            keyboardType="numeric"
-            placeholderTextColor="#888888"
-          />
-          <TextInput 
-            style={styles.input} 
-            placeholder="Cuenta (opcional)" 
-            value={cuenta} 
-            onChangeText={text => setCuenta(text.replace(/[^0-9]/g, ''))} 
-            keyboardType="numeric"
-            placeholderTextColor="#888888"
-          />
-          <TextInput 
-            style={styles.input} 
-            placeholder="Orden CO (opcional)" 
-            value={ordenco} 
-            onChangeText={text => setOrdenco(text.replace(/[^0-9]/g, ''))} 
-            keyboardType="numeric"
-            placeholderTextColor="#888888"
-          />
+          <View style={styles.pickerContainerField}>
+            <Picker selectedValue={sociedad} onValueChange={(value) => setSociedad(value)} style={styles.pickerField}>
+              <Picker.Item label="Seleccionar sociedad *" value="" />
+              {SOCIEDAD_OPTIONS.map((item) => (
+                <Picker.Item key={item} label={item} value={item} />
+              ))}
+            </Picker>
+          </View>
+          <View style={styles.pickerContainerField}>
+            <Picker selectedValue={centro} onValueChange={(value) => setCentro(value)} style={styles.pickerField}>
+              <Picker.Item label="Seleccionar centro *" value="" />
+              {CENTRO_OPTIONS.map((item) => (
+                <Picker.Item key={item} label={item} value={item} />
+              ))}
+            </Picker>
+          </View>
+          <View style={styles.pickerContainerField}>
+            <Picker selectedValue={cuenta} onValueChange={(value) => setCuenta(value)} style={styles.pickerField}>
+              <Picker.Item label="Seleccionar cuenta *" value="" />
+              {CUENTA_OPTIONS.map((item) => (
+                <Picker.Item key={item} label={item} value={item} />
+              ))}
+            </Picker>
+          </View>
+          <View style={styles.pickerContainerField}>
+            <Picker selectedValue={ordenco} onValueChange={(value) => setOrdenco(value)} style={styles.pickerField}>
+              <Picker.Item label="Seleccionar orden CO *" value="" />
+              {ORDENCO_OPTIONS.map((item) => (
+                <Picker.Item key={item} label={item} value={item} />
+              ))}
+            </Picker>
+          </View>
           <TouchableOpacity style={styles.updateButton} onPress={handleUpdateCategory}>
             <Text style={styles.updateButtonText}>Actualizar</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.cancelModalButton} onPress={() => setEditModalVisible(false)}>
+          <TouchableOpacity style={styles.cancelModalButton} onPress={closeEditModal}>
             <Text style={styles.cancelModalButtonText}>Cancelar</Text>
           </TouchableOpacity>
         </View>
@@ -308,6 +402,9 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: 'bold', marginBottom: 20, color: '#1e293b' },
   form: { marginBottom: 20 },
   input: { borderWidth: 1, borderColor: '#ddd', padding: 10, borderRadius: 8, marginBottom: 10, color: '#1e293b' },
+  readOnlyInput: { backgroundColor: '#f8fafc', color: '#64748b' },
+  pickerContainerField: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, marginBottom: 10, overflow: 'hidden' },
+  pickerField: { color: '#1e293b' },
   addButton: { flexDirection: 'row', backgroundColor: '#2563eb', padding: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   addButtonText: { color: 'white', fontWeight: 'bold', marginLeft: 5 },
   categoryItem: { padding: 15, borderBottomWidth: 1, borderBottomColor: '#ddd', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

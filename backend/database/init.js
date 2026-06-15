@@ -10,6 +10,7 @@ const userSchema = new mongoose.Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
   pin: { type: String, required: true },
+  lifnr: { type: String, default: null },
   employeeCode: { type: String, default: null },
   department: { type: String, default: null },
   managerEmail: { type: String, default: null },
@@ -30,6 +31,7 @@ const categorySchema = new mongoose.Schema({
   userEmail: { type: String, required: true },
   name: { type: String, required: true },
   icon: { type: String, default: null },
+  sociedad: { type: String, default: null },
   centro: { type: String, default: null },
   cuenta: { type: String, default: null },
   ordenco: { type: String, default: null },
@@ -48,12 +50,18 @@ const expenseSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   date: { type: String, required: true }, // Mantener como string para compatibilidad
   category: { type: String, required: true },
+  sociedad: { type: String, default: null },
   status: { type: String, required: true, default: 'BORRADOR' },
   expenseStatus: { 
     type: String, 
     required: true, 
     enum: ['draft', 'in_liquidation', 'approved', 'voided'],
     default: 'draft'
+  },
+  satStatus: {
+    type: String,
+    enum: ['VALIDADO_SAT', 'NO_VALIDADO_SAT'],
+    default: 'NO_VALIDADO_SAT'
   },
   liquidationId: { type: String, default: null }, // ID de la liquidación a la que pertenece
   voidedAt: { type: String, default: null }, // Fecha de anulación (ISO string)
@@ -105,7 +113,14 @@ const liquidationSchema = new mongoose.Schema({
   approverEmail: { type: String, default: null }, // Email del aprobador (tracking)
   rejectedBy: { type: String, default: null }, // Email del rechazador (tracking)
   csvGeneratedAt: { type: Date, default: null }, // Fecha de generación de CSV
-  csvGeneratedBy: { type: String, default: null } // Usuario que generó el CSV
+  csvGeneratedBy: { type: String, default: null }, // Usuario que generó el CSV
+  sapDocNumber: { type: String, default: null },
+  approverName: { type: String, default: null },
+  comments: { type: String, default: null },
+  sapSyncStatus: { type: String, default: null },
+  sapReferenceId: { type: String, default: null },
+  sapResponseMessage: { type: String, default: null },
+  sapSyncedAt: { type: String, default: null }
 }, {
   timestamps: true, // createdAt y updatedAt
   collection: 'liquidations'

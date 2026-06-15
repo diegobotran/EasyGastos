@@ -1,6 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import React, { useState } from 'react';
 import * as CategoryService from '../services/CategoryService';
+import * as ExpenseService from '../services/ExpenseService';
 import { Category, generateCategoryId } from '../models/Category';
 
 export const useCategoryViewModel = () => {
@@ -44,10 +45,10 @@ export const useCategoryViewModel = () => {
     }, [])
   );
 
-  const addCategory = async (name: string, centro: string, cuenta: string, ordenco: string) => {
+  const addCategory = async (name: string, sociedad: string, centro: string, cuenta: string, ordenco: string): Promise<boolean> => {
     if (!name) {
       alert('El nombre de la categoría es requerido.');
-      return;
+      return false;
     }
     
     try {
@@ -55,12 +56,17 @@ export const useCategoryViewModel = () => {
       const user = await import('../services/AuthService').then(auth => auth.getLastLoggedInUser());
       if (!user) {
         alert('Error: No hay usuario logueado.');
-        return;
+        return false;
+      }
+      if (!sociedad || !centro || !cuenta || !ordenco) {
+        alert('Para crear una categoría debes completar Sociedad, Centro, Cuenta y Orden CO.');
+        return false;
       }
 
       const newCategory: Category = {
         id: generateCategoryId(),
         name,
+        sociedad: sociedad || undefined,
         centro: centro || undefined,
         cuenta: cuenta || undefined,
         ordenco: ordenco || undefined,
@@ -71,9 +77,11 @@ export const useCategoryViewModel = () => {
       console.log('📂 Categories: Agregando nueva categoría:', newCategory);
       await CategoryService.addCategory(newCategory, user.email);
       loadCategories(); // Refresh list
+      return true;
     } catch (error) {
       console.error('❌ Categories: Error agregando categoría:', error);
       alert('Error agregando categoría');
+      return false;
     }
   };
 
@@ -98,15 +106,26 @@ export const useCategoryViewModel = () => {
       const user = await import('../services/AuthService').then(auth => auth.getLastLoggedInUser());
       if (!user) {
         alert('Error: No hay usuario logueado.');
-        return;
+        return 0;
       }
-      await CategoryService.updateCategory(updatedCategory, user.email);
+      const updatedDraftExpenses = await CategoryService.updateCategory(updatedCategory, user.email);
       await loadCategories(); // Refresh list after update
+      return updatedDraftExpenses;
     } catch (error) {
       console.error('❌ Categories: Error actualizando categoría:', error);
       alert('Error actualizando categoría');
+      return 0;
     }
   };
 
-  return { categories, isLoading, addCategory, updateCategory, removeCategory };
+  const countDraftExpensesUsingCategory = async (categoryName: string) => {
+    const user = await import('../services/AuthService').then(auth => auth.getLastLoggedInUser());
+    if (!user) {
+      return 0;
+    }
+
+    return ExpenseService.countDraftExpensesByCategoryName(user.email, categoryName);
+  };
+
+  return { categories, isLoading, addCategory, updateCategory, removeCategory, countDraftExpensesUsingCategory };
 };

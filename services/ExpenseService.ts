@@ -3,6 +3,14 @@ import { Platform } from 'react-native';
 import { Expense } from '../models/Expense';
 import * as SQLite from 'expo-sqlite';
 
+type CategorySnapshotUpdate = {
+  name: string;
+  sociedad?: string;
+  centro?: string;
+  cuenta?: string;
+  ordenco?: string;
+};
+
 // Base de datos para gastos
 let db: SQLite.SQLiteDatabase | null = null;
 
@@ -47,8 +55,10 @@ export const initDB = async (): Promise<void> => {
           amount REAL NOT NULL,
           date TEXT NOT NULL,
           category TEXT NOT NULL,
+          sociedad TEXT,
           status TEXT NOT NULL,
           expenseStatus TEXT NOT NULL DEFAULT 'draft',
+          satStatus TEXT DEFAULT 'NO_VALIDADO_SAT',
           supplier TEXT,
           vat_number TEXT,
           department TEXT,
@@ -118,6 +128,20 @@ export const initDB = async (): Promise<void> => {
         console.log("✅ Columna uuid (número de autorización FEL) agregada");
       } catch (e) {
         console.log("ℹ️ Columna uuid ya existe o no se pudo agregar");
+      }
+
+      try {
+        await db.execAsync(`ALTER TABLE expenses ADD COLUMN sociedad TEXT;`);
+        console.log("✅ Columna sociedad agregada");
+      } catch (e) {
+        console.log("ℹ️ Columna sociedad ya existe o no se pudo agregar");
+      }
+
+      try {
+        await db.execAsync(`ALTER TABLE expenses ADD COLUMN satStatus TEXT DEFAULT 'NO_VALIDADO_SAT';`);
+        console.log("✅ Columna satStatus agregada");
+      } catch (e) {
+        console.log("ℹ️ Columna satStatus ya existe o no se pudo agregar");
       }
       
       console.log("✅ ExpenseService: Tabla 'expenses' verificada/creada con éxito.");
@@ -267,9 +291,9 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
         await db.runAsync(
             `INSERT INTO expenses 
              (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, 
-              department, notes, noinvoice, serie, uuid, centro, cuenta, ordenco, managerEmail, 
-              createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?)`,
+               sociedad, department, notes, noinvoice, serie, uuid, centro, cuenta, ordenco, managerEmail, 
+               createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?)`,
             [
                 expense.id, 
                 userEmail, 
@@ -281,6 +305,7 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
                 expense.expenseStatus || 'draft',
                 expense.supplier || null, 
                 expense.vat_number || null, 
+                expense.sociedad || null,
                 expense.department || null, 
                 expense.notes || null, 
                 expense.noinvoice || null, 
@@ -357,13 +382,16 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         if (!db) throw new Error("La base de datos no está inicializada.");
         
         await db.runAsync(
-            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, status = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ? WHERE id = ? AND userEmail = ?',
+            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ? WHERE id = ? AND userEmail = ?',
             [
                 expense.description, 
                 expense.amount, 
                 expense.date, 
                 expense.category, 
+                expense.sociedad || null,
                 expense.status, 
+                expense.expenseStatus || 'draft',
+                expense.satStatus || 'NO_VALIDADO_SAT',
                 expense.supplier, 
                 expense.vat_number, 
                 expense.department, 
@@ -379,6 +407,108 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
             ]
         );
     }
+};
+
+export const countDraftExpensesByCategoryName = async (
+  userEmail: string,
+  categoryName: string
+): Promise<number> => {
+  if (!categoryName.trim()) {
+    return 0;
+  }
+
+  if (Platform.OS === 'web') {
+    const expenses = await getExpenses(userEmail);
+    return expenses.filter(exp =>
+      exp.category === categoryName &&
+      exp.expenseStatus === 'draft' &&
+      !exp.liquidationId
+    ).length;
+  }
+
+  if (!db) throw new Error("La base de datos no está inicializada.");
+
+  const result = await db.getFirstAsync<{ total: number }>(
+    `SELECT COUNT(*) as total
+     FROM expenses
+     WHERE userEmail = ?
+       AND category = ?
+       AND expenseStatus = 'draft'
+       AND (liquidationId IS NULL OR liquidationId = '')`,
+    [userEmail, categoryName]
+  );
+
+  return result?.total ?? 0;
+};
+
+export const syncDraftExpensesWithCategoryUpdate = async (
+  userEmail: string,
+  previousCategoryName: string,
+  updatedCategory: CategorySnapshotUpdate
+): Promise<number> => {
+  if (!previousCategoryName.trim()) {
+    return 0;
+  }
+
+  const now = Date.now();
+
+  if (Platform.OS === 'web') {
+    const key = `${STORAGE_KEY_PREFIX}${userEmail}`;
+    const expenses = await getExpenses(userEmail);
+    let updatedCount = 0;
+
+    const syncedExpenses = expenses.map(expense => {
+      const shouldUpdate = expense.category === previousCategoryName && expense.expenseStatus === 'draft' && !expense.liquidationId;
+      if (!shouldUpdate) {
+        return expense;
+      }
+
+      updatedCount += 1;
+
+      return {
+        ...expense,
+        category: updatedCategory.name,
+        sociedad: updatedCategory.sociedad || '',
+        centro: updatedCategory.centro || '',
+        cuenta: updatedCategory.cuenta || '',
+        ordenco: updatedCategory.ordenco || '',
+        updatedAt: now,
+        needsSync: true,
+      };
+    });
+
+    await AsyncStorage.setItem(key, JSON.stringify(syncedExpenses));
+    return updatedCount;
+  }
+
+  if (!db) throw new Error("La base de datos no está inicializada.");
+
+  const result = await db.runAsync(
+    `UPDATE expenses
+     SET category = ?,
+         sociedad = ?,
+         centro = ?,
+         cuenta = ?,
+         ordenco = ?,
+         updatedAt = ?,
+         needsSync = 1
+     WHERE userEmail = ?
+       AND category = ?
+       AND expenseStatus = 'draft'
+       AND (liquidationId IS NULL OR liquidationId = '')`,
+    [
+      updatedCategory.name,
+      updatedCategory.sociedad || null,
+      updatedCategory.centro || null,
+      updatedCategory.cuenta || null,
+      updatedCategory.ordenco || null,
+      now,
+      userEmail,
+      previousCategoryName,
+    ]
+  );
+
+  return result.changes ?? 0;
 };
 
 /**
@@ -485,8 +615,10 @@ export const getExpensesNeedingSync = async (userEmail: string): Promise<Expense
       amount: row.amount,
       date: row.date,
       category: row.category,
+      sociedad: row.sociedad,
       status: row.status as any,
       expenseStatus: row.expenseStatus || 'draft',
+      satStatus: row.satStatus || 'NO_VALIDADO_SAT',
       supplier: row.supplier,
       vat_number: row.vat_number,
       department: row.department,
@@ -605,11 +737,11 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
     
     await db.runAsync(
       `INSERT OR REPLACE INTO expenses 
-       (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, 
+       (id, userEmail, description, amount, date, category, sociedad, status, expenseStatus, satStatus, supplier, vat_number, 
         department, notes, noinvoice, serie, centro, cuenta, ordenco, managerEmail, liquidationId,
         voidedAt, voidedReason, createdAt, updatedAt,
         needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency, synced) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1)`,
       [
         serverExpense.id,
         serverExpense.email,
@@ -617,8 +749,10 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
         serverExpense.amount,
         serverExpense.date,
         serverExpense.category,
+        serverExpense.sociedad || null,
         serverExpense.status,
         serverExpense.expenseStatus || 'draft',
+        serverExpense.satStatus || 'NO_VALIDADO_SAT',
         serverExpense.supplier || null,
         serverExpense.vat_number || null,
         serverExpense.department || null,
@@ -680,8 +814,10 @@ export const getExpensesForApproval = async (managerEmail: string): Promise<Expe
       amount: row.amount,
       date: row.date,
       category: row.category,
+      sociedad: row.sociedad,
       status: row.status as any,
       expenseStatus: row.expenseStatus || 'draft',
+      satStatus: row.satStatus || 'NO_VALIDADO_SAT',
       supplier: row.supplier,
       vat_number: row.vat_number,
       department: row.department,

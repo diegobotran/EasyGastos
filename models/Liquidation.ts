@@ -12,6 +12,7 @@ export interface Liquidation {
   createdDate: string;           // Fecha de creación en formato YYYY-MM-DD (almacenamiento) - se muestra como DD/MM/YYYY
   expenseIds: string[];          // IDs de los gastos incluidos
   totalAmount: number;           // Monto total de todos los gastos
+  currency?: string;             // Moneda de referencia de la liquidación
   status: LiquidationStatus;     // Estado actual
   managerEmail?: string;         // Email del jefe asignado (opcional)
   managerComments?: string;      // Comentarios del jefe (opcional)
@@ -23,6 +24,10 @@ export interface Liquidation {
   csvGeneratedAt?: string;       // Fecha de generación de CSV
   csvGeneratedBy?: string;       // Usuario que generó el CSV
   sapDocNumber?: string;         // Número de documento SAP (opcional, para exportación)
+  sapSyncStatus?: string;        // Estado de sincronización SAP
+  sapReferenceId?: string;       // Identificador devuelto por SAP
+  sapResponseMessage?: string;   // Mensaje devuelto por SAP
+  sapSyncedAt?: string;          // Fecha/hora de sincronización SAP
   approverName?: string;         // Nombre del aprobador (opcional)
   comments?: string;             // Comentarios adicionales (opcional)
   createdAt?: number;            // Timestamp de creación de la liquidación

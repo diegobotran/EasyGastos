@@ -175,6 +175,7 @@ export class BackendSyncService {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        lifnr: user.lifnr,
         employeeCode: user.employeeCode,
         department: user.department,
         sociedad: user.sociedad,
@@ -559,6 +560,7 @@ export class BackendSyncService {
         console.log("📤 BackendSync: Nombre:", category.name);
         console.log("📤 BackendSync: ID:", category.id);
         console.log("📤 BackendSync: Email:", category.email);
+        console.log("📤 BackendSync: Sociedad:", category.sociedad);
 
         // Construir el objeto con userEmail en vez de email (desestructuración para remover email)
         const { email, ...categoryWithoutEmail } = category;
@@ -568,6 +570,7 @@ export class BackendSyncService {
         };
 
         const requestUrl = `${backendUrl}/api/categories`;
+        const updateUrl = `${backendUrl}/api/categories/${category.id}`;
         console.log(
           "🌐 BackendSync: URL COMPLETA de la petición POST:",
           requestUrl,
@@ -619,6 +622,55 @@ export class BackendSyncService {
               category.name,
             );
             successCount++;
+          } else if (response.status === 409) {
+            console.log(
+              "ℹ️ BackendSync: Categoría ya existe en backend, intentando actualización por PUT...",
+            );
+
+            const putController = new AbortController();
+            const putTimeoutId = setTimeout(() => {
+              console.log(
+                "⏰ BackendSync: TIMEOUT de 10 segundos para actualización de categoría:",
+                category.name,
+              );
+              putController.abort();
+            }, 10000);
+
+            const putResponse = await fetch(updateUrl, {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
+              },
+              body: JSON.stringify(categoryPayload),
+              signal: putController.signal,
+            });
+
+            clearTimeout(putTimeoutId);
+            console.log(
+              "📡 BackendSync: Respuesta PUT categoría - Status:",
+              putResponse.status,
+            );
+
+            if (putResponse.ok) {
+              const putResponseData = await putResponse.text();
+              console.log(
+                "✅ BackendSync: Categoría actualizada exitosamente en backend:",
+                putResponseData,
+              );
+              await CategoryService.markCategoryAsSynced(category.id);
+              console.log(
+                "✅ BackendSync: Categoría marcada como sincronizada tras PUT:",
+                category.name,
+              );
+              successCount++;
+            } else {
+              const putErrorText = await putResponse.text();
+              console.log("❌ BackendSync: ERROR EN PUT DE CATEGORÍA");
+              console.log("❌ BackendSync: Status PUT:", putResponse.status);
+              console.log("❌ BackendSync: Error PUT texto:", putErrorText);
+              errorCount++;
+            }
           } else {
             const errorText = await response.text();
             console.log("❌ BackendSync: ERROR DEL SERVIDOR");

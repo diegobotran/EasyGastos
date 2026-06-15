@@ -11,6 +11,7 @@ export interface User {
   email: string;
   firstName: string;
   lastName: string;
+  lifnr?: string;
   employeeCode?: string;
   department?: string;
   managerEmail?: string;

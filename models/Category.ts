@@ -4,6 +4,7 @@ import * as Crypto from 'expo-crypto';
 export interface Category {
   id: string;
   name: string;
+  sociedad?: string;
   centro?: string;
   cuenta?: string;
   ordenco?: string;

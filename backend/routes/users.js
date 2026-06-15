@@ -15,6 +15,7 @@ const validateUserRegistration = [
   body('firstName').trim().isLength({ min: 1 }).escape(),
   body('lastName').trim().isLength({ min: 1 }).escape(),
   body('pin').isLength({ min: 4, max: 4 }).isNumeric(),
+  body('lifnr').optional().trim().escape(),
   body('employeeCode').optional().trim().escape(),
   body('department').optional().trim().escape(),
   body('sociedad').optional().trim().escape()
@@ -35,7 +36,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { email, firstName, lastName, pin, employeeCode, department, sociedad } = req.body;
+    const { email, firstName, lastName, pin, lifnr, employeeCode, department, sociedad } = req.body;
 
     // Verificar si el usuario ya existe
     const existingUser = await User.findOne({ email });
@@ -68,6 +69,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       existingUser.firstName = firstName;
       existingUser.lastName = lastName;
       // NO actualizar PIN aquí (ya es correcto)
+      existingUser.lifnr = lifnr;
       existingUser.employeeCode = employeeCode;
       existingUser.department = department;
       existingUser.sociedad = sociedad;
@@ -134,6 +136,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
           email,
           firstName,
           lastName,
+          lifnr,
           employeeCode,
           department,
           sociedad,
@@ -195,6 +198,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       firstName,
       lastName,
       pin: hashedPin,
+      lifnr,
       employeeCode,
       department,
       sociedad,
@@ -227,6 +231,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
         email,
         firstName,
         lastName,
+        lifnr,
         employeeCode,
         department,
         sociedad,

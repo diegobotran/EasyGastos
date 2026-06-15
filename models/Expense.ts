@@ -14,6 +14,7 @@ type StatusCode = keyof typeof STATUSES;
 
 // Estados del gasto en el flujo de liquidación
 export type ExpenseStatus = 'draft' | 'in_liquidation' | 'approved' | 'voided';
+export type SatStatus = 'VALIDADO_SAT' | 'NO_VALIDADO_SAT';
 
 export interface Expense {
   id: string; // Timestamp para uniqueness - sirve también como fecha de creación
@@ -21,8 +22,10 @@ export interface Expense {
   amount: number;
   date: string; // Fecha del gasto en formato YYYY-MM-DD (almacenamiento) - se muestra como DD/MM/YYYY en UI
   category: string;
+  sociedad?: string;
   status: StatusCode;
   expenseStatus: ExpenseStatus;  // Estado en flujo de liquidación: draft, in_liquidation, approved
+  satStatus?: SatStatus;
   supplier: string;
   vat_number: string;
   department: string;

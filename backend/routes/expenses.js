@@ -19,8 +19,10 @@ const validateExpense = [
   }),
   body('date').isISO8601(), // Mantener como string ISO, no convertir a Date
   body('category').trim().isLength({ min: 1 }),
+  body('sociedad').optional().trim(),
   body('status').isIn(['BORRADOR', 'ENVIADO_JEFE', 'APROBADO_JEFE', 'RECHAZADO_JEFE', 'APROBADO_FINANZAS', 'RECHAZADO_FINANZAS', 'CONTABILIZADO', 'ERROR_SAP']),
   body('expenseStatus').optional().isIn(['draft', 'in_liquidation', 'approved', 'voided']),
+  body('satStatus').optional().isIn(['VALIDADO_SAT', 'NO_VALIDADO_SAT']),
   body('supplier').optional().trim(),
   body('vat_number').optional().trim(),
   body('department').optional().trim(),
@@ -144,7 +146,10 @@ router.post('/', authenticateToken, validateExpense, async (req, res) => {
         amount: newExpense.amount,
         date: newExpense.date,
         category: newExpense.category,
+        sociedad: newExpense.sociedad,
         status: newExpense.status,
+        expenseStatus: newExpense.expenseStatus,
+        satStatus: newExpense.satStatus,
         managerEmail: newExpense.managerEmail,
         createdAt: newExpense.createdAt,
         updatedAt: newExpense.updatedAt
@@ -206,8 +211,10 @@ router.get('/', authenticateToken, async (req, res) => {
       amount: expense.amount,
       date: expense.date,
       category: expense.category,
+      sociedad: expense.sociedad,
       status: expense.status,
       expenseStatus: expense.expenseStatus || 'draft',
+      satStatus: expense.satStatus || 'NO_VALIDADO_SAT',
       liquidationId: expense.liquidationId || '',
       supplier: expense.supplier,
       vat_number: expense.vat_number,
@@ -279,7 +286,9 @@ router.get('/pending-approval', authenticateToken, requireManager, async (req, r
       amount: expense.amount,
       date: expense.date,
       category: expense.category,
+      sociedad: expense.sociedad,
       status: expense.status,
+      satStatus: expense.satStatus || 'NO_VALIDADO_SAT',
       supplier: expense.supplier,
       department: expense.department,
       notes: expense.notes,
@@ -352,7 +361,7 @@ router.patch('/:id', authenticateToken, [
 
     // Actualizar campos permitidos
     const allowedFields = [
-      'description', 'amount', 'date', 'category', 'status', 'expenseStatus',
+      'description', 'amount', 'date', 'category', 'sociedad', 'status', 'expenseStatus', 'satStatus',
       'supplier', 'vat_number', 'department', 'notes', 'noinvoice', 'serie',
       'centro', 'cuenta', 'ordenco', 'imageuri', 'currency', 'totiva',
       'voidedAt', 'voidedReason', 'liquidationId'

@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { Category } from '../models/Category';
 import * as SQLite from 'expo-sqlite';
+import { syncDraftExpensesWithCategoryUpdate } from './ExpenseService';
 
 // Base de datos SQLite
 let db: SQLite.SQLiteDatabase | null = null;
@@ -44,6 +45,7 @@ export const initDB = async (): Promise<void> => {
           userEmail TEXT NOT NULL,
           name TEXT NOT NULL,
           icon TEXT,
+          sociedad TEXT,
           centro TEXT,
           cuenta TEXT,
           ordenco TEXT,
@@ -55,6 +57,13 @@ export const initDB = async (): Promise<void> => {
         );
       `);
       
+      try {
+        await db.execAsync(`ALTER TABLE categories ADD COLUMN sociedad TEXT;`);
+        console.log("✅ Columna sociedad agregada");
+      } catch (e) {
+        console.log("ℹ️ Columna sociedad ya existe o no se pudo agregar");
+      }
+
       console.log("✅ CategoryService: Tabla 'categories' verificada/creada con éxito.");
       isDBInitialized = true;
     } catch (error) {
@@ -110,13 +119,14 @@ export const addCategory = async (category: Category, userEmail: string): Promis
         
         await db.runAsync(
             `INSERT INTO categories 
-             (id, userEmail, name, icon, centro, cuenta, ordenco, createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL)`,
+             (id, userEmail, name, icon, sociedad, centro, cuenta, ordenco, createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL)`,
             [
                 category.id, 
                 userEmail, 
                 category.name, 
                 category.icon || null,
+                category.sociedad || null,
                 category.centro || null,
                 category.cuenta || null,
                 category.ordenco || null,
@@ -157,14 +167,17 @@ export const getCategories = async (userEmail: string): Promise<Category[]> => {
 /**
  * Actualiza una categoría existente.
  */
-export const updateCategory = async (category: Category, userEmail: string): Promise<void> => {
+export const updateCategory = async (category: Category, userEmail: string): Promise<number> => {
   // Actualizar timestamp de modificación
   category.updatedAt = Date.now();
   category.needsSync = true;
 
+  const currentCategories = await getCategories(userEmail);
+  const previousCategory = currentCategories.find(existingCategory => existingCategory.id === category.id);
+
   if (Platform.OS === 'web' || !db) {
         const key = `${STORAGE_KEY_PREFIX}${userEmail}`;
-        let items = await getCategories(userEmail);
+        let items = currentCategories;
         const index = items.findIndex(i => i.id === category.id);
         if (index !== -1) {
             items[index] = category;
@@ -174,10 +187,11 @@ export const updateCategory = async (category: Category, userEmail: string): Pro
         if (!db) throw new Error("La base de datos no está inicializada.");
         
         await db.runAsync(
-            'UPDATE categories SET name = ?, icon = ?, centro = ?, cuenta = ?, ordenco = ?, updatedAt = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
+            'UPDATE categories SET name = ?, icon = ?, sociedad = ?, centro = ?, cuenta = ?, ordenco = ?, updatedAt = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
             [
               category.name, 
               category.icon || null, 
+              category.sociedad || null,
               category.centro || null,
               category.cuenta || null,
               category.ordenco || null,
@@ -187,6 +201,12 @@ export const updateCategory = async (category: Category, userEmail: string): Pro
             ]
         );
     }
+
+  if (!previousCategory) {
+    return 0;
+  }
+
+  return syncDraftExpensesWithCategoryUpdate(userEmail, previousCategory.name, category);
 };
 
 /**
@@ -235,6 +255,7 @@ export const getCategoriesNeedingSync = async (userEmail: string): Promise<Categ
       id: row.id,
       name: row.name,
       icon: row.icon,
+      sociedad: row.sociedad,
       centro: row.centro,
       cuenta: row.cuenta,
       ordenco: row.ordenco,
@@ -308,13 +329,14 @@ export const upsertCategoryFromServer = async (serverCategory: Category): Promis
     
     await db.runAsync(
       `INSERT OR REPLACE INTO categories 
-       (id, userEmail, name, icon, centro, cuenta, ordenco, needsSync, lastSync, serverUpdatedAt) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+       (id, userEmail, name, icon, sociedad, centro, cuenta, ordenco, needsSync, lastSync, serverUpdatedAt) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       [
         serverCategory.id,
         serverCategory.email,
         serverCategory.name,
         serverCategory.icon || null,
+        serverCategory.sociedad || null,
         serverCategory.centro || null,
         serverCategory.cuenta || null,
         serverCategory.ordenco || null,

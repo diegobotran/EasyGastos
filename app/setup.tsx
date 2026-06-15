@@ -81,6 +81,19 @@ const SetupScreen = () => {
               editable={!viewModel.isLoading}
             />
           </View>
+
+          <View style={styles.inputContainer}>
+            <Ionicons name="card-outline" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Código proveedor colaborador (LIFNR)"
+              placeholderTextColor="#94a3b8"
+              value={viewModel.lifnr}
+              onChangeText={viewModel.setLifnr}
+              autoCapitalize="characters"
+              editable={!viewModel.isLoading}
+            />
+          </View>
         </View>
 
         {/* Sección de Sociedad */}

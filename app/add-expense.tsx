@@ -32,7 +32,7 @@ export default function AddExpenseScreen() {
   const router = useRouter();
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(new Date());
+  const [date, setDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [category, setCategory] = useState('');
   const [department, setDepartment] = useState('');
@@ -42,6 +42,7 @@ export default function AddExpenseScreen() {
   const [noinvoice, setNoinvoice] = useState('');
   const [vat_number, setVatNumber] = useState('');
   const [supplier, setSupplier] = useState('');
+  const [expenseSociedad, setExpenseSociedad] = useState('');
   const [centro, setCentro] = useState('');
   const [cuenta, setCuenta] = useState('');
   const [ordenco, setOrdenco] = useState('');
@@ -53,6 +54,7 @@ export default function AddExpenseScreen() {
   const [validationStatus, setValidationStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [validationMessage, setValidationMessage] = useState('');
   const [showMoreDetails, setShowMoreDetails] = useState(false);
+  const [hasRedirectedForCategories, setHasRedirectedForCategories] = useState(false);
   const departments = ['Tecnologia', 'Ventas', 'Marketing', 'Finanzas', 'Recursos humanos'];
   const currencies = ['GTQ', 'USD', 'EUR'];
 
@@ -89,6 +91,19 @@ export default function AddExpenseScreen() {
             const data = await CategoryService.getCategories(user.email);
             console.log('📂 AddExpense: Categorías cargadas:', data.length);
             setCategories(data);
+            if (data.length === 0 && !hasRedirectedForCategories) {
+              setHasRedirectedForCategories(true);
+              Alert.alert(
+                'Categorías requeridas',
+                'Primero debes crear al menos una categoría de gasto antes de iniciar el registro del gasto.',
+                [
+                  {
+                    text: 'Ir a Categorías',
+                    onPress: () => router.replace('/(tabs)/categories')
+                  }
+                ]
+              );
+            }
           } else {
             console.log('⚠️ AddExpense: No hay usuario logueado');
           }
@@ -97,7 +112,7 @@ export default function AddExpenseScreen() {
         }
       };
       loadCustomCategories();
-    }, []);
+    }, [hasRedirectedForCategories]);
 
     // Búsqueda automática en SAT cuando se ingresa MANUALMENTE serie y número de factura
     useEffect(() => {
@@ -184,15 +199,22 @@ export default function AddExpenseScreen() {
         setCategory(value);
         const selectedCategory = categories.find(cat => cat.name === value);
         if (selectedCategory) {
+          setExpenseSociedad(selectedCategory.sociedad || '');
           setCentro(selectedCategory.centro || '');
           setCuenta(selectedCategory.cuenta || '');
           setOrdenco(selectedCategory.ordenco || '');
+        } else {
+          setExpenseSociedad('');
+          setCentro('');
+          setCuenta('');
+          setOrdenco('');
         }
       };
 
 
   // Formatea fecha a YYYY-MM-DD para almacenamiento interno
-  const formatDate = (date: Date) => {
+  const formatDate = (date: Date | null) => {
+    if (!date) return '';
     const day = String(date.getDate()).padStart(2, '0');
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const year = date.getFullYear();
@@ -200,7 +222,8 @@ export default function AddExpenseScreen() {
   };
 
   // Formatea fecha a DD/MM/YYYY para visualización
-  const formatDateDisplay = (date: Date) => {
+  const formatDateDisplay = (date: Date | null) => {
+    if (!date) return '';
     const day = String(date.getDate()).padStart(2, '0');
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const year = date.getFullYear();
@@ -359,10 +382,12 @@ export default function AddExpenseScreen() {
             setNoinvoice('');
             setVatNumber('');
             setSupplier('');
+            setExpenseSociedad('');
             setCentro('');
             setCuenta('');
             setOrdenco('');
             setTotiva('');
+            setCurrency('GTQ');
             setUuid('');
             setValidationStatus('idle');
             setValidationMessage('');
@@ -382,7 +407,7 @@ export default function AddExpenseScreen() {
         uuid: uuid,
         nitEmisor: formatNIT(vat_number),
         nitReceptor: 'CF', // Por defecto Consumidor Final, podrías agregar un campo para esto
-        fechaEmision: formatDateForSAT(date),
+        fechaEmision: date ? formatDateForSAT(date) : '',
         monto: amount
       };
 
@@ -492,6 +517,21 @@ export default function AddExpenseScreen() {
     console.log('💰 Amount:', amount);
     console.log('📂 Category:', category);
     console.log('🏢 Department:', department);
+
+    if (categories.length === 0) {
+      Alert.alert(
+        'Categorías requeridas',
+        'Primero debes crear al menos una categoría de gasto para poder registrar un gasto.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Ir a Categorías',
+            onPress: () => router.push('/(tabs)/categories')
+          }
+        ]
+      );
+      return;
+    }
     
     if (!category || !department) {
       const missingFields = [];
@@ -613,8 +653,10 @@ export default function AddExpenseScreen() {
         amount: parsedAmount || 0,
         date: formatDate(date),
         category,
+        sociedad: expenseSociedad || undefined,
         status,
         expenseStatus: 'draft', // Estado inicial en el flujo de liquidación
+        satStatus: 'NO_VALIDADO_SAT',
         supplier: supplier || 'Proveedor Desconocido',
         vat_number: vat_number || '',
         department,
@@ -792,7 +834,7 @@ const extractDataFromImage = async (imageUri: string) => {
         // Extraer datos clave del OCR para buscar en SAT
         const serieOCR = googleOCRData.serie;
         const numeroDTE = googleOCRData.numero_factura || googleOCRData.invoiceNumber;
-        const nitEmisor = googleOCRData.nit_emisor || googleOCRData.nit;
+        const nitEmisor = googleOCRData.nit_emisor;
         // nitReceptor ya fue extraído antes para validar CF
         
         // === USAR DATOS DE GOOGLE VISION OCR DIRECTAMENTE ===
@@ -802,6 +844,9 @@ const extractDataFromImage = async (imageUri: string) => {
         if (nitEmisor) {
           setVatNumber(nitEmisor);
           console.log('📝 NIT del proveedor actualizado:', nitEmisor);
+        } else {
+          setVatNumber('');
+          console.log('⚠️ Google Vision OCR: No se detectó NIT del emisor, queda vacío para corrección manual');
         }
         
         // Actualizar monto y recalcular IVA
@@ -2605,7 +2650,7 @@ const findFinalTotal = (allWords: Word[]): string | null => {
             autoCapitalize="characters"
           />
 
-          <Text style={styles.label}>NIT del Emisor (Proveedor)</Text>
+          <Text style={styles.label}>NIT del Emisor (Proveedor) *</Text>
           <TextInput 
             style={styles.input} 
             value={vat_number} 
@@ -2666,13 +2711,13 @@ const findFinalTotal = (allWords: Word[]): string | null => {
             <Text style={styles.label}>Descripción</Text>
             <TextInput style={styles.input} value={description} onChangeText={setDescription} placeholder="Ej: Almuerzo de trabajo con cliente" />
 
-            <Text style={styles.label}>Fecha</Text>
+            <Text style={styles.label}>Fecha del Documento</Text>
             <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
-              <Text style={styles.dateText}>{formatDateDisplay(date)}</Text>
+              <Text style={styles.dateText}>{date ? formatDateDisplay(date) : 'Seleccionar fecha del documento'}</Text>
               <Ionicons name="calendar-outline" size={20} color="gray" />
             </TouchableOpacity>
             {showDatePicker && (
-              <DateTimePicker value={date} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={handleDateChange} />
+              <DateTimePicker value={date || new Date()} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={handleDateChange} />
             )}
 
             <Text style={styles.label}>Proveedor (Nombre)</Text>
@@ -2691,14 +2736,17 @@ const findFinalTotal = (allWords: Word[]): string | null => {
               </>
             ) : null}
 
+            <Text style={styles.label}>Sociedad</Text>
+            <TextInput style={[styles.input, styles.readOnlyInput]} value={expenseSociedad} editable={false} placeholder="Sociedad ligada a la categoría" />
+
             <Text style={styles.label}>Centro</Text>
-            <TextInput style={styles.input} value={centro} onChangeText={setCentro} />
+            <TextInput style={[styles.input, styles.readOnlyInput]} value={centro} onChangeText={setCentro} editable={false} />
 
             <Text style={styles.label}>Cuenta</Text>
-            <TextInput style={styles.input} value={cuenta} onChangeText={setCuenta} />
+            <TextInput style={[styles.input, styles.readOnlyInput]} value={cuenta} onChangeText={setCuenta} editable={false} />
 
             <Text style={styles.label}>Orden CO</Text>
-            <TextInput style={styles.input} value={ordenco} onChangeText={setOrdenco} />
+            <TextInput style={[styles.input, styles.readOnlyInput]} value={ordenco} onChangeText={setOrdenco} editable={false} />
 
             <Text style={styles.label}>Total IVA</Text>
             <TextInput style={styles.input} value={totiva} onChangeText={setTotiva} keyboardType="numeric" editable={false} />
@@ -2962,7 +3010,8 @@ const styles = StyleSheet.create({
   },
   label: { fontSize: 16, fontWeight: '500', marginBottom: 5, color: '#374151' },
   input: { borderWidth: 1, borderColor: '#d1d5db', padding: 12, borderRadius: 8, marginBottom: 15, fontSize: 16, color: '#000000' },
-  uuidInput: { 
+  readOnlyInput: { backgroundColor: '#f8fafc', color: '#64748b' },
+  uuidInput: {
     backgroundColor: '#f0fdf4', 
     borderColor: '#86efac',
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',

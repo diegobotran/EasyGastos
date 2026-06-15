@@ -32,6 +32,10 @@ router.post('/',
     body('csvGeneratedAt').optional(),
     body('csvGeneratedBy').optional().isEmail(),
     body('sapDocNumber').optional(),
+    body('sapSyncStatus').optional(),
+    body('sapReferenceId').optional(),
+    body('sapResponseMessage').optional(),
+    body('sapSyncedAt').optional(),
     body('approverName').optional(),
     body('comments').optional(),
     body('createdAt').optional().isNumeric(),
@@ -47,7 +51,7 @@ router.post('/',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { id, userId, employeeName, createdDate, expenseIds, totalAmount, status } = req.body;
+      const { id, userId, employeeName, createdDate, expenseIds, totalAmount, status, sapDocNumber, sapSyncStatus, sapReferenceId, sapResponseMessage, sapSyncedAt, approverName, comments } = req.body;
 
       console.log('✅ Validación exitosa para liquidación ID:', id);
       console.log('📋 ExpenseIds recibidos:', expenseIds);
@@ -123,7 +127,14 @@ router.post('/',
         expenseIds,
         totalAmount,
         status: status || 'draft',
-        managerEmail
+        managerEmail,
+        sapDocNumber: sapDocNumber || null,
+        sapSyncStatus: sapSyncStatus || null,
+        sapReferenceId: sapReferenceId || null,
+        sapResponseMessage: sapResponseMessage || null,
+        sapSyncedAt: sapSyncedAt || null,
+        approverName: approverName || null,
+        comments: comments || null
       });
 
       await newLiquidation.save();

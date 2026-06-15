@@ -12,9 +12,10 @@ const validateCategory = [
   body('userEmail').isEmail().normalizeEmail(),
   body('name').trim().isLength({ min: 1 }).escape(),
   body('icon').optional().trim(),
-  body('centro').optional().trim(),
-  body('cuenta').optional().trim(),
-  body('ordenco').optional().trim()
+  body('sociedad').trim().isLength({ min: 1 }),
+  body('centro').trim().isLength({ min: 1 }),
+  body('cuenta').trim().isLength({ min: 1 }),
+  body('ordenco').trim().isLength({ min: 1 })
 ];
 
 // Crear nueva categoría (requiere autenticación)
@@ -25,7 +26,7 @@ router.post('/', authenticateToken, validateCategory, async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { id, userEmail, name, icon, centro, cuenta, ordenco } = req.body;
+    const { id, userEmail, name, icon, sociedad, centro, cuenta, ordenco } = req.body;
 
     // Verificar si ya existe una categoría con ese ID
     const existingCategory = await Category.findOne({ id });
@@ -39,6 +40,7 @@ router.post('/', authenticateToken, validateCategory, async (req, res) => {
       userEmail,
       name,
       icon,
+      sociedad,
       centro,
       cuenta,
       ordenco
@@ -63,6 +65,7 @@ router.post('/', authenticateToken, validateCategory, async (req, res) => {
         userEmail: newCategory.userEmail,
         name: newCategory.name,
         icon: newCategory.icon,
+        sociedad: newCategory.sociedad,
         centro: newCategory.centro,
         cuenta: newCategory.cuenta,
         ordenco: newCategory.ordenco,
@@ -109,6 +112,7 @@ router.get('/', authenticateToken, async (req, res) => {
       userEmail: category.userEmail,
       name: category.name,
       icon: category.icon,
+      sociedad: category.sociedad,
       centro: category.centro,
       cuenta: category.cuenta,
       ordenco: category.ordenco,
@@ -132,7 +136,7 @@ router.put('/:id', authenticateToken, validateCategory, async (req, res) => {
     }
 
     const { id } = req.params;
-    const { userEmail, name, icon, centro, cuenta, ordenco } = req.body;
+    const { userEmail, name, icon, sociedad, centro, cuenta, ordenco } = req.body;
 
     // Buscar categoría
     const category = await Category.findOne({ id, userEmail, isActive: true });
@@ -143,6 +147,7 @@ router.put('/:id', authenticateToken, validateCategory, async (req, res) => {
     // Actualizar campos
     category.name = name;
     category.icon = icon;
+    category.sociedad = sociedad;
     category.centro = centro;
     category.cuenta = cuenta;
     category.ordenco = ordenco;
@@ -166,6 +171,7 @@ router.put('/:id', authenticateToken, validateCategory, async (req, res) => {
         userEmail: category.userEmail,
         name: category.name,
         icon: category.icon,
+        sociedad: category.sociedad,
         centro: category.centro,
         cuenta: category.cuenta,
         ordenco: category.ordenco,
@@ -247,9 +253,9 @@ router.get('/stats/:userEmail', authenticateToken, canAccessUserData, async (req
 
     const stats = {
       total: await Category.countDocuments({ userEmail, isActive: true }),
-      withCentro: await Category.countDocuments({ userEmail, isActive: true, centro: { $ne: null, $ne: '' } }),
-      withCuenta: await Category.countDocuments({ userEmail, isActive: true, cuenta: { $ne: null, $ne: '' } }),
-      withOrdenco: await Category.countDocuments({ userEmail, isActive: true, ordenco: { $ne: null, $ne: '' } })
+      withCentro: await Category.countDocuments({ userEmail, isActive: true, centro: { $nin: [null, ''] } }),
+      withCuenta: await Category.countDocuments({ userEmail, isActive: true, cuenta: { $nin: [null, ''] } }),
+      withOrdenco: await Category.countDocuments({ userEmail, isActive: true, ordenco: { $nin: [null, ''] } })
     };
 
     res.json({ stats });
