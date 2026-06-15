@@ -1,8 +1,25 @@
 const mongoose = require('mongoose');
 
 // Configuración de MongoDB
-const MONGODB_URI = 'mongodb://localhost:27018';
-const DATABASE_NAME = 'easygastos';
+const DEFAULT_MONGODB_URI = 'mongodb://localhost:27017';
+const DATABASE_NAME = process.env.DATABASE_NAME || 'easygastos';
+
+const resolveMongoUri = () => {
+  const envMongoUri = (process.env.MONGODB_URI || '').trim();
+
+  if (!envMongoUri) {
+    return `${DEFAULT_MONGODB_URI}/${DATABASE_NAME}`;
+  }
+
+  const uriWithoutTrailingSlash = envMongoUri.replace(/\/$/, '');
+  const hasDatabaseInUri = /mongodb(?:\+srv)?:\/\/[^/]+\/.+/.test(uriWithoutTrailingSlash);
+
+  return hasDatabaseInUri
+    ? uriWithoutTrailingSlash
+    : `${uriWithoutTrailingSlash}/${DATABASE_NAME}`;
+};
+
+const MONGODB_URI = resolveMongoUri();
 
 // Esquemas de Mongoose
 const userSchema = new mongoose.Schema({
@@ -342,7 +359,7 @@ const initDatabase = async () => {
   try {
     console.log('🔌 Conectando a MongoDB...');
     
-    await mongoose.connect(`${MONGODB_URI}/${DATABASE_NAME}`, {
+    await mongoose.connect(MONGODB_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
       serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
@@ -351,6 +368,7 @@ const initDatabase = async () => {
     
     console.log('✅ Conectado exitosamente a MongoDB');
     console.log(`📊 Base de datos: ${DATABASE_NAME}`);
+    console.log(`🔗 Mongo URI efectiva: ${MONGODB_URI.replace(/:[^:@/]+@/, ':****@')}`);
     
     // Verificar conexión
     const adminDb = mongoose.connection.db.admin();
@@ -398,7 +416,7 @@ const initDatabase = async () => {
     console.error('❌ Error conectando a MongoDB:', error);
     
     if (error.name === 'MongoServerSelectionError') {
-      console.error('💡 Verifica que MongoDB esté ejecutándose:');
+      console.error(`💡 Verifica que MongoDB esté ejecutándose y que MONGODB_URI sea correcta: ${MONGODB_URI}`);
       console.error('   - Windows: net start MongoDB');
       console.error('   - macOS/Linux: sudo systemctl start mongod');
       console.error('   - Docker: docker run -d -p 27017:27017 mongo');
