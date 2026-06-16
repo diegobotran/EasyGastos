@@ -4,6 +4,7 @@ const { models } = require('../database/init');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireManager, canAccessUserData } = require('../middleware/auth');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
+const { buildLiquidationSAPPayloadPreview } = require('../services/SAPPayloadService');
 
 const { Liquidation, Expense, User } = models;
 
@@ -547,6 +548,37 @@ router.get('/:id/csv', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error generando CSV de liquidación:', error);
     res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+/**
+ * @route   GET /api/liquidations/:id/sap-payload-preview
+ * @desc    Generar preview interno del payload SAP para inspección manual
+ * @access  Private (autenticado)
+ */
+router.get('/:id/sap-payload-preview', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await buildLiquidationSAPPayloadPreview(id);
+
+    if (result.notFound) {
+      return res.status(404).json({ error: 'Liquidación no encontrada' });
+    }
+
+    if (!result.isValid) {
+      return res.status(422).json({
+        errors: {
+          headerErrors: result.errors.headerErrors,
+          itemErrors: result.errors.itemErrors,
+        },
+      });
+    }
+
+    return res.json(result.payload);
+  } catch (error) {
+    console.error('Error generando preview de payload SAP:', error);
+    return res.status(500).json({ error: 'Error del servidor' });
   }
 });
 

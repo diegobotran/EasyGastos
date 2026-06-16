@@ -32,6 +32,10 @@ export default function LiquidationDetailScreen() {
   const [showAddExpenseModal, setShowAddExpenseModal] = useState(false);
   const [availableExpenses, setAvailableExpenses] = useState<Expense[]>([]);
   const [employeeComments, setEmployeeComments] = useState('');
+  const [showSapPreviewModal, setShowSapPreviewModal] = useState(false);
+  const [sapPreviewJson, setSapPreviewJson] = useState('');
+  const [sapPreviewError, setSapPreviewError] = useState('');
+  const [isLoadingSapPreview, setIsLoadingSapPreview] = useState(false);
 
   const liquidationId = params.liquidationId as string;
 
@@ -381,6 +385,69 @@ Gastos: ${expenses.length}`;
     );
   };
 
+  const buildSapPreviewErrorMessage = (payload: any) => {
+    const headerErrors = Array.isArray(payload?.errors?.headerErrors)
+      ? payload.errors.headerErrors.map((error: any) => `• ${error.field}: ${error.message}`)
+      : [];
+
+    const itemErrors = Array.isArray(payload?.errors?.itemErrors)
+      ? payload.errors.itemErrors.flatMap((item: any) => {
+          const errors = Array.isArray(item?.errors) ? item.errors : [];
+          return errors.map((error: any) => `• Gasto ${item.expenseId}: ${error.field} - ${error.message}`);
+        })
+      : [];
+
+    return [...headerErrors, ...itemErrors].join('\n');
+  };
+
+  const handleViewSapPreview = async () => {
+    if (!liquidation) {
+      return;
+    }
+
+    try {
+      setIsLoadingSapPreview(true);
+      setSapPreviewError('');
+      setSapPreviewJson('');
+      setShowSapPreviewModal(true);
+
+      const token = await AuthService.getToken();
+      if (!token) {
+        throw new Error('No se encontró token de autenticación para consultar el preview SAP');
+      }
+
+      const { url: backendUrl } = await BackendSyncService.getBackendConfig();
+      const requestUrl = `${backendUrl}/api/liquidations/${liquidation.id}/sap-payload-preview`;
+
+      const response = await fetch(requestUrl, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const responseText = await response.text();
+      const parsedPayload = responseText ? JSON.parse(responseText) : null;
+
+      if (response.ok) {
+        setSapPreviewJson(JSON.stringify(parsedPayload, null, 2));
+        return;
+      }
+
+      if (response.status === 422) {
+        setSapPreviewError(buildSapPreviewErrorMessage(parsedPayload) || 'El payload SAP no es válido para esta liquidación');
+        return;
+      }
+
+      throw new Error(parsedPayload?.error || 'No se pudo obtener el preview SAP');
+    } catch (error) {
+      console.error('❌ Error obteniendo preview SAP:', error);
+      setSapPreviewError((error as Error).message || 'Error desconocido obteniendo preview SAP');
+    } finally {
+      setIsLoadingSapPreview(false);
+    }
+  };
+
   const renderExpenseItem = ({ item }: { item: Expense }) => {
     const canEdit = liquidation && canEditLiquidation(liquidation.status);
     const shortDescription = item.description.length > 60 
@@ -629,7 +696,7 @@ Gastos: ${expenses.length}`;
             <View style={styles.approvedActions}>
               <View style={styles.approvedActionItem}>
                 <Ionicons name="document-text" size={16} color="#059669" />
-                <Text style={styles.approvedActionText}>Use el botón "Descargar CSV" para exportar</Text>
+                  <Text style={styles.approvedActionText}>Use el botón &quot;Descargar CSV&quot; para exportar</Text>
               </View>
               <View style={styles.approvedActionItem}>
                 <Ionicons name="lock-closed" size={16} color="#059669" />
@@ -716,6 +783,14 @@ Gastos: ${expenses.length}`;
             </TouchableOpacity>
           )}
 
+          <TouchableOpacity 
+            style={styles.previewButton}
+            onPress={handleViewSapPreview}
+          >
+            <Ionicons name="code-slash-outline" size={20} color="white" />
+            <Text style={styles.previewButtonText}>Ver Preview SAP</Text>
+          </TouchableOpacity>
+
           {liquidation.status === 'draft' && (
             <TouchableOpacity 
               style={styles.deleteButton}
@@ -731,6 +806,44 @@ Gastos: ${expenses.length}`;
       </ScrollView>
 
       {/* Modal para agregar gastos */}
+      <Modal
+        visible={showSapPreviewModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowSapPreviewModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Preview Payload SAP</Text>
+              <TouchableOpacity onPress={() => setShowSapPreviewModal(false)}>
+                <Ionicons name="close" size={28} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.sapPreviewContent}>
+              {isLoadingSapPreview ? (
+                <View style={styles.sapPreviewLoading}>
+                  <ActivityIndicator size="large" color="#2563eb" />
+                  <Text style={styles.sapPreviewLoadingText}>Construyendo preview SAP...</Text>
+                </View>
+              ) : sapPreviewError ? (
+                <ScrollView style={styles.sapPreviewScroll} contentContainerStyle={styles.sapPreviewScrollContent}>
+                  <View style={styles.sapPreviewErrorBox}>
+                    <Text style={styles.sapPreviewErrorTitle}>Payload inválido</Text>
+                    <Text style={styles.sapPreviewErrorText}>{sapPreviewError}</Text>
+                  </View>
+                </ScrollView>
+              ) : (
+                <ScrollView style={styles.sapPreviewScroll} contentContainerStyle={styles.sapPreviewScrollContent}>
+                  <Text style={styles.sapPreviewJson}>{sapPreviewJson}</Text>
+                </ScrollView>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal
         visible={showAddExpenseModal}
         animationType="slide"
@@ -751,7 +864,7 @@ Gastos: ${expenses.length}`;
                 <Ionicons name="folder-open-outline" size={60} color="#cbd5e1" />
                 <Text style={styles.emptyModalTitle}>No hay gastos disponibles</Text>
                 <Text style={styles.emptyModalText}>
-                  Todos tus gastos en "Borrador" ya están incluidos en esta u otras liquidaciones.
+                  Todos tus gastos en &quot;Borrador&quot; ya están incluidos en esta u otras liquidaciones.
                 </Text>
               </View>
             ) : (
@@ -1040,6 +1153,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  previewButton: {
+    flexDirection: 'row',
+    backgroundColor: '#7c3aed',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  previewButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
   deleteButton: {
     flexDirection: 'row',
     backgroundColor: '#ef4444',
@@ -1237,6 +1364,52 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     maxHeight: '80%',
     paddingBottom: 32,
+  },
+  sapPreviewContent: {
+    minHeight: 320,
+    maxHeight: '70%',
+  },
+  sapPreviewLoading: {
+    flex: 1,
+    minHeight: 320,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    gap: 12,
+  },
+  sapPreviewLoadingText: {
+    fontSize: 14,
+    color: '#475569',
+  },
+  sapPreviewScroll: {
+    flex: 1,
+  },
+  sapPreviewScrollContent: {
+    padding: 20,
+  },
+  sapPreviewJson: {
+    fontFamily: 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#0f172a',
+  },
+  sapPreviewErrorBox: {
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+  },
+  sapPreviewErrorTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#b91c1c',
+  },
+  sapPreviewErrorText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#7f1d1d',
   },
   modalHeader: {
     flexDirection: 'row',
