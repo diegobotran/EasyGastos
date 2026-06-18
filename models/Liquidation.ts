@@ -9,6 +9,7 @@ export interface Liquidation {
   id: string;                    // ID único de la liquidación (timestamp)
   userId: string;                // Email del usuario que crea la liquidación
   employeeName: string;          // Nombre del empleado
+  sociedad: string;              // Sociedad explícita de la liquidación
   createdDate: string;           // Fecha de creación en formato YYYY-MM-DD (almacenamiento) - se muestra como DD/MM/YYYY
   expenseIds: string[];          // IDs de los gastos incluidos
   totalAmount: number;           // Monto total de todos los gastos
@@ -49,6 +50,7 @@ export type LiquidationStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
 export interface CreateLiquidationDTO {
   userId: string;
   employeeName: string;
+  sociedad: string;
   expenseIds: string[];
 }
 

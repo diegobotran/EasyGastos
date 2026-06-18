@@ -7,6 +7,64 @@ const router = express.Router();
 
 const { Expense, User, SyncLog } = models;
 
+const hasAccountingSnapshot = (expenseData = {}) => {
+  return Boolean(
+    String(expenseData.category || '').trim() &&
+    String(expenseData.sociedad || '').trim() &&
+    String(expenseData.centro || '').trim() &&
+    String(expenseData.cuenta || '').trim() &&
+    String(expenseData.ordenco || '').trim()
+  );
+};
+
+const normalizeSatValue = (value) => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  if (typeof value === 'number') {
+    return value.toFixed(2);
+  }
+
+  return String(value).trim().toUpperCase();
+};
+
+const buildSatValidationFingerprint = (expenseData = {}) => {
+  return [
+    normalizeSatValue(expenseData.serie),
+    normalizeSatValue(expenseData.noinvoice),
+    normalizeSatValue(expenseData.vat_number),
+    normalizeSatValue(expenseData.supplier),
+    normalizeSatValue(expenseData.date),
+    normalizeSatValue(expenseData.amount),
+    normalizeSatValue(expenseData.uuid),
+  ].join('|');
+};
+
+const normalizeSatValidationState = (expenseData = {}) => {
+  const fingerprint = buildSatValidationFingerprint(expenseData);
+  const hasMetadata = Boolean(
+    expenseData.satValidatedAt &&
+    expenseData.satValidationSource === 'SAT_INTERNO' &&
+    expenseData.satValidationFingerprint
+  );
+
+  if (expenseData.satStatus === 'VALIDADO_SAT' && hasMetadata && expenseData.satValidationFingerprint === fingerprint) {
+    return {
+      ...expenseData,
+      satValidationFingerprint: fingerprint,
+    };
+  }
+
+  return {
+    ...expenseData,
+    satStatus: 'NO_VALIDADO_SAT',
+    satValidatedAt: null,
+    satValidationSource: null,
+    satValidationFingerprint: null,
+  };
+};
+
 // Middleware para validar datos de gasto
 const validateExpense = [
   body('id').trim().isLength({ min: 1 }),
@@ -19,10 +77,13 @@ const validateExpense = [
   }),
   body('date').isISO8601(), // Mantener como string ISO, no convertir a Date
   body('category').trim().isLength({ min: 1 }),
-  body('sociedad').optional().trim(),
+  body('sociedad').trim().isLength({ min: 1 }),
   body('status').isIn(['BORRADOR', 'ENVIADO_JEFE', 'APROBADO_JEFE', 'RECHAZADO_JEFE', 'APROBADO_FINANZAS', 'RECHAZADO_FINANZAS', 'CONTABILIZADO', 'ERROR_SAP']),
   body('expenseStatus').optional().isIn(['draft', 'in_liquidation', 'approved', 'voided']),
   body('satStatus').optional().isIn(['VALIDADO_SAT', 'NO_VALIDADO_SAT']),
+  body('satValidatedAt').optional().trim(),
+  body('satValidationSource').optional().isIn(['SAT_INTERNO']),
+  body('satValidationFingerprint').optional().trim(),
   body('supplier').optional().trim(),
   body('vat_number').optional().trim(),
   body('department').optional().trim(),
@@ -30,9 +91,9 @@ const validateExpense = [
   body('noinvoice').optional().trim(),
   body('serie').optional().trim(),
   body('uuid').optional().trim(), // UUID de factura FEL
-  body('centro').optional().trim(),
-  body('cuenta').optional().trim(),
-  body('ordenco').optional().trim(),
+  body('centro').trim().isLength({ min: 1 }),
+  body('cuenta').trim().isLength({ min: 1 }),
+  body('ordenco').trim().isLength({ min: 1 }),
   body('managerEmail').optional({ nullable: true, checkFalsy: true }).isEmail(),
   body('liquidationId').optional().trim(),
   body('imageuri').optional().trim(),
@@ -51,8 +112,14 @@ router.post('/', authenticateToken, validateExpense, async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const expenseData = req.body;
+    const expenseData = normalizeSatValidationState(req.body);
     console.log('✅ Validación exitosa para gasto ID:', expenseData.id);
+
+    if (!hasAccountingSnapshot(expenseData)) {
+      return res.status(400).json({
+        error: 'El gasto debe incluir categoría, sociedad, centro, cuenta y orden CO.'
+      });
+    }
 
     // Verificar si ya existe un gasto con ese ID
     const existingExpense = await Expense.findOne({ id: expenseData.id });
@@ -150,6 +217,9 @@ router.post('/', authenticateToken, validateExpense, async (req, res) => {
         status: newExpense.status,
         expenseStatus: newExpense.expenseStatus,
         satStatus: newExpense.satStatus,
+        satValidatedAt: newExpense.satValidatedAt,
+        satValidationSource: newExpense.satValidationSource,
+        satValidationFingerprint: newExpense.satValidationFingerprint,
         managerEmail: newExpense.managerEmail,
         createdAt: newExpense.createdAt,
         updatedAt: newExpense.updatedAt
@@ -215,6 +285,9 @@ router.get('/', authenticateToken, async (req, res) => {
       status: expense.status,
       expenseStatus: expense.expenseStatus || 'draft',
       satStatus: expense.satStatus || 'NO_VALIDADO_SAT',
+      satValidatedAt: expense.satValidatedAt || null,
+      satValidationSource: expense.satValidationSource || null,
+      satValidationFingerprint: expense.satValidationFingerprint || null,
       liquidationId: expense.liquidationId || '',
       supplier: expense.supplier,
       vat_number: expense.vat_number,
@@ -306,18 +379,26 @@ router.get('/pending-approval', authenticateToken, requireManager, async (req, r
 // NUEVO: Actualizar gasto completo (PATCH) - Para sincronizar cambios como anulaciones
 router.patch('/:id', authenticateToken, [
   body('expenseStatus').optional().isIn(['draft', 'in_liquidation', 'approved', 'voided']),
+  body('satStatus').optional().isIn(['VALIDADO_SAT', 'NO_VALIDADO_SAT']),
+  body('satValidatedAt').optional().trim(),
+  body('satValidationSource').optional().isIn(['SAT_INTERNO']),
+  body('satValidationFingerprint').optional().trim(),
   body('voidedAt').optional().trim(),
   body('voidedReason').optional().trim(),
   body('description').optional().trim().isLength({ min: 1 }),
   body('amount').optional().isNumeric(),
   body('date').optional().isISO8601(),
   body('category').optional().trim(),
+  body('sociedad').optional().trim(),
   body('status').optional().isIn(['BORRADOR', 'ENVIADO_JEFE', 'APROBADO_JEFE', 'RECHAZADO_JEFE']),
   body('supplier').optional().trim(),
   body('department').optional().trim(),
   body('notes').optional().trim(),
   body('noinvoice').optional().trim(),
-  body('serie').optional().trim()
+  body('serie').optional().trim(),
+  body('centro').optional().trim(),
+  body('cuenta').optional().trim(),
+  body('ordenco').optional().trim()
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -327,7 +408,7 @@ router.patch('/:id', authenticateToken, [
     }
 
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = normalizeSatValidationState(req.body);
 
     console.log('📝 PATCH /api/expenses/:id - Actualizando gasto:', id);
     console.log('📝 Datos a actualizar:', JSON.stringify(updateData, null, 2));
@@ -362,6 +443,7 @@ router.patch('/:id', authenticateToken, [
     // Actualizar campos permitidos
     const allowedFields = [
       'description', 'amount', 'date', 'category', 'sociedad', 'status', 'expenseStatus', 'satStatus',
+      'satValidatedAt', 'satValidationSource', 'satValidationFingerprint',
       'supplier', 'vat_number', 'department', 'notes', 'noinvoice', 'serie',
       'centro', 'cuenta', 'ordenco', 'imageuri', 'currency', 'totiva',
       'voidedAt', 'voidedReason', 'liquidationId'
@@ -378,6 +460,14 @@ router.patch('/:id', authenticateToken, [
       const dateObj = new Date(updateData.date);
       expense.date = dateObj.toISOString().split('T')[0];
       console.log('📅 Fecha normalizada:', expense.date);
+    }
+
+    Object.assign(expense, normalizeSatValidationState(expense.toObject()));
+
+    if (!hasAccountingSnapshot(expense)) {
+      return res.status(400).json({
+        error: 'El gasto debe conservar categoría, sociedad, centro, cuenta y orden CO válidos.'
+      });
     }
 
     expense.updatedAt = new Date();

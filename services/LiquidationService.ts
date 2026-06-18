@@ -7,7 +7,7 @@
 
 import { Platform } from 'react-native';
 import { Liquidation, LiquidationStatus, CreateLiquidationDTO } from '../models/Liquidation';
-import { getExpenseById, updateExpensesLiquidationStatus } from './ExpenseService';
+import { getExpenseById, updateExpensesLiquidationStatus, validateExpenseForLiquidation } from './ExpenseService';
 import { getCurrentDateISO } from '../utils/dateUtils';
 import * as SQLite from 'expo-sqlite';
 import { getUser } from './AuthService';
@@ -50,6 +50,7 @@ export const initLiquidationsTable = async (): Promise<void> => {
           id TEXT PRIMARY KEY,
           userId TEXT NOT NULL,
           employeeName TEXT NOT NULL,
+          sociedad TEXT,
           createdDate TEXT NOT NULL,
           expenseIds TEXT NOT NULL,
           totalAmount REAL NOT NULL,
@@ -73,6 +74,7 @@ export const initLiquidationsTable = async (): Promise<void> => {
       `);
 
       const liquidationColumns = [
+        ['sociedad', 'TEXT'],
         ['approverEmail', 'TEXT'],
         ['rejectedBy', 'TEXT'],
         ['csvGeneratedAt', 'TEXT'],
@@ -126,11 +128,23 @@ export const createLiquidation = async (
       throw new Error('Debe seleccionar al menos un gasto');
     }
 
+    if (!dto.sociedad || !dto.sociedad.trim()) {
+      throw new Error('Debe seleccionar la sociedad de la liquidación');
+    }
+
     // Calcular el monto total sumando los gastos
     let totalAmount = 0;
     for (const expenseId of dto.expenseIds) {
+      const validation = await validateExpenseForLiquidation(expenseId, dto.userId);
+      if (!validation.valid) {
+        throw new Error(validation.error || 'Uno de los gastos no puede incluirse en la liquidación');
+      }
+
       const expense = await getExpenseById(expenseId, dto.userId);
       if (expense) {
+        if (expense.sociedad !== dto.sociedad) {
+          throw new Error(`Todos los gastos de una liquidación deben pertenecer a la sociedad ${dto.sociedad}.`);
+        }
         totalAmount += expense.amount;
       }
     }
@@ -139,6 +153,7 @@ export const createLiquidation = async (
       id: Date.now().toString(),
       userId: dto.userId,
       employeeName: dto.employeeName,
+      sociedad: dto.sociedad,
       createdDate: getCurrentDateISO(),
       expenseIds: dto.expenseIds,
       totalAmount,
@@ -152,13 +167,14 @@ export const createLiquidation = async (
     // Insertar en SQLite
     await db.runAsync(
       `INSERT INTO liquidations (
-        id, userId, employeeName, createdDate, expenseIds, 
+        id, userId, employeeName, sociedad, createdDate, expenseIds, 
         totalAmount, status, sapSyncStatus, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       [
         liquidation.id,
         liquidation.userId,
         liquidation.employeeName,
+        liquidation.sociedad,
         liquidation.createdDate,
         JSON.stringify(liquidation.expenseIds),
         liquidation.totalAmount,
@@ -208,6 +224,7 @@ export const getLiquidations = async (userId: string): Promise<Liquidation[]> =>
       id: row.id,
       userId: row.userId,
       employeeName: row.employeeName,
+      sociedad: row.sociedad || '',
       createdDate: row.createdDate,
       expenseIds: JSON.parse(row.expenseIds),
       totalAmount: row.totalAmount,
@@ -258,6 +275,7 @@ export const getLiquidationById = async (id: string, userId: string): Promise<Li
       id: result.id,
       userId: result.userId,
       employeeName: result.employeeName,
+      sociedad: result.sociedad || '',
       createdDate: result.createdDate,
       expenseIds: JSON.parse(result.expenseIds),
       totalAmount: result.totalAmount,
@@ -315,6 +333,15 @@ export const addExpenseToLiquidation = async (
     const expense = await getExpenseById(expenseId, liquidation.userId);
     if (!expense) {
       throw new Error('Gasto no encontrado');
+    }
+
+    if (expense.sociedad !== liquidation.sociedad) {
+      throw new Error(`Solo puede agregar gastos de la sociedad ${liquidation.sociedad} a esta liquidación.`);
+    }
+
+    const validation = await validateExpenseForLiquidation(expenseId, liquidation.userId, liquidationId);
+    if (!validation.valid) {
+      throw new Error(validation.error || 'El gasto no puede agregarse a esta liquidación');
     }
 
     const newExpenseIds = [...liquidation.expenseIds, expenseId];
@@ -483,6 +510,7 @@ export const updateLiquidationStatus = async (
       id: result.id,
       userId: result.userId,
       employeeName: result.employeeName,
+      sociedad: result.sociedad || '',
       createdDate: result.createdDate,
       expenseIds: JSON.parse(result.expenseIds),
       totalAmount: result.totalAmount,
@@ -655,6 +683,7 @@ export const getLiquidationsNeedingSync = async (userId: string): Promise<Liquid
           id: row.id,
           userId: row.userId,
           employeeName: row.employeeName,
+          sociedad: row.sociedad || '',
           createdDate: row.createdDate,
           expenseIds: expenseIds,
           totalAmount: row.totalAmount,
@@ -737,7 +766,7 @@ export const generateCSVData = async (liquidationId: string, userId: string): Pr
     // Obtener datos del usuario para codigo_empleado y sociedad
     const user = await getUser();
     const codigoEmpleado = user?.employeeCode || '';
-    const sociedad = user?.sociedad || '';
+    const sociedad = liquidation.sociedad || user?.sociedad || '';
 
     const csvData = [];
 
@@ -799,17 +828,18 @@ export const insertLiquidationFromBackend = async (liquidation: any): Promise<vo
     await db.runAsync(
       `INSERT OR REPLACE INTO liquidations (
         id, userId, employeeName, createdDate, expenseIds, 
-        totalAmount, status, managerEmail, managerComments, submittedDate,
+        sociedad, totalAmount, status, managerEmail, managerComments, submittedDate,
         approvedDate, rejectedDate, approverEmail, rejectedBy,
         csvGeneratedAt, csvGeneratedBy, sapDocNumber, sapSyncStatus,
         sapReferenceId, sapResponseMessage, sapSyncedAt, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         liquidation.id,
         liquidation.userId,
         liquidation.employeeName,
         liquidation.createdDate,
         JSON.stringify(liquidation.expenseIds || []),
+        liquidation.sociedad || '',
         liquidation.totalAmount,
         liquidation.status,
         liquidation.managerEmail || null,

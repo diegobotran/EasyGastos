@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { Category } from '../models/Category';
 import * as SQLite from 'expo-sqlite';
-import { syncDraftExpensesWithCategoryUpdate } from './ExpenseService';
+import { getDraftExpensesByCategoryName, syncDraftExpensesWithCategoryUpdate } from './ExpenseService';
 
 // Base de datos SQLite
 let db: SQLite.SQLiteDatabase | null = null;
@@ -213,6 +213,27 @@ export const updateCategory = async (category: Category, userEmail: string): Pro
  * Elimina una categoría por su ID.
  */
 export const deleteCategory = async (id: string, userEmail: string): Promise<void> => {
+  const currentCategories = await getCategories(userEmail);
+  const categoryToDelete = currentCategories.find(category => category.id === id);
+
+  if (!categoryToDelete) {
+    throw new Error('Categoría no encontrada.');
+  }
+
+  const linkedDraftExpenses = await getDraftExpensesByCategoryName(userEmail, categoryToDelete.name);
+  if (linkedDraftExpenses.length > 0) {
+    const linkedExpensesSummary = linkedDraftExpenses
+      .slice(0, 5)
+      .map(expense => `- ${expense.description} (#${expense.id.slice(-6)})`)
+      .join('\n');
+    const remainingCount = linkedDraftExpenses.length - Math.min(linkedDraftExpenses.length, 5);
+    const remainingText = remainingCount > 0 ? `\n- y ${remainingCount} gasto(s) más` : '';
+
+    throw new Error(
+      `No se puede eliminar la categoría mientras existan gastos en borrador ligados.\n\n${linkedExpensesSummary}${remainingText}\n\nDesvincula o recategoriza esos gastos antes de eliminarla.`
+    );
+  }
+
   if (Platform.OS === 'web' || !db) {
         const key = `${STORAGE_KEY_PREFIX}${userEmail}`;
         let items = await getCategories(userEmail);

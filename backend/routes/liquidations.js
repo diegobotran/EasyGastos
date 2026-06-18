@@ -19,6 +19,7 @@ router.post('/',
     body('id').notEmpty().withMessage('ID es requerido'),
     body('userId').isEmail().withMessage('userId debe ser un email válido'),
     body('employeeName').notEmpty().withMessage('employeeName es requerido'),
+    body('sociedad').optional().trim(),
     body('expenseIds').isArray({ min: 1 }).withMessage('Debe incluir al menos un gasto'),
     body('totalAmount').isNumeric().withMessage('totalAmount debe ser numérico'),
     body('status').optional().isIn(['draft', 'submitted', 'approved', 'rejected']),
@@ -52,7 +53,7 @@ router.post('/',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { id, userId, employeeName, createdDate, expenseIds, totalAmount, status, sapDocNumber, sapSyncStatus, sapReferenceId, sapResponseMessage, sapSyncedAt, approverName, comments } = req.body;
+      const { id, userId, employeeName, sociedad, createdDate, expenseIds, totalAmount, status, sapDocNumber, sapSyncStatus, sapReferenceId, sapResponseMessage, sapSyncedAt, approverName, comments } = req.body;
 
       console.log('✅ Validación exitosa para liquidación ID:', id);
       console.log('📋 ExpenseIds recibidos:', expenseIds);
@@ -99,6 +100,18 @@ router.post('/',
         });
       }
 
+      const nonValidatedExpenses = expensesToInclude.filter(exp => exp.satStatus !== 'VALIDADO_SAT');
+      if (nonValidatedExpenses.length > 0) {
+        return res.status(400).json({
+          error: 'Todos los gastos deben estar validados por SAT antes de incluirse en una liquidación',
+          nonValidatedExpenses: nonValidatedExpenses.map(exp => ({
+            id: exp.id,
+            description: exp.description,
+            satStatus: exp.satStatus || 'NO_VALIDADO_SAT'
+          }))
+        });
+      }
+
       // Verificar que ningún gasto esté ya en otra liquidación (excepto esta misma)
       const expensesInLiquidation = expensesToInclude.filter(exp => exp.liquidationId && exp.liquidationId !== '' && exp.liquidationId !== id);
       if (expensesInLiquidation.length > 0) {
@@ -109,6 +122,22 @@ router.post('/',
         return res.status(400).json({ 
           error: 'Algunos gastos ya están en otra liquidación',
           conflictingExpenses: expensesInLiquidation.map(e => ({ id: e.id, liquidationId: e.liquidationId }))
+        });
+      }
+
+      if (!sociedad || !String(sociedad).trim()) {
+        return res.status(400).json({ error: 'La liquidación debe indicar una sociedad.' });
+      }
+
+      const conflictingSociedadExpenses = expensesToInclude.filter(exp => String(exp.sociedad || '').trim() !== String(sociedad).trim());
+      if (conflictingSociedadExpenses.length > 0) {
+        return res.status(400).json({
+          error: 'Todos los gastos de una liquidación deben pertenecer a la misma sociedad.',
+          conflictingExpenses: conflictingSociedadExpenses.map(exp => ({
+            id: exp.id,
+            description: exp.description,
+            sociedad: exp.sociedad || ''
+          }))
         });
       }
 
@@ -124,6 +153,7 @@ router.post('/',
         id,
         userId,
         employeeName,
+        sociedad,
         createdDate: createdDate || new Date().toISOString().split('T')[0],
         expenseIds,
         totalAmount,
@@ -511,7 +541,7 @@ router.get('/:id/csv', authenticateToken, async (req, res) => {
     // Obtener datos del usuario para codigo_empleado y sociedad
     const user = await User.findOne({ email: liquidation.userId });
     const codigoEmpleado = user?.employeeCode || '';
-    const sociedad = user?.sociedad || '';
+    const sociedad = liquidation.sociedad || user?.sociedad || '';
 
     // Obtener los gastos de la liquidación
     const expenses = await Expense.find({ 
@@ -606,7 +636,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     // Actualizar campos permitidos
     const allowedFields = [
-      'employeeName', 'expenseIds', 'totalAmount', 'status',
+      'employeeName', 'sociedad', 'expenseIds', 'totalAmount', 'status',
       'managerComments', 'submittedDate', 'approvedDate', 'rejectedDate'
     ];
 

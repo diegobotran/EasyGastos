@@ -72,7 +72,22 @@ const formatDateForReference = (dateValue) => {
 
 const formatAmountForSAP = (value) => Number(value || 0).toFixed(2);
 
-const normalizeSociedadForSAP = (value) => asTrimmedString(value).padStart(BUKRS_LENGTH, '0');
+const formatOptionalAmountForSAP = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue.toFixed(2) : '';
+};
+
+const normalizeSociedadForSAP = (value) => {
+  if (!value) {
+    return '';
+  }
+
+  return asTrimmedString(value).padStart(BUKRS_LENGTH, '0');
+};
 
 const getOrderedExpenses = (liquidation, expenses) => {
   const expenseMap = new Map(expenses.map((expense) => [expense.id, expense]));
@@ -99,131 +114,86 @@ const buildLiquidationReference = (liquidation) => {
   return `LIQ-${formattedDate}-${liquidation.id}`;
 };
 
-const buildHeaderErrors = (liquidation, user, expenses, missingExpenseIds = []) => {
-  const errors = [];
+const buildHeaderWarnings = (liquidation, user, expenses, missingExpenseIds = []) => {
+  const warnings = [];
 
   if (!user) {
-    errors.push({ field: 'user', message: 'No se encontró el usuario de la liquidación' });
-    return errors;
+    warnings.push({ field: 'user', message: 'No se encontrÃ³ el usuario de la liquidaciÃ³n; la cabecera usarÃ¡ valores vacÃ­os.' });
   }
 
-  if (!user.lifnr) {
-    errors.push({ field: 'LIFNR', message: 'El usuario no tiene LIFNR configurado' });
+  if (!user?.lifnr) {
+    warnings.push({ field: 'LIFNR', message: 'El usuario no tiene LIFNR configurado.' });
+  }
+
+  if (!liquidation.sociedad) {
+    warnings.push({ field: 'BUKRS', message: 'La liquidaciÃ³n no tiene sociedad capturada.' });
+  }
+
+  if (!liquidation.id) {
+    warnings.push({ field: 'XBLNR', message: 'La liquidaciÃ³n no tiene identificador para construir la referencia SAP.' });
   }
 
   if (!expenses.length) {
-    errors.push({ field: 'expenses', message: 'La liquidación no tiene gastos asociados para construir el payload SAP' });
-    return errors;
+    warnings.push({ field: 'expenses', message: 'La liquidaciÃ³n no tiene gastos asociados para construir el payload SAP.' });
   }
 
   if (missingExpenseIds.length > 0) {
-    errors.push({
+    warnings.push({
       field: 'expenses',
-      message: `No se encontraron ${missingExpenseIds.length} gasto(s) asociados a la liquidación en backend`,
+      message: `No se encontraron ${missingExpenseIds.length} gasto(s) asociados a la liquidaciÃ³n en backend.`,
       expenseIds: missingExpenseIds,
     });
   }
 
-  const firstExpense = expenses[0];
-  if (!firstExpense.sociedad) {
-    errors.push({ field: 'BUKRS', message: 'El primer gasto no tiene sociedad para construir la cabecera SAP' });
-  }
-
-  if (!liquidation.id) {
-    errors.push({ field: 'XBLNR', message: 'La liquidación no tiene identificador para construir la referencia SAP' });
-  }
-
-  const firstExpenseDate = firstExpense.date;
-  if (!firstExpenseDate || !formatDateForSAP(firstExpenseDate)) {
-    errors.push({ field: 'BLDAT', message: 'El primer gasto no tiene fecha de documento válida para la cabecera SAP' });
-  }
-
-  const totalAmount = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-  if (!totalAmount || totalAmount <= 0) {
-    errors.push({ field: 'DMBTR', message: 'La liquidación no tiene un total válido para la cabecera SAP' });
-  }
-
-  return errors;
+  return warnings;
 };
 
-const buildItemErrors = (expense) => {
-  const errors = [];
+const buildItemWarnings = (expense) => {
+  const warnings = [];
 
-  if (!expense.category) {
-    errors.push({ field: 'category', message: 'El gasto no tiene categoría' });
-  }
-  if (!expense.sociedad) {
-    errors.push({ field: 'sociedad', message: 'El gasto no tiene sociedad' });
-  }
-  if (!expense.cuenta) {
-    errors.push({ field: 'HKONT', message: 'El gasto no tiene cuenta contable' });
-  }
-  if (!expense.centro) {
-    errors.push({ field: 'KOSTL', message: 'El gasto no tiene centro de costo' });
-  }
-  if (!expense.ordenco) {
-    errors.push({ field: 'AUFNR', message: 'El gasto no tiene orden CO' });
-  }
-  if (!expense.serie) {
-    errors.push({ field: 'ZSERFAC', message: 'El gasto no tiene serie de factura' });
-  }
-  if (!expense.noinvoice) {
-    errors.push({ field: 'ZNUMFAC', message: 'El gasto no tiene número de factura' });
-  }
-  if (!expense.date || !formatDateForSAP(expense.date)) {
-    errors.push({ field: 'BLDAT', message: 'El gasto no tiene fecha de documento válida' });
-  }
-  if (!expense.vat_number) {
-    errors.push({ field: 'STCD1', message: 'El gasto no tiene NIT del emisor' });
-  }
-  if (!expense.supplier) {
-    errors.push({ field: 'NAME1', message: 'El gasto no tiene nombre del emisor' });
-  }
-  if (!expense.description) {
-    errors.push({ field: 'SGTXT', message: 'El gasto no tiene descripción final' });
-  }
-  if (!expense.amount || Number(expense.amount) <= 0) {
-    errors.push({ field: 'DMBTR', message: 'El gasto no tiene monto válido' });
-  }
+  if (!expense.category) warnings.push({ field: 'category', message: 'El gasto no tiene categorÃ­a.' });
+  if (!expense.sociedad) warnings.push({ field: 'sociedad', message: 'El gasto no tiene sociedad.' });
+  if (!expense.cuenta) warnings.push({ field: 'HKONT', message: 'El gasto no tiene cuenta contable.' });
+  if (!expense.centro) warnings.push({ field: 'KOSTL', message: 'El gasto no tiene centro de costo.' });
+  if (!expense.ordenco) warnings.push({ field: 'AUFNR', message: 'El gasto no tiene orden CO.' });
+  if (!expense.serie) warnings.push({ field: 'ZSERFAC', message: 'El gasto no tiene serie de factura.' });
+  if (!expense.noinvoice) warnings.push({ field: 'ZNUMFAC', message: 'El gasto no tiene nÃºmero de factura.' });
+  if (!expense.date || !formatDateForSAP(expense.date)) warnings.push({ field: 'BLDAT', message: 'El gasto no tiene fecha de documento vÃ¡lida.' });
+  if (!expense.vat_number || !expense.vat_number.trim()) warnings.push({ field: 'STCD1', message: 'El gasto no tiene NIT del emisor.' });
+  if (!expense.supplier || !expense.supplier.trim()) warnings.push({ field: 'NAME1', message: 'El gasto no tiene nombre del emisor.' });
+  if (!expense.description) warnings.push({ field: 'SGTXT', message: 'El gasto no tiene descripciÃ³n final.' });
+  if (expense.amount === null || expense.amount === undefined || expense.amount === '') warnings.push({ field: 'DMBTR', message: 'El gasto no tiene monto disponible.' });
 
-  if (!expense.supplier || !expense.supplier.trim()) {
-    errors.push({ field: 'NAME1', message: 'El gasto no tiene nombre del emisor' });
-  }
-
-  if (!expense.vat_number || !expense.vat_number.trim()) {
-    errors.push({ field: 'STCD1', message: 'El gasto no tiene NIT del emisor' });
-  }
-
-  return errors;
+  return warnings;
 };
 
 const buildPayload = (liquidation, user, expenses) => {
   const reference = buildLiquidationReference(liquidation);
-  const firstExpense = expenses[0];
+  const today = new Date().toISOString().split('T')[0];
   const totalAmount = Number(liquidation.totalAmount || expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0));
 
   return {
     header: {
-      BLDAT: formatDateForSAP(firstExpense.date),
-      BUDAT: formatDateForSAP(new Date().toISOString()),
-      BUKRS: normalizeSociedadForSAP(firstExpense.sociedad),
-      LIFNR: padLeft(user.lifnr, LIFNR_LENGTH),
+      BLDAT: formatDateForSAP(today),
+      BUDAT: formatDateForSAP(today),
+      BUKRS: normalizeSociedadForSAP(liquidation.sociedad),
+      LIFNR: user?.lifnr ? padLeft(user.lifnr, LIFNR_LENGTH) : '',
       XBLNR: reference,
       ZTERM: FIXED_PAYMENT_TERM,
       BKTXT: reference,
       WAERS: FIXED_CURRENCY,
-      DMBTR: formatAmountForSAP(totalAmount),
+      DMBTR: totalAmount > 0 ? formatAmountForSAP(totalAmount) : '',
       DZLSPR: '',
     },
     items: expenses.map((expense) => ({
-      HKONT: padLeft(expense.cuenta, HKONT_LENGTH),
+      HKONT: expense.cuenta ? padLeft(expense.cuenta, HKONT_LENGTH) : '',
       ZMWSKZ: FIXED_TAX_CODE,
-      DMBTR: formatAmountForSAP(expense.amount),
+      DMBTR: formatOptionalAmountForSAP(expense.amount),
       ZUMSK: '',
-      KOSTL: padLeft(expense.centro, KOSTL_LENGTH),
-      AUFNR: padLeft(expense.ordenco, AUFNR_LENGTH),
+      KOSTL: expense.centro ? padLeft(expense.centro, KOSTL_LENGTH) : '',
+      AUFNR: expense.ordenco ? padLeft(expense.ordenco, AUFNR_LENGTH) : '',
       ZSERFAC: asTrimmedString(expense.serie),
-      ZNUMFAC: padLeft(expense.noinvoice, ZNUMFAC_LENGTH),
+      ZNUMFAC: expense.noinvoice ? padLeft(expense.noinvoice, ZNUMFAC_LENGTH) : '',
       BLART: '',
       BLDAT: formatDateForSAP(expense.date),
       STCD1: asTrimmedString(expense.vat_number),
@@ -243,30 +213,23 @@ const buildPreview = async (liquidationId) => {
   const expenses = await Expense.find({ id: { $in: liquidation.expenseIds } }).lean();
   const { orderedExpenses, missingExpenseIds } = getOrderedExpenses(liquidation, expenses);
 
-  const headerErrors = buildHeaderErrors(liquidation, user, orderedExpenses, missingExpenseIds);
-  const itemErrors = orderedExpenses
+  const headerWarnings = buildHeaderWarnings(liquidation, user, orderedExpenses, missingExpenseIds);
+  const itemWarnings = orderedExpenses
     .map((expense) => ({
       expenseId: expense.id,
       category: expense.category,
-      errors: buildItemErrors(expense),
+      warnings: buildItemWarnings(expense),
     }))
-    .filter((item) => item.errors.length > 0);
-
-  if (headerErrors.length > 0 || itemErrors.length > 0) {
-    return {
-      notFound: false,
-      isValid: false,
-      errors: {
-        headerErrors,
-        itemErrors,
-      },
-    };
-  }
+    .filter((item) => item.warnings.length > 0);
 
   return {
     notFound: false,
     isValid: true,
     payload: buildPayload(liquidation, user, orderedExpenses),
+    warnings: {
+      headerWarnings,
+      itemWarnings,
+    },
   };
 };
 

@@ -80,6 +80,13 @@ const expenseSchema = new mongoose.Schema({
     enum: ['VALIDADO_SAT', 'NO_VALIDADO_SAT'],
     default: 'NO_VALIDADO_SAT'
   },
+  satValidatedAt: { type: String, default: null },
+  satValidationSource: {
+    type: String,
+    enum: ['SAT_INTERNO'],
+    default: null
+  },
+  satValidationFingerprint: { type: String, default: null },
   liquidationId: { type: String, default: null }, // ID de la liquidación a la que pertenece
   voidedAt: { type: String, default: null }, // Fecha de anulación (ISO string)
   voidedReason: { type: String, default: null }, // Razón de anulación
@@ -113,6 +120,7 @@ const liquidationSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   userId: { type: String, required: true }, // Email del empleado que creó la liquidación
   employeeName: { type: String, required: true },
+  sociedad: { type: String, default: null },
   createdDate: { type: String, required: true }, // YYYY-MM-DD
   expenseIds: { type: [String], required: true, default: [] }, // Array de IDs de gastos
   totalAmount: { type: Number, required: true },

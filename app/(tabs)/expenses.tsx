@@ -17,6 +17,7 @@ import { Expense, getExpenseStatusText, getExpenseStatusColor } from '../../mode
 import * as AuthService from '../../services/AuthService';
 import { createLiquidation } from '../../services/LiquidationService';
 import { formatDateToSpanish } from '../../utils/dateUtils';
+import { SOCIEDADES } from '../../constants/Sociedades';
 
 // A dedicated component to render each item in the list for better organization.
 interface ExpenseListItemProps {
@@ -69,7 +70,7 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
   };
 
   // Determinar si el gasto puede ser seleccionado (solo si está en draft)
-  const canBeSelected = item.expenseStatus === 'draft';
+  const canBeSelected = item.expenseStatus === 'draft' && item.satStatus === 'VALIDADO_SAT';
 
   // Truncar proveedor para que no sea muy largo
   const shortSupplier = item.supplier.length > 25 
@@ -107,6 +108,11 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
               <View style={statusBadgeStyle}>
                 <Text style={statusTextStyle}>{statusText}</Text>
               </View>
+              {item.satStatus === 'VALIDADO_SAT' && (
+                <View style={styles.satBadge}>
+                  <Text style={styles.satBadgeText}>SAT</Text>
+                </View>
+              )}
               {item.liquidationId && (
                 <View style={styles.liquidationBadge}>
                   <Ionicons name="folder" size={10} color="#059669" />
@@ -190,13 +196,20 @@ export default function ExpensesScreen() {
   const [selectedFilter, setSelectedFilter] = useState('Todos los estados'); // State for filter
   const [liquidationMode, setLiquidationMode] = useState(false); // State for liquidation mode
   const [selectedExpenseIds, setSelectedExpenseIds] = useState<string[]>([]); // Selected expenses for liquidation
+  const [selectedSociedad, setSelectedSociedad] = useState('');
   const router = useRouter();
 
   const filteredExpenses = expenses.filter(expense => {
     // Filtrar por búsqueda (descripción, proveedor, número de factura, fechas)
     if (searchQuery === '') {
       // Sin búsqueda, aplicar solo filtro de liquidación
-      if (liquidationMode && expense.expenseStatus !== 'draft') {
+      if (liquidationMode && !selectedSociedad) {
+        return false;
+      }
+      if (liquidationMode && (expense.expenseStatus !== 'draft' || expense.satStatus !== 'VALIDADO_SAT')) {
+        return false;
+      }
+      if (liquidationMode && selectedSociedad && expense.sociedad !== selectedSociedad) {
         return false;
       }
       return true;
@@ -232,7 +245,13 @@ export default function ExpensesScreen() {
                          matchesInvoiceDate || matchesCreatedDate;
     
     // En modo liquidación, solo mostrar gastos con expenseStatus='draft'
-    if (liquidationMode && expense.expenseStatus !== 'draft') {
+    if (liquidationMode && !selectedSociedad) {
+      return false;
+    }
+    if (liquidationMode && (expense.expenseStatus !== 'draft' || expense.satStatus !== 'VALIDADO_SAT')) {
+      return false;
+    }
+    if (liquidationMode && selectedSociedad && expense.sociedad !== selectedSociedad) {
       return false;
     }
     
@@ -244,7 +263,14 @@ export default function ExpensesScreen() {
     setFilterStatus(value);
   };
 
-  const handleToggleLiquidationMode = () => {
+  const handleToggleLiquidationMode = async () => {
+    if (!liquidationMode) {
+      const user = await AuthService.getLastLoggedInUser();
+      if (user?.sociedad && !selectedSociedad) {
+        setSelectedSociedad(user.sociedad);
+      }
+    }
+
     setLiquidationMode(!liquidationMode);
     setSelectedExpenseIds([]); // Limpiar selección al cambiar de modo
   };
@@ -272,11 +298,17 @@ export default function ExpensesScreen() {
         return;
       }
 
+      if (!selectedSociedad) {
+        Alert.alert('Error', 'Debe seleccionar la sociedad de la liquidación');
+        return;
+      }
+
       console.log('🚀 Creando liquidación con', selectedExpenseIds.length, 'gastos');
 
       const liquidation = await createLiquidation({
         userId: user.email,
         employeeName: `${user.firstName} ${user.lastName}`.trim() || user.email,
+        sociedad: selectedSociedad,
         expenseIds: selectedExpenseIds
       });
 
@@ -390,6 +422,21 @@ export default function ExpensesScreen() {
             <Text style={styles.liquidationInfoText}>
               {selectedExpenseIds.length} gastos seleccionados
             </Text>
+          </View>
+          <View style={styles.liquidationSociedadPicker}>
+            <Picker
+              selectedValue={selectedSociedad}
+              onValueChange={(value) => {
+                setSelectedSociedad(value);
+                setSelectedExpenseIds([]);
+              }}
+              style={styles.liquidationPicker}
+            >
+              <Picker.Item label="Seleccionar sociedad" value="" />
+              {SOCIEDADES.map((sociedad) => (
+                <Picker.Item key={sociedad.code} label={sociedad.label} value={sociedad.code} />
+              ))}
+            </Picker>
           </View>
           {selectedExpenseIds.length > 0 && (
             <TouchableOpacity 
@@ -545,6 +592,18 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 14,
   },
+  liquidationSociedadPicker: {
+    minWidth: 160,
+    backgroundColor: 'white',
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+  },
+  liquidationPicker: {
+    height: 44,
+    color: '#1e3a8a',
+  },
   listContent: { padding: 15 },
   expenseItem: {
     backgroundColor: 'white',
@@ -616,6 +675,17 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#059669',
+  },
+  satBadge: {
+    backgroundColor: '#ede9fe',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+  },
+  satBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#7c3aed',
   },
   divider: {
     height: 1,

@@ -3,9 +3,13 @@
  */
 export const getToken = async (): Promise<string | null> => {
   try {
+    const jwtToken = await getJWTToken();
+    if (jwtToken) return jwtToken;
+
     // Intentar obtener de SecureStore primero
     const token = await SecureStore.getItemAsync('authToken');
     if (token) return token;
+
     // Fallback a AsyncStorage si no existe en SecureStore
     const asyncToken = await AsyncStorage.getItem('@EasyGastos_Token');
     return asyncToken;

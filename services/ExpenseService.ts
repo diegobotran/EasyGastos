@@ -11,6 +11,75 @@ type CategorySnapshotUpdate = {
   ordenco?: string;
 };
 
+export type DraftExpenseCategoryLink = {
+  id: string;
+  description: string;
+  amount: number;
+};
+
+type SatFingerprintExpense = Pick<
+  Expense,
+  'serie' | 'noinvoice' | 'vat_number' | 'supplier' | 'date' | 'amount' | 'uuid'
+>;
+
+const normalizeSatValue = (value: unknown): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  if (typeof value === 'number') {
+    return value.toFixed(2);
+  }
+
+  return String(value).trim().toUpperCase();
+};
+
+export const buildSatValidationFingerprint = (expense: SatFingerprintExpense): string => {
+  return [
+    normalizeSatValue(expense.serie),
+    normalizeSatValue(expense.noinvoice),
+    normalizeSatValue(expense.vat_number),
+    normalizeSatValue(expense.supplier),
+    normalizeSatValue(expense.date),
+    normalizeSatValue(expense.amount),
+    normalizeSatValue(expense.uuid),
+  ].join('|');
+};
+
+const normalizeSatValidationState = (expense: Expense): Expense => {
+  const fingerprint = buildSatValidationFingerprint(expense);
+  const hasMetadata = Boolean(
+    expense.satValidatedAt &&
+    expense.satValidationSource === 'SAT_INTERNO' &&
+    expense.satValidationFingerprint
+  );
+
+  if (expense.satStatus === 'VALIDADO_SAT' && hasMetadata && expense.satValidationFingerprint === fingerprint) {
+    return {
+      ...expense,
+      satValidationFingerprint: fingerprint,
+    };
+  }
+
+  return {
+    ...expense,
+    satStatus: 'NO_VALIDADO_SAT',
+    satValidatedAt: undefined,
+    satValidationSource: undefined,
+    satValidationFingerprint: undefined,
+  };
+};
+
+const hasAccountingSnapshot = (expense: Pick<Expense, 'category' | 'sociedad' | 'centro' | 'cuenta' | 'ordenco'>): boolean => {
+  return Boolean(
+    expense.category?.trim() &&
+    expense.sociedad?.trim() &&
+    expense.centro?.trim() &&
+    expense.cuenta?.trim() &&
+    expense.ordenco?.trim()
+  );
+};
+
 // Base de datos para gastos
 let db: SQLite.SQLiteDatabase | null = null;
 
@@ -59,6 +128,9 @@ export const initDB = async (): Promise<void> => {
           status TEXT NOT NULL,
           expenseStatus TEXT NOT NULL DEFAULT 'draft',
           satStatus TEXT DEFAULT 'NO_VALIDADO_SAT',
+          satValidatedAt TEXT,
+          satValidationSource TEXT,
+          satValidationFingerprint TEXT,
           supplier TEXT,
           vat_number TEXT,
           department TEXT,
@@ -142,6 +214,27 @@ export const initDB = async (): Promise<void> => {
         console.log("✅ Columna satStatus agregada");
       } catch (e) {
         console.log("ℹ️ Columna satStatus ya existe o no se pudo agregar");
+      }
+
+      try {
+        await db.execAsync(`ALTER TABLE expenses ADD COLUMN satValidatedAt TEXT;`);
+        console.log("✅ Columna satValidatedAt agregada");
+      } catch (e) {
+        console.log("ℹ️ Columna satValidatedAt ya existe o no se pudo agregar");
+      }
+
+      try {
+        await db.execAsync(`ALTER TABLE expenses ADD COLUMN satValidationSource TEXT;`);
+        console.log("✅ Columna satValidationSource agregada");
+      } catch (e) {
+        console.log("ℹ️ Columna satValidationSource ya existe o no se pudo agregar");
+      }
+
+      try {
+        await db.execAsync(`ALTER TABLE expenses ADD COLUMN satValidationFingerprint TEXT;`);
+        console.log("✅ Columna satValidationFingerprint agregada");
+      } catch (e) {
+        console.log("ℹ️ Columna satValidationFingerprint ya existe o no se pudo agregar");
       }
       
       console.log("✅ ExpenseService: Tabla 'expenses' verificada/creada con éxito.");
@@ -258,13 +351,19 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
         await initDB();
     }
     
+    if (!hasAccountingSnapshot(expense)) {
+      throw new Error('El gasto debe guardar categoría, sociedad, centro, cuenta y orden CO antes de registrarse.');
+    }
+
+    const normalizedExpense = normalizeSatValidationState(expense);
+
     // VALIDACIÓN DE DUPLICADOS
     const duplicateCheck = await checkDuplicateExpense(
       userEmail,
-      expense.serie || '',
-      expense.noinvoice || '',
-      expense.date,
-      expense.amount
+      normalizedExpense.serie || '',
+      normalizedExpense.noinvoice || '',
+      normalizedExpense.date,
+      normalizedExpense.amount
     );
     
     if (duplicateCheck.isDuplicate) {
@@ -283,7 +382,7 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
         const key = `${STORAGE_KEY_PREFIX}${userEmail}`;
         const existingExpenses = await AsyncStorage.getItem(key);
         const expenses = existingExpenses ? JSON.parse(existingExpenses) : [];
-        expenses.push(expense);
+        expenses.push(normalizedExpense);
         await AsyncStorage.setItem(key, JSON.stringify(expenses));
     } else {
         if (!db) throw new Error("La base de datos no está inicializada.");
@@ -291,35 +390,42 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
         await db.runAsync(
             `INSERT INTO expenses 
              (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, 
-               sociedad, department, notes, noinvoice, serie, uuid, centro, cuenta, ordenco, managerEmail, 
-               createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?)`,
+                sociedad, satStatus, satValidatedAt, satValidationSource, satValidationFingerprint, department, notes, noinvoice, serie, uuid, centro, cuenta, ordenco, managerEmail, 
+                createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-                expense.id, 
+                normalizedExpense.id, 
                 userEmail, 
-                expense.description, 
-                expense.amount, 
-                expense.date, 
-                expense.category, 
-                expense.status,
-                expense.expenseStatus || 'draft',
-                expense.supplier || null, 
-                expense.vat_number || null, 
-                expense.sociedad || null,
-                expense.department || null, 
-                expense.notes || null, 
-                expense.noinvoice || null, 
-                expense.serie || null, 
-                expense.uuid || null,
-                expense.centro || null, 
-                expense.cuenta || null, 
-                expense.ordenco || null,
-                expense.managerEmail || null,
-                expense.createdAt || Date.now(),
-                expense.updatedAt || Date.now(),
-                expense.imageuri || null,
-                expense.totiva || null,
-                expense.currency || null
+                normalizedExpense.description, 
+                normalizedExpense.amount, 
+                normalizedExpense.date, 
+                normalizedExpense.category, 
+                normalizedExpense.status,
+                normalizedExpense.expenseStatus || 'draft',
+                normalizedExpense.supplier || null, 
+                normalizedExpense.vat_number || null, 
+                normalizedExpense.sociedad || null,
+                normalizedExpense.satStatus || 'NO_VALIDADO_SAT',
+                normalizedExpense.satValidatedAt || null,
+                normalizedExpense.satValidationSource || null,
+                normalizedExpense.satValidationFingerprint || null,
+                normalizedExpense.department || null, 
+                normalizedExpense.notes || null, 
+                normalizedExpense.noinvoice || null, 
+                normalizedExpense.serie || null, 
+                normalizedExpense.uuid || null,
+                normalizedExpense.centro || null, 
+                normalizedExpense.cuenta || null, 
+                normalizedExpense.ordenco || null,
+                normalizedExpense.managerEmail || null,
+                normalizedExpense.createdAt || Date.now(),
+                normalizedExpense.updatedAt || Date.now(),
+                1,
+                null,
+                null,
+                normalizedExpense.imageuri || null,
+                normalizedExpense.totiva || null,
+                normalizedExpense.currency || null
             ]
         );
         
@@ -370,11 +476,17 @@ export const getExpenseById = async (id: string, userEmail: string): Promise<Exp
  * Actualiza un gasto existente.
  */
 export const updateExpense = async (expense: Expense, userEmail: string): Promise<void> => {
+    if (!hasAccountingSnapshot(expense)) {
+        throw new Error('El gasto debe conservar categoría, sociedad, centro, cuenta y orden CO válidos.');
+    }
+
+    const normalizedExpense = normalizeSatValidationState(expense);
+
     if (Platform.OS === 'web') {
         let expenses = await getExpenses(userEmail);
         const index = expenses.findIndex(exp => exp.id === expense.id);
         if (index !== -1) {
-            expenses[index] = expense;
+            expenses[index] = normalizedExpense;
             const key = `${STORAGE_KEY_PREFIX}${userEmail}`;
             await AsyncStorage.setItem(key, JSON.stringify(expenses));
         }
@@ -382,27 +494,30 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         if (!db) throw new Error("La base de datos no está inicializada.");
         
         await db.runAsync(
-            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ? WHERE id = ? AND userEmail = ?',
+            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ? WHERE id = ? AND userEmail = ?',
             [
-                expense.description, 
-                expense.amount, 
-                expense.date, 
-                expense.category, 
-                expense.sociedad || null,
-                expense.status, 
-                expense.expenseStatus || 'draft',
-                expense.satStatus || 'NO_VALIDADO_SAT',
-                expense.supplier, 
-                expense.vat_number, 
-                expense.department, 
-                expense.notes || null, 
-                expense.noinvoice, 
-                expense.serie, 
-                expense.uuid || null,
-                expense.centro, 
-                expense.cuenta, 
-                expense.ordenco, 
-                expense.id, 
+                normalizedExpense.description, 
+                normalizedExpense.amount, 
+                normalizedExpense.date, 
+                normalizedExpense.category, 
+                normalizedExpense.sociedad || null,
+                normalizedExpense.status, 
+                normalizedExpense.expenseStatus || 'draft',
+                normalizedExpense.satStatus || 'NO_VALIDADO_SAT',
+                normalizedExpense.satValidatedAt || null,
+                normalizedExpense.satValidationSource || null,
+                normalizedExpense.satValidationFingerprint || null,
+                normalizedExpense.supplier, 
+                normalizedExpense.vat_number, 
+                normalizedExpense.department, 
+                normalizedExpense.notes || null, 
+                normalizedExpense.noinvoice, 
+                normalizedExpense.serie, 
+                normalizedExpense.uuid || null,
+                normalizedExpense.centro, 
+                normalizedExpense.cuenta, 
+                normalizedExpense.ordenco, 
+                normalizedExpense.id, 
                 userEmail
             ]
         );
@@ -439,6 +554,44 @@ export const countDraftExpensesByCategoryName = async (
   );
 
   return result?.total ?? 0;
+};
+
+export const getDraftExpensesByCategoryName = async (
+  userEmail: string,
+  categoryName: string
+): Promise<DraftExpenseCategoryLink[]> => {
+  if (!categoryName.trim()) {
+    return [];
+  }
+
+  if (Platform.OS === 'web') {
+    const expenses = await getExpenses(userEmail);
+    return expenses
+      .filter(exp =>
+        exp.category === categoryName &&
+        exp.expenseStatus === 'draft' &&
+        !exp.liquidationId
+      )
+      .map(exp => ({
+        id: exp.id,
+        description: exp.description,
+        amount: exp.amount,
+      }));
+  }
+
+  if (!db) throw new Error("La base de datos no está inicializada.");
+
+  const result = await db.getAllAsync<DraftExpenseCategoryLink>(
+    `SELECT id, description, amount
+     FROM expenses
+     WHERE userEmail = ?
+       AND category = ?
+       AND expenseStatus = 'draft'
+       AND (liquidationId IS NULL OR liquidationId = '')`,
+    [userEmail, categoryName]
+  );
+
+  return result;
 };
 
 export const syncDraftExpensesWithCategoryUpdate = async (
@@ -619,6 +772,9 @@ export const getExpensesNeedingSync = async (userEmail: string): Promise<Expense
       status: row.status as any,
       expenseStatus: row.expenseStatus || 'draft',
       satStatus: row.satStatus || 'NO_VALIDADO_SAT',
+      satValidatedAt: row.satValidatedAt || undefined,
+      satValidationSource: row.satValidationSource || undefined,
+      satValidationFingerprint: row.satValidationFingerprint || undefined,
       supplier: row.supplier,
       vat_number: row.vat_number,
       department: row.department,
@@ -716,19 +872,21 @@ export const updateExpenseStatus = async (expenseId: string, newStatus: string):
  * Inserta o actualiza un gasto desde el servidor
  */
 export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<void> => {
+  const normalizedExpense = normalizeSatValidationState(serverExpense);
+
   if (Platform.OS === 'web') {
-    const key = `${STORAGE_KEY_PREFIX}${serverExpense.email}`;
-    const expenses = await getExpenses(serverExpense.email);
-    const existingIndex = expenses.findIndex(exp => exp.id === serverExpense.id);
+    const key = `${STORAGE_KEY_PREFIX}${normalizedExpense.email}`;
+    const expenses = await getExpenses(normalizedExpense.email);
+    const existingIndex = expenses.findIndex(exp => exp.id === normalizedExpense.id);
     
     // Marcar como no necesita sincronización ya que viene del servidor
-    serverExpense.needsSync = false;
-    serverExpense.lastSync = Date.now();
+    normalizedExpense.needsSync = false;
+    normalizedExpense.lastSync = Date.now();
     
     if (existingIndex !== -1) {
-      expenses[existingIndex] = serverExpense;
+      expenses[existingIndex] = normalizedExpense;
     } else {
-      expenses.push(serverExpense);
+      expenses.push(normalizedExpense);
     }
     
     await AsyncStorage.setItem(key, JSON.stringify(expenses));
@@ -737,42 +895,46 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
     
     await db.runAsync(
       `INSERT OR REPLACE INTO expenses 
-       (id, userEmail, description, amount, date, category, sociedad, status, expenseStatus, satStatus, supplier, vat_number, 
+       (id, userEmail, description, amount, date, category, sociedad, status, expenseStatus, satStatus, satValidatedAt, satValidationSource, satValidationFingerprint, supplier, vat_number, 
         department, notes, noinvoice, serie, centro, cuenta, ordenco, managerEmail, liquidationId,
         voidedAt, voidedReason, createdAt, updatedAt,
-        needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency, synced) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1)`,
+        needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency, synced, uuid) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1, ?)`,
       [
-        serverExpense.id,
-        serverExpense.email,
-        serverExpense.description,
-        serverExpense.amount,
-        serverExpense.date,
-        serverExpense.category,
-        serverExpense.sociedad || null,
-        serverExpense.status,
-        serverExpense.expenseStatus || 'draft',
-        serverExpense.satStatus || 'NO_VALIDADO_SAT',
-        serverExpense.supplier || null,
-        serverExpense.vat_number || null,
-        serverExpense.department || null,
-        serverExpense.notes || null,
-        serverExpense.noinvoice || null,
-        serverExpense.serie || null,
-        serverExpense.centro || null,
-        serverExpense.cuenta || null,
-        serverExpense.ordenco || null,
-        serverExpense.managerEmail || null,
-        serverExpense.liquidationId || null,
-        serverExpense.voidedAt || null,
-        serverExpense.voidedReason || null,
-        serverExpense.createdAt || Date.now(),
-        serverExpense.updatedAt || Date.now(),
+        normalizedExpense.id,
+        normalizedExpense.email,
+        normalizedExpense.description,
+        normalizedExpense.amount,
+        normalizedExpense.date,
+        normalizedExpense.category,
+        normalizedExpense.sociedad || null,
+        normalizedExpense.status,
+        normalizedExpense.expenseStatus || 'draft',
+        normalizedExpense.satStatus || 'NO_VALIDADO_SAT',
+        normalizedExpense.satValidatedAt || null,
+        normalizedExpense.satValidationSource || null,
+        normalizedExpense.satValidationFingerprint || null,
+        normalizedExpense.supplier || null,
+        normalizedExpense.vat_number || null,
+        normalizedExpense.department || null,
+        normalizedExpense.notes || null,
+        normalizedExpense.noinvoice || null,
+        normalizedExpense.serie || null,
+        normalizedExpense.centro || null,
+        normalizedExpense.cuenta || null,
+        normalizedExpense.ordenco || null,
+        normalizedExpense.managerEmail || null,
+        normalizedExpense.liquidationId || null,
+        normalizedExpense.voidedAt || null,
+        normalizedExpense.voidedReason || null,
+        normalizedExpense.createdAt || Date.now(),
+        normalizedExpense.updatedAt || Date.now(),
         Date.now(),
-        serverExpense.serverUpdatedAt || Date.now(),
-        serverExpense.imageuri || null,
-        serverExpense.totiva || null,
-        serverExpense.currency || null
+        normalizedExpense.serverUpdatedAt || Date.now(),
+        normalizedExpense.imageuri || null,
+        normalizedExpense.totiva || null,
+        normalizedExpense.currency || null,
+        normalizedExpense.uuid || null
       ]
     );
   }
@@ -818,6 +980,9 @@ export const getExpensesForApproval = async (managerEmail: string): Promise<Expe
       status: row.status as any,
       expenseStatus: row.expenseStatus || 'draft',
       satStatus: row.satStatus || 'NO_VALIDADO_SAT',
+      satValidatedAt: row.satValidatedAt || undefined,
+      satValidationSource: row.satValidationSource || undefined,
+      satValidationFingerprint: row.satValidationFingerprint || undefined,
       supplier: row.supplier,
       vat_number: row.vat_number,
       department: row.department,
@@ -860,6 +1025,13 @@ export const validateExpenseForLiquidation = async (
     // Verificar estado del gasto
     if (expense.expenseStatus !== 'draft' && expense.expenseStatus !== 'in_liquidation') {
       return { valid: false, error: 'El gasto ya fue aprobado y no puede incluirse en otra liquidación' };
+    }
+
+    if (expense.satStatus !== 'VALIDADO_SAT') {
+      return {
+        valid: false,
+        error: 'Este gasto debe validarse por SAT antes de incluirse en una liquidación.'
+      };
     }
     
     // Si ya tiene liquidationId y no es la liquidación objetivo

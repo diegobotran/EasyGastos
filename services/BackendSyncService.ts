@@ -2031,6 +2031,7 @@ export class BackendSyncService {
             const dto = {
               userId: liquidation.userId || liquidation.employeeEmail,
               employeeName: liquidation.employeeName,
+              sociedad: liquidation.sociedad || '',
               expenseIds: liquidation.expenseIds || [],
             };
 

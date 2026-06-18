@@ -10,7 +10,7 @@ import * as SecureStore from 'expo-secure-store';
 import { CENTRO_OPTIONS, CUENTA_OPTIONS, ORDENCO_OPTIONS, SOCIEDAD_OPTIONS } from '../../constants/AccountingCatalogs';
 
 export default function CategoryScreen() {
-  const { categories, isLoading, addCategory, removeCategory, updateCategory, countDraftExpensesUsingCategory } = useCategoryViewModel();
+  const { categories, isLoading, addCategory, removeCategory, updateCategory, countDraftExpensesUsingCategory, getDraftExpensesUsingCategory } = useCategoryViewModel();
   const [name, setName] = useState('');
   const [defaultSociedad, setDefaultSociedad] = useState('');
   const [sociedad, setSociedad] = useState('');
@@ -152,30 +152,43 @@ export default function CategoryScreen() {
 
 
 
-  const handleRemoveCategory = (id: string) => {
-            const message = '¿Estás seguro de que deseas eliminar esta categoría? Esta acción no se puede deshacer.';
-            const title = 'Confirmar Eliminación';
+  const handleRemoveCategory = async (category: Category) => {
+    const linkedDraftExpenses = await getDraftExpensesUsingCategory(category.name);
 
-            // --- THIS IS THE FIX ---
-            // Check if the platform is 'web'
-            if (Platform.OS === 'web') {
-                // Use the browser's built-in confirm dialog
-                if (window.confirm(message)) {
-                removeCategory(id);
-                }
-            } else {
-                // Use the native Alert.alert for iOS and Android
-                Alert.alert(
-                title,
-                message,
-                [
-                    { text: 'Cancelar', style: 'cancel' },
-                    { text: 'Eliminar', style: 'destructive', onPress: () => removeCategory(id) },
-                ],
-                { cancelable: true }
-                );
-            }
-    };
+    if (linkedDraftExpenses.length > 0) {
+      const linkedExpensesSummary = linkedDraftExpenses
+        .slice(0, 5)
+        .map(expense => `- ${expense.description} (#${expense.id.slice(-6)})`)
+        .join('\n');
+      const remainingCount = linkedDraftExpenses.length - Math.min(linkedDraftExpenses.length, 5);
+      const remainingText = remainingCount > 0 ? `\n- y ${remainingCount} gasto(s) más` : '';
+
+      Alert.alert(
+        'Categoría ligada a borradores',
+        `No puedes eliminar "${category.name}" porque todavía está ligada a ${linkedDraftExpenses.length} gasto(s) en borrador:\n\n${linkedExpensesSummary}${remainingText}\n\nDesvincúlalos o asígnales otra categoría antes de eliminarla.`
+      );
+      return;
+    }
+
+    const message = '¿Estás seguro de que deseas eliminar esta categoría? Esta acción no se puede deshacer.';
+    const title = 'Confirmar Eliminación';
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(message)) {
+        await removeCategory(category.id);
+      }
+    } else {
+      Alert.alert(
+        title,
+        message,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Eliminar', style: 'destructive', onPress: () => { void removeCategory(category.id); } },
+        ],
+        { cancelable: true }
+      );
+    }
+  };
   
 
   const handleEditCategory = (category: Category) => {
@@ -327,7 +340,7 @@ export default function CategoryScreen() {
             <TouchableOpacity onPress={() => handleEditCategory(item)} style={styles.editButton}>
               <Ionicons name="pencil-outline" size={24} color="#2563eb" />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => handleRemoveCategory(item.id)} style={styles.deleteButton}>
+            <TouchableOpacity onPress={() => { void handleRemoveCategory(item); }} style={styles.deleteButton}>
               <Ionicons name="trash-outline" size={24} color="#dc2626" />
             </TouchableOpacity>
           </View>

@@ -7,6 +7,58 @@ const router = express.Router();
 
 const { User, Category, Expense, SyncLog } = models;
 
+const hasAccountingSnapshot = (expenseData = {}) => {
+  return Boolean(
+    String(expenseData.category || '').trim() &&
+    String(expenseData.sociedad || '').trim() &&
+    String(expenseData.centro || '').trim() &&
+    String(expenseData.cuenta || '').trim() &&
+    String(expenseData.ordenco || '').trim()
+  );
+};
+
+const normalizeSatValue = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number') return value.toFixed(2);
+  return String(value).trim().toUpperCase();
+};
+
+const buildSatValidationFingerprint = (expenseData = {}) => {
+  return [
+    normalizeSatValue(expenseData.serie),
+    normalizeSatValue(expenseData.noinvoice),
+    normalizeSatValue(expenseData.vat_number),
+    normalizeSatValue(expenseData.supplier),
+    normalizeSatValue(expenseData.date),
+    normalizeSatValue(expenseData.amount),
+    normalizeSatValue(expenseData.uuid),
+  ].join('|');
+};
+
+const normalizeSatValidationState = (expenseData = {}) => {
+  const fingerprint = buildSatValidationFingerprint(expenseData);
+  const hasMetadata = Boolean(
+    expenseData.satValidatedAt &&
+    expenseData.satValidationSource === 'SAT_INTERNO' &&
+    expenseData.satValidationFingerprint
+  );
+
+  if (expenseData.satStatus === 'VALIDADO_SAT' && hasMetadata && expenseData.satValidationFingerprint === fingerprint) {
+    return {
+      ...expenseData,
+      satValidationFingerprint: fingerprint,
+    };
+  }
+
+  return {
+    ...expenseData,
+    satStatus: 'NO_VALIDADO_SAT',
+    satValidatedAt: null,
+    satValidationSource: null,
+    satValidationFingerprint: null,
+  };
+};
+
 // Endpoint para sincronización completa de un usuario (requiere autenticación)
 router.post('/full-sync', authenticateToken, [
   body('userEmail').isEmail().normalizeEmail(),
@@ -84,6 +136,9 @@ router.post('/full-sync', authenticateToken, [
       status: expense.status,
       expenseStatus: expense.expenseStatus || 'draft',
       satStatus: expense.satStatus || 'NO_VALIDADO_SAT',
+      satValidatedAt: expense.satValidatedAt || null,
+      satValidationSource: expense.satValidationSource || null,
+      satValidationFingerprint: expense.satValidationFingerprint || null,
       liquidationId: expense.liquidationId || '',
       supplier: expense.supplier,
       vat_number: expense.vat_number,
@@ -238,6 +293,10 @@ router.post('/upload', authenticateToken, [
     // Procesar gastos
     for (const expenseData of expenses) {
       try {
+        if (!hasAccountingSnapshot(expenseData)) {
+          throw new Error('El gasto no incluye snapshot contable completo (categoría, sociedad, centro, cuenta y orden CO).');
+        }
+
         // Si no tiene managerEmail, buscarlo en ManagerEmployeeLink o en el usuario
         if (!expenseData.managerEmail) {
           const managerLink = await ManagerEmployeeLink.getDirectManager(userEmail);
@@ -249,10 +308,12 @@ router.post('/upload', authenticateToken, [
           }
         }
 
+        const normalizedExpenseData = normalizeSatValidationState(expenseData);
+
         await Expense.findOneAndUpdate(
           { id: expenseData.id },
           {
-            ...expenseData,
+            ...normalizedExpenseData,
             userEmail
           },
           { upsert: true, new: true }

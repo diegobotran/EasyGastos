@@ -100,6 +100,15 @@ export const useCategoryViewModel = () => {
     }
   };
 
+  const getDraftExpensesUsingCategory = async (categoryName: string) => {
+    const user = await import('../services/AuthService').then(auth => auth.getLastLoggedInUser());
+    if (!user) {
+      return [];
+    }
+
+    return ExpenseService.getDraftExpensesByCategoryName(user.email, categoryName);
+  };
+
   
   const updateCategory = async (updatedCategory: Category) => {
     try {
@@ -127,5 +136,5 @@ export const useCategoryViewModel = () => {
     return ExpenseService.countDraftExpensesByCategoryName(user.email, categoryName);
   };
 
-  return { categories, isLoading, addCategory, updateCategory, removeCategory, countDraftExpensesUsingCategory };
+  return { categories, isLoading, addCategory, updateCategory, removeCategory, countDraftExpensesUsingCategory, getDraftExpensesUsingCategory };
 };

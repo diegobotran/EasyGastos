@@ -4,7 +4,7 @@ const { models } = require('../database/init');
 const { authenticateToken, canAccessUserData } = require('../middleware/auth');
 const router = express.Router();
 
-const { Category, SyncLog } = models;
+const { Category, Expense, SyncLog } = models;
 
 // Middleware para validar datos de categoría
 const validateCategory = [
@@ -211,6 +211,28 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     const category = await Category.findOne({ id, userEmail, isActive: true });
     if (!category) {
       return res.status(404).json({ error: 'Categoría no encontrada' });
+    }
+
+    const linkedDraftExpenses = await Expense.find({
+      userEmail,
+      category: category.name,
+      expenseStatus: 'draft',
+      $or: [
+        { liquidationId: null },
+        { liquidationId: '' },
+        { liquidationId: { $exists: false } }
+      ]
+    }).select('id description amount');
+
+    if (linkedDraftExpenses.length > 0) {
+      return res.status(409).json({
+        error: 'No se puede eliminar la categoría porque tiene gastos en borrador ligados.',
+        linkedDraftExpenses: linkedDraftExpenses.map(expense => ({
+          id: expense.id,
+          description: expense.description,
+          amount: expense.amount
+        }))
+      });
     }
 
     // Soft delete

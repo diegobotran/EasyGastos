@@ -77,7 +77,7 @@ export default function LiquidationDetailScreen() {
       
       // Si la liquidación puede editarse, cargar gastos disponibles
       if (canEditLiquidation(liq.status)) {
-        await loadAvailableExpenses(user?.email || '', liq.expenseIds);
+        await loadAvailableExpenses(user?.email || '', liq.expenseIds, liq.sociedad || '');
       }
     } catch (error) {
       console.error('❌ Error cargando liquidación:', error);
@@ -87,14 +87,17 @@ export default function LiquidationDetailScreen() {
     }
   };
 
-  const loadAvailableExpenses = async (userEmail: string, excludeIds: string[]) => {
+  const loadAvailableExpenses = async (userEmail: string, excludeIds: string[], liquidationSociedad: string) => {
     try {
       const { getExpenses } = require('../services/ExpenseService');
       const allExpenses = await getExpenses(userEmail);
       
       // Filtrar solo gastos disponibles (draft) y que no estén ya en la liquidación
       const available = allExpenses.filter((exp: Expense) => 
-        exp.expenseStatus === 'draft' && !excludeIds.includes(exp.id)
+        exp.expenseStatus === 'draft' &&
+        exp.satStatus === 'VALIDADO_SAT' &&
+        exp.sociedad === liquidationSociedad &&
+        !excludeIds.includes(exp.id)
       );
       
       setAvailableExpenses(available);
@@ -439,6 +442,14 @@ Gastos: ${expenses.length}`;
         return;
       }
 
+      if (response.status === 404) {
+        throw new Error(
+          parsedPayload?.error === 'Liquidación no encontrada'
+            ? 'La liquidación no existe en el backend para construir el preview SAP'
+            : `El backend no expone el endpoint de preview SAP (${requestUrl})`
+        );
+      }
+
       throw new Error(parsedPayload?.error || 'No se pudo obtener el preview SAP');
     } catch (error) {
       console.error('❌ Error obteniendo preview SAP:', error);
@@ -593,6 +604,12 @@ Gastos: ${expenses.length}`;
             <Ionicons name="person-outline" size={20} color="#64748b" />
             <Text style={styles.summaryLabel}>Empleado:</Text>
             <Text style={styles.summaryValue}>{liquidation.employeeName}</Text>
+          </View>
+
+          <View style={styles.summaryRow}>
+            <Ionicons name="business-outline" size={20} color="#64748b" />
+            <Text style={styles.summaryLabel}>Sociedad:</Text>
+            <Text style={styles.summaryValue}>{liquidation.sociedad || 'N/A'}</Text>
           </View>
 
           <View style={styles.summaryRow}>

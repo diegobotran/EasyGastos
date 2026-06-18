@@ -1,52 +1,53 @@
-/**
- * Servicio para buscar facturas en la base de datos SAT (Verificador Interno)
- * 
- * Este servicio consulta la colección sat_facturas en MongoDB para buscar
- * facturas por NIT del emisor y Número del DTE, permitiendo autocompletar
- * datos de gastos con información verificada del SAT.
- */
+import { getAPI_BASE_URL } from '../config/backend';
+import * as AuthService from './AuthService';
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+export type SATValidationErrorCode =
+  | 'SAT_BACKEND_CONFIG_MISSING'
+  | 'SAT_SESSION_MISSING'
+  | 'SAT_REAUTH_FAILED'
+  | 'SAT_NETWORK_ERROR'
+  | 'SAT_UNAUTHORIZED'
+  | 'SAT_FORBIDDEN'
+  | 'SAT_BACKEND_ERROR'
+  | 'SAT_INVALID_RESPONSE';
 
-/**
- * Interface para los datos de una factura SAT
- */
+export class SATValidationError extends Error {
+  code: SATValidationErrorCode;
+  technicalDetails?: string;
+  status?: number;
+
+  constructor(code: SATValidationErrorCode, message: string, options?: { technicalDetails?: string; status?: number }) {
+    super(message);
+    this.name = 'SATValidationError';
+    this.code = code;
+    this.technicalDetails = options?.technicalDetails;
+    this.status = options?.status;
+  }
+}
+
 export interface SATFactura {
-  // Identificación
   fechaEmision: string;
   numeroAutorizacion: string;
   tipoDTE: string;
   serie: string;
   numeroDTE: string;
-  
-  // Emisor (proveedor)
   nitEmisor: string;
   nombreEmisor: string;
   clasificacionEmisor?: string;
   codigoEstablecimiento?: string;
   nombreEstablecimiento?: string;
-  
-  // Receptor (empresa)
   idReceptor: string;
   nombreReceptor: string;
-  
-  // Certificador
   nitCertificador?: string;
   nombreCertificador?: string;
-  
-  // Estado
   estado?: string;
   marcaAnulado?: string;
   fechaAnulacion?: string;
   exportacion?: string;
   ubicacionTemporal?: string;
-  
-  // Montos
   moneda?: string;
   granTotal: number;
   iva: number;
-  
-  // Impuestos
   impuestoPetroleo?: number;
   impuestoTurismoHospedaje?: number;
   impuestoTurismoPasajes?: number;
@@ -60,88 +61,291 @@ export interface SATFactura {
   impuestoTarifaPortuaria?: number;
 }
 
-/**
- * Interface para la respuesta del servidor
- */
 interface SATFacturaResponse {
   encontrada: boolean;
   factura?: SATFactura;
   mensaje?: string;
+  disclaimer?: string;
 }
 
-/**
- * Busca una factura en la base de datos SAT por NIT del emisor y Número del DTE
- * 
- * @param nitEmisor - NIT del emisor/proveedor (sin guiones)
- * @param numeroDTE - Número del DTE de la factura
- * @returns Promise con la factura encontrada o null si no existe
- */
+export interface SATInternalValidationResult {
+  encontrada: boolean;
+  validada?: boolean;
+  factura?: SATFactura;
+  campos?: {
+    serie?: string;
+    noinvoice?: string;
+    vat_number?: string;
+    supplier?: string;
+    date?: string;
+    amount?: number;
+    uuid?: string;
+    currency?: string;
+    totiva?: number;
+  };
+  complementados?: Array<{ field: string; label: string; newValue: string | number }>;
+  corregidos?: Array<{ field: string; label: string; previousValue: string | number; newValue: string | number }>;
+  mensaje?: string;
+  disclaimer?: string;
+}
+
+const toTechnicalMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'Sin detalle técnico adicional';
+  }
+};
+
+const normalizeSATError = (error: unknown, fallbackMessage: string): SATValidationError => {
+  if (error instanceof SATValidationError) {
+    return error;
+  }
+
+  return new SATValidationError('SAT_NETWORK_ERROR', fallbackMessage, {
+    technicalDetails: toTechnicalMessage(error),
+  });
+};
+
+const parseErrorResponseMessage = async (response: Response): Promise<string> => {
+  const rawText = await response.text();
+  if (!rawText) return '';
+
+  try {
+    const parsed = JSON.parse(rawText);
+    if (parsed?.mensaje) return String(parsed.mensaje);
+    if (parsed?.error) return String(parsed.error);
+  } catch {
+    return rawText;
+  }
+
+  return rawText;
+};
+
+const formatSATDateForField = (value?: string): string | undefined => {
+  if (!value) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) return value;
+
+  const year = parsedDate.getFullYear();
+  const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
+  const day = String(parsedDate.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeComparableSATValue = (value: string | number | undefined): string => {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'number') return value.toFixed(2);
+  return value.trim().toUpperCase();
+};
+
+const resolveBackendAuthContext = async (): Promise<{ backendUrl: string; token: string }> => {
+  const backendUrl = await getAPI_BASE_URL();
+  if (!backendUrl) {
+    throw new SATValidationError('SAT_BACKEND_CONFIG_MISSING', 'No hay configuración de backend', {
+      technicalDetails: 'getAPI_BASE_URL() devolvió un valor vacío',
+    });
+  }
+
+  const { BackendSyncService } = await import('./BackendSyncService');
+  const isConnected = await BackendSyncService.checkConnection();
+  if (!isConnected) {
+    throw new SATValidationError('SAT_NETWORK_ERROR', 'La validación SAT requiere conexión en línea con el backend', {
+      technicalDetails: `Health check fallido para ${backendUrl}/health`,
+    });
+  }
+
+  let token = await AuthService.getToken();
+  if (token) {
+    return { backendUrl, token };
+  }
+
+  const user = await AuthService.getLastLoggedInUser();
+  const pin = await AuthService.getPIN();
+
+  if (!user?.email || !pin) {
+    throw new SATValidationError('SAT_SESSION_MISSING', 'No hay sesión activa', {
+      technicalDetails: `Usuario=${user?.email || 'N/A'}, PIN=${pin ? 'presente' : 'ausente'}`,
+    });
+  }
+
+  const loginResult = await BackendSyncService.loginAndGetToken(user.email, pin);
+  if (!loginResult.success || !loginResult.token) {
+    throw new SATValidationError('SAT_REAUTH_FAILED', loginResult.error || 'No se pudo reautenticar la sesión', {
+      technicalDetails: `Reautenticación fallida para ${user.email}`,
+    });
+  }
+
+  await AuthService.saveJWTToken(loginResult.token);
+  return { backendUrl, token: loginResult.token };
+};
+
+const executeSATPost = async <T>(path: string, body: unknown): Promise<T> => {
+  const { backendUrl, token } = await resolveBackendAuthContext();
+
+  let response: Response;
+  try {
+    response = await fetch(`${backendUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new SATValidationError('SAT_NETWORK_ERROR', 'No se pudo conectar al backend para consultar SAT', {
+      technicalDetails: `URL=${backendUrl}${path} | ${toTechnicalMessage(error)}`,
+    });
+  }
+
+  if (!response.ok) {
+    const errorMessage = await parseErrorResponseMessage(response);
+
+    if (response.status === 401) {
+      throw new SATValidationError('SAT_UNAUTHORIZED', 'La sesión no es válida para consultar SAT', {
+        status: response.status,
+        technicalDetails: errorMessage || 'El backend respondió 401 Unauthorized',
+      });
+    }
+
+    if (response.status === 403) {
+      throw new SATValidationError('SAT_FORBIDDEN', 'La sesión no tiene permisos para consultar SAT', {
+        status: response.status,
+        technicalDetails: errorMessage || 'El backend respondió 403 Forbidden',
+      });
+    }
+
+    throw new SATValidationError('SAT_BACKEND_ERROR', errorMessage || 'No se pudo consultar SAT', {
+      status: response.status,
+      technicalDetails: `HTTP ${response.status}${errorMessage ? ` | ${errorMessage}` : ''}`,
+    });
+  }
+
+  try {
+    return (await response.json()) as T;
+  } catch (error) {
+    throw new SATValidationError('SAT_INVALID_RESPONSE', 'El backend SAT devolvió una respuesta inválida', {
+      status: response.status,
+      technicalDetails: toTechnicalMessage(error),
+    });
+  }
+};
+
+const buildValidationResultFromFactura = (
+  payload: {
+    serie: string;
+    noinvoice: string;
+    nitEmisor?: string;
+    supplier?: string;
+    date?: string;
+    amount?: number;
+    uuid?: string;
+    currency?: string;
+    totiva?: number;
+  },
+  factura: SATFactura
+): SATInternalValidationResult => {
+  const campos = {
+    serie: factura.serie || payload.serie,
+    noinvoice: factura.numeroDTE || payload.noinvoice,
+    vat_number: factura.nitEmisor || payload.nitEmisor,
+    supplier: factura.nombreEmisor || payload.supplier,
+    date: formatSATDateForField(factura.fechaEmision) || payload.date,
+    amount: typeof factura.granTotal === 'number' ? factura.granTotal : payload.amount,
+    uuid: factura.numeroAutorizacion || payload.uuid,
+    currency: factura.moneda ? factura.moneda.toUpperCase() : payload.currency,
+    totiva: typeof factura.iva === 'number' ? factura.iva : payload.totiva,
+  };
+
+  const currentValues = {
+    serie: payload.serie,
+    noinvoice: payload.noinvoice,
+    vat_number: payload.nitEmisor,
+    supplier: payload.supplier,
+    date: payload.date,
+    amount: payload.amount,
+    uuid: payload.uuid,
+    currency: payload.currency,
+    totiva: payload.totiva,
+  };
+
+  const labels: Record<keyof typeof campos, string> = {
+    serie: 'Serie',
+    noinvoice: 'No. Factura',
+    vat_number: 'NIT del Emisor',
+    supplier: 'Proveedor',
+    date: 'Fecha',
+    amount: 'Monto',
+    uuid: 'UUID',
+    currency: 'Moneda',
+    totiva: 'IVA',
+  };
+
+  const complementados: NonNullable<SATInternalValidationResult['complementados']> = [];
+  const corregidos: NonNullable<SATInternalValidationResult['corregidos']> = [];
+
+  (Object.keys(campos) as Array<keyof typeof campos>).forEach((field) => {
+    const newValue = campos[field];
+    if (newValue === undefined || newValue === null || newValue === '') return;
+
+    const currentValue = currentValues[field];
+    const normalizedCurrent = normalizeComparableSATValue(currentValue);
+    const normalizedNew = normalizeComparableSATValue(newValue);
+
+    if (!normalizedCurrent) {
+      complementados.push({ field, label: labels[field], newValue });
+      return;
+    }
+
+    if (normalizedCurrent !== normalizedNew) {
+      corregidos.push({
+        field,
+        label: labels[field],
+        previousValue: currentValue as string | number,
+        newValue,
+      });
+    }
+  });
+
+  const messageParts: string[] = ['Factura validada por SAT.'];
+  if (complementados.length > 0) messageParts.push(`Se complementaron ${complementados.length} campo(s).`);
+  if (corregidos.length > 0) messageParts.push(`Se corrigieron ${corregidos.length} campo(s).`);
+  if (complementados.length === 0 && corregidos.length === 0) messageParts.push('Los datos ya coincidían con SAT.');
+
+  return {
+    encontrada: true,
+    validada: true,
+    factura,
+    campos,
+    complementados,
+    corregidos,
+    mensaje: messageParts.join(' '),
+  };
+};
+
 export const buscarFacturaSAT = async (
   nitEmisor: string,
   numeroDTE: string
 ): Promise<SATFactura | null> => {
   try {
-    console.log(`🔍 Verificador SAT: Buscando factura NIT=${nitEmisor}, DTE=${numeroDTE}`);
-
-    // Obtener URL del backend
-    const backendUrl = await AsyncStorage.getItem('backendUrl');
-    if (!backendUrl) {
-      console.error('❌ Verificador SAT: No hay URL del backend configurada');
-      return null;
-    }
-
-    // Obtener token de autenticación
-    const token = await AsyncStorage.getItem('authToken');
-    if (!token) {
-      console.error('❌ Verificador SAT: No hay token de autenticación');
-      return null;
-    }
-
-    // Limpiar NIT (remover guiones y espacios)
     const nitLimpio = nitEmisor.replace(/[-\s]/g, '');
-    
-    // Hacer request al backend
-    const response = await fetch(`${backendUrl}/api/sat/buscar-factura`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        nitEmisor: nitLimpio,
-        numeroDTE: numeroDTE
-      })
+    const data = await executeSATPost<SATFacturaResponse>('/api/sat/buscar-factura', {
+      nitEmisor: nitLimpio,
+      numeroDTE,
     });
 
-    if (!response.ok) {
-      console.error(`❌ Verificador SAT: Error HTTP ${response.status}`);
-      return null;
-    }
-
-    const data: SATFacturaResponse = await response.json();
-
-    if (data.encontrada && data.factura) {
-      console.log('✅ Verificador SAT: Factura encontrada en base de datos');
-      console.log(`   📋 Autorización: ${data.factura.numeroAutorizacion}`);
-      console.log(`   💰 Total: ${data.factura.moneda} ${data.factura.granTotal}`);
-      console.log(`   🏢 Proveedor: ${data.factura.nombreEmisor}`);
-      return data.factura;
-    } else {
-      console.log('⚠️  Verificador SAT: Factura no encontrada en base de datos');
-      return null;
-    }
-
+    return data.encontrada && data.factura ? data.factura : null;
   } catch (error) {
-    console.error('❌ Verificador SAT: Error de conexión:', error);
+    console.error('Verificador SAT: Error de conexión:', error);
     return null;
   }
 };
 
-/**
- * Formatea una fecha ISO a formato legible
- * @param isoDate - Fecha en formato ISO
- * @returns Fecha formateada DD/MM/YYYY
- */
 export const formatearFechaSAT = (isoDate: string): string => {
   try {
     const date = new Date(isoDate);
@@ -149,86 +353,72 @@ export const formatearFechaSAT = (isoDate: string): string => {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const year = date.getFullYear();
     return `${day}/${month}/${year}`;
-  } catch (error) {
+  } catch {
     return isoDate;
   }
 };
 
-/**
- * Busca una factura en la base de datos SAT por Serie y Número del DTE
- * Opcionalmente puede filtrar por NIT del Receptor (la empresa que recibe la factura)
- * 
- * @param serie - Serie de la factura (ej: "A", "B", etc.)
- * @param numeroDTE - Número del DTE de la factura
- * @param nitReceptor - (Opcional) NIT del receptor/empresa para filtrar búsqueda
- * @returns Promise con la factura encontrada o null si no existe
- */
 export const buscarFacturaPorNumero = async (
   serie: string,
   numeroDTE: string,
   nitReceptor?: string
 ): Promise<SATFactura | null> => {
   try {
-    console.log(`🔍 Verificador SAT: Buscando factura Serie=${serie}, DTE=${numeroDTE}`);
-    if (nitReceptor) {
-      console.log(`   Con filtro NIT Receptor: ${nitReceptor}`);
-    }
-
-    // Obtener URL del backend
-    const backendUrl = await AsyncStorage.getItem('backendUrl');
-    if (!backendUrl) {
-      console.error('❌ Verificador SAT: No hay URL del backend configurada');
-      return null;
-    }
-
-    // Obtener token de autenticación
-    const token = await AsyncStorage.getItem('authToken');
-    if (!token) {
-      console.error('❌ Verificador SAT: No hay token de autenticación');
-      return null;
-    }
-
-    // Construir body del request
     const body: { serie: string; numeroDTE: string; nitReceptor?: string } = {
-      serie: serie,
-      numeroDTE: numeroDTE
+      serie,
+      numeroDTE,
     };
-    
-    // Agregar NIT del receptor si está disponible
+
     if (nitReceptor) {
       body.nitReceptor = nitReceptor;
     }
 
-    // Hacer request al backend
-    const response = await fetch(`${backendUrl}/api/sat/buscar-por-numero`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(body)
+    const data = await executeSATPost<SATFacturaResponse>('/api/sat/buscar-por-numero', body);
+    return data.encontrada && data.factura ? data.factura : null;
+  } catch (error) {
+    console.error('Verificador SAT: Error de conexión:', error);
+    return null;
+  }
+};
+
+export const validarFacturaInternaSAT = async (payload: {
+  serie: string;
+  noinvoice: string;
+  nitEmisor?: string;
+  supplier?: string;
+  date?: string;
+  amount?: number;
+  uuid?: string;
+  currency?: string;
+  totiva?: number;
+}): Promise<SATInternalValidationResult> => {
+  try {
+    const data = await executeSATPost<SATFacturaResponse>('/api/sat/buscar-por-numero', {
+      serie: payload.serie,
+      numeroDTE: payload.noinvoice,
     });
 
-    if (!response.ok) {
-      console.error(`❌ Verificador SAT: Error HTTP ${response.status}`);
-      return null;
+    if (!data.encontrada || !data.factura) {
+      return {
+        encontrada: false,
+        validada: false,
+        mensaje: data.mensaje || 'No existen datos para esa factura.',
+        disclaimer:
+          data.disclaimer ||
+          'Las facturas solo están disponibles para consulta 24 horas después de haber sido emitidas por el emisor.',
+      };
     }
 
-    const data: SATFacturaResponse = await response.json();
-
-    if (data.encontrada && data.factura) {
-      console.log('✅ Verificador SAT: Factura encontrada en base de datos');
-      console.log(`   📋 Autorización: ${data.factura.numeroAutorizacion}`);
-      console.log(`   💰 Total: ${data.factura.moneda} ${data.factura.granTotal}`);
-      console.log(`   🏢 Proveedor: ${data.factura.nombreEmisor}`);
-      return data.factura;
-    } else {
-      console.log('⚠️  Verificador SAT: Factura no encontrada en base de datos');
-      return null;
-    }
-
+    return buildValidationResultFromFactura(payload, data.factura);
   } catch (error) {
-    console.error('❌ Verificador SAT: Error de conexión:', error);
-    return null;
+    const normalizedError = normalizeSATError(error, 'Error inesperado al validar SAT');
+    console.error('Verificador SAT interno: Error validando factura:', {
+      code: normalizedError.code,
+      message: normalizedError.message,
+      technicalDetails: normalizedError.technicalDetails,
+      status: normalizedError.status,
+      payload,
+    });
+    throw normalizedError;
   }
 };

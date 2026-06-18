@@ -20,7 +20,8 @@ import * as SettingsService from '../services/SettingsService';
 import { extractWithAI, extractWithGoogleVisionOCR, cleanAmount, parseInvoiceDate } from '../services/AIExtractionService';
 import { preprocessImageForOCR, extractFullText, extractCleanLines, extractWordsWithCoordinates, type Word } from '../utils/OCRUtils';
 import { validateInvoiceWithSAT, formatNIT, formatDateForSAT, canValidateWithSAT, openSATValidationInBrowser, formatSATDataForCopy } from '../services/SATValidationService';
-import { buscarFacturaSAT, buscarFacturaPorNumero, formatearFechaSAT, type SATFactura } from '../services/SATFacturaService';
+import { buildSatValidationFingerprint } from '../services/ExpenseService';
+import { buscarFacturaPorNumero, SATValidationError, validarFacturaInternaSAT } from '../services/SATFacturaService';
 
 interface CustomAsset {
   uri: string;
@@ -53,6 +54,8 @@ export default function AddExpenseScreen() {
   const [uuid, setUuid] = useState(''); // UUID de la factura FEL para validación SAT
   const [validationStatus, setValidationStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [validationMessage, setValidationMessage] = useState('');
+  const [satValidatedAt, setSatValidatedAt] = useState<string | undefined>(undefined);
+  const [satValidationFingerprint, setSatValidationFingerprint] = useState<string | undefined>(undefined);
   const [showMoreDetails, setShowMoreDetails] = useState(false);
   const [hasRedirectedForCategories, setHasRedirectedForCategories] = useState(false);
   const departments = ['Tecnologia', 'Ventas', 'Marketing', 'Finanzas', 'Recursos humanos'];
@@ -60,6 +63,71 @@ export default function AddExpenseScreen() {
 
 
   const [categories, setCategories] = useState<Category[]>([]);
+
+  const getSATErrorPresentation = (error: unknown): { title: string; userMessage: string; technicalMessage: string } => {
+    if (error instanceof SATValidationError) {
+      const technicalMessage = `Código: ${error.code}${error.status ? ` | HTTP: ${error.status}` : ''}${error.technicalDetails ? `\nDetalle: ${error.technicalDetails}` : ''}`;
+
+      switch (error.code) {
+        case 'SAT_BACKEND_CONFIG_MISSING':
+          return {
+            title: 'Configuración SAT incompleta',
+            userMessage: 'No hay configuración de backend disponible para consultar SAT.',
+            technicalMessage,
+          };
+        case 'SAT_SESSION_MISSING':
+          return {
+            title: 'Sesión requerida',
+            userMessage: 'No hay una sesión activa para consultar SAT. Debe iniciar sesión nuevamente.',
+            technicalMessage,
+          };
+        case 'SAT_REAUTH_FAILED':
+          return {
+            title: 'Reautenticación fallida',
+            userMessage: 'No se pudo revalidar la sesión antes de consultar SAT.',
+            technicalMessage,
+          };
+        case 'SAT_UNAUTHORIZED':
+          return {
+            title: 'Sesión inválida',
+            userMessage: 'El backend rechazó la sesión al consultar SAT.',
+            technicalMessage,
+          };
+        case 'SAT_FORBIDDEN':
+          return {
+            title: 'Acceso denegado',
+            userMessage: 'La sesión actual no tiene permisos para consultar SAT.',
+            technicalMessage,
+          };
+        case 'SAT_BACKEND_ERROR':
+          return {
+            title: 'Error del backend SAT',
+            userMessage: error.message,
+            technicalMessage,
+          };
+        case 'SAT_INVALID_RESPONSE':
+          return {
+            title: 'Respuesta inválida del backend',
+            userMessage: 'El backend respondió en un formato no esperado durante la validación SAT.',
+            technicalMessage,
+          };
+        case 'SAT_NETWORK_ERROR':
+        default:
+          return {
+            title: 'Error de conexión SAT',
+            userMessage: error.message,
+            technicalMessage,
+          };
+      }
+    }
+
+    const genericMessage = error instanceof Error ? error.message : 'Sin detalle técnico adicional';
+    return {
+      title: 'Error inesperado',
+      userMessage: 'Ocurrió un error no controlado al validar con SAT.',
+      technicalMessage: `Detalle: ${genericMessage}`,
+    };
+  };
 
   // Función para recalcular el IVA cuando cambia el monto
   const handleAmountChange = (value: string) => {
@@ -230,6 +298,29 @@ export default function AddExpenseScreen() {
     return `${day}/${month}/${year}`;
   };
 
+  useEffect(() => {
+    if (validationStatus !== 'valid') {
+      return;
+    }
+
+    const currentFingerprint = buildSatValidationFingerprint({
+      serie,
+      noinvoice,
+      vat_number,
+      supplier,
+      date: formatDate(date),
+      amount: amount ? parseFloat(amount) : 0,
+      uuid,
+    });
+
+    if (satValidationFingerprint && currentFingerprint !== satValidationFingerprint) {
+      setValidationStatus('idle');
+      setValidationMessage('');
+      setSatValidatedAt(undefined);
+      setSatValidationFingerprint(undefined);
+    }
+  }, [serie, noinvoice, vat_number, supplier, date, amount, uuid, validationStatus, satValidationFingerprint]);
+
   // Función helper para sincronizar en segundo plano
   const syncExpenseInBackground = async (userEmail: string, userData: any) => {
     try {
@@ -391,6 +482,8 @@ export default function AddExpenseScreen() {
             setUuid('');
             setValidationStatus('idle');
             setValidationMessage('');
+            setSatValidatedAt(undefined);
+            setSatValidationFingerprint(undefined);
             console.log('🧹 Formulario limpiado - listo para nuevo escaneo');
             Alert.alert('✓ Limpiado', 'Formulario limpiado. Puede escanear una nueva factura.');
           }
@@ -402,12 +495,83 @@ export default function AddExpenseScreen() {
   // Función para validar la factura con el servicio de la SAT
   const handleValidateSAT = async () => {
     try {
+      const missingFields = [];
+      if (!noinvoice.trim()) missingFields.push('No. Factura');
+      if (!serie.trim()) missingFields.push('Serie');
+
+      if (missingFields.length > 0) {
+        Alert.alert(
+          'Datos mínimos requeridos',
+          `Para consultar SAT debe completar:\n\n- ${missingFields.join('\n- ')}`
+        );
+        return;
+      }
+
+      setValidationStatus('validating');
+      setValidationMessage('Consultando servicio interno SAT...');
+
+      const result = await validarFacturaInternaSAT({
+        serie,
+        noinvoice,
+        nitEmisor: vat_number,
+        supplier,
+        date: formatDate(date),
+        amount: amount ? parseFloat(amount) : undefined,
+        uuid,
+        currency,
+        totiva: totiva ? parseFloat(totiva) : undefined,
+      });
+
+      if (!result.encontrada || !result.validada || !result.campos) {
+        setValidationStatus('invalid');
+        setValidationMessage(result.mensaje || 'No existen datos para esa factura.');
+        Alert.alert(
+          'Factura no encontrada',
+          `${result.mensaje || 'No existen datos para esa factura.'}\n\n${result.disclaimer || 'Las facturas solo están disponibles para consulta 24 horas después de haber sido emitidas por el emisor.'}`
+        );
+        return;
+      }
+
+      if (result.campos.vat_number) setVatNumber(String(result.campos.vat_number));
+      if (result.campos.supplier) setSupplier(String(result.campos.supplier));
+      if (result.campos.uuid) setUuid(String(result.campos.uuid));
+      if (result.campos.amount !== undefined) handleAmountChange(String(result.campos.amount));
+      if (result.campos.date) setDate(new Date(`${result.campos.date}T00:00:00`));
+      if (result.campos.currency) setCurrency(String(result.campos.currency));
+      if (result.campos.totiva !== undefined) setTotiva(String(result.campos.totiva));
+
+      const validatedFingerprint = buildSatValidationFingerprint({
+        serie: result.campos.serie || serie,
+        noinvoice: result.campos.noinvoice || noinvoice,
+        vat_number: result.campos.vat_number || vat_number,
+        supplier: result.campos.supplier || supplier,
+        date: result.campos.date || formatDate(date),
+        amount: result.campos.amount ?? (amount ? parseFloat(amount) : 0),
+        uuid: result.campos.uuid || uuid,
+      });
+
+      setSatValidatedAt(new Date().toISOString());
+      setSatValidationFingerprint(validatedFingerprint);
+      setValidationStatus('valid');
+      setValidationMessage(result.mensaje || 'Factura validada por SAT');
+
+      const complementados = (result.complementados || []).map(item => item.label).join(', ');
+      const corregidos = (result.corregidos || []).map(item => item.label).join(', ');
+      const sections = [];
+
+      if (complementados) sections.push(`Se complementaron estos campos: ${complementados}.`);
+      if (corregidos) sections.push(`Se corrigieron estos campos: ${corregidos}.`);
+      if (sections.length === 0) sections.push('Los datos ya coincidían con SAT.');
+
+      Alert.alert('Validación SAT completada', sections.join('\n\n'));
+      return;
+
       // Validar que tengamos todos los datos necesarios
       const validationRequest = {
         uuid: uuid,
         nitEmisor: formatNIT(vat_number),
         nitReceptor: 'CF', // Por defecto Consumidor Final, podrías agregar un campo para esto
-        fechaEmision: date ? formatDateForSAT(date) : '',
+        fechaEmision: date ? formatDateForSAT(date || new Date()) : '',
         monto: amount
       };
 
@@ -499,13 +663,18 @@ export default function AddExpenseScreen() {
       );
 
     } catch (error: any) {
-      console.error('❌ Error al validar con SAT:', error);
+      const presentation = getSATErrorPresentation(error);
+      console.error('Error al validar con SAT:', {
+        title: presentation.title,
+        userMessage: presentation.userMessage,
+        technicalMessage: presentation.technicalMessage,
+      });
       setValidationStatus('idle');
       setValidationMessage('');
       
       Alert.alert(
-        '❌ Error',
-        `Error inesperado al validar: ${error.message}`,
+        presentation.title,
+        `${presentation.userMessage}\n\n${presentation.technicalMessage}`,
         [{ text: 'OK' }]
       );
     }
@@ -539,6 +708,14 @@ export default function AddExpenseScreen() {
       if (!department) missingFields.push('Departamento');
       
       alert(`Por favor, complete los campos requeridos:\n- ${missingFields.join('\n- ')}`);
+      return;
+    }
+
+    if (!expenseSociedad || !centro || !cuenta || !ordenco) {
+      Alert.alert(
+        'Categoría incompleta',
+        'La categoría seleccionada no tiene completo el snapshot contable requerido. Edita o recrea la categoría antes de guardar el gasto.'
+      );
       return;
     }
 
@@ -656,7 +833,20 @@ export default function AddExpenseScreen() {
         sociedad: expenseSociedad || undefined,
         status,
         expenseStatus: 'draft', // Estado inicial en el flujo de liquidación
-        satStatus: 'NO_VALIDADO_SAT',
+        satStatus: validationStatus === 'valid' ? 'VALIDADO_SAT' : 'NO_VALIDADO_SAT',
+        satValidatedAt: validationStatus === 'valid' ? satValidatedAt : undefined,
+        satValidationSource: validationStatus === 'valid' ? 'SAT_INTERNO' : undefined,
+        satValidationFingerprint: validationStatus === 'valid'
+          ? (satValidationFingerprint || buildSatValidationFingerprint({
+              serie: serie || '',
+              noinvoice: noinvoice || '',
+              vat_number: vat_number || '',
+              supplier: supplier || 'Proveedor Desconocido',
+              date: formatDate(date),
+              amount: parsedAmount || 0,
+              uuid: uuid || '',
+            }))
+          : undefined,
         supplier: supplier || 'Proveedor Desconocido',
         vat_number: vat_number || '',
         department,
@@ -2594,7 +2784,38 @@ const findFinalTotal = (allWords: Word[]): string | null => {
           </View>
 
           {/* Botón validar SAT - visible cuando hay datos de factura */}
-          {(uuid || (serie && noinvoice && vat_number)) && (
+          <TouchableOpacity 
+            style={[
+              styles.validateButton,
+              !(serie && noinvoice) && styles.validateButtonDisabled,
+              validationStatus === 'valid' && styles.validateButtonValid,
+              validationStatus === 'invalid' && styles.validateButtonInvalid,
+              validationStatus === 'validating' && styles.validateButtonValidating
+            ]} 
+            onPress={handleValidateSAT}
+            disabled={validationStatus === 'validating'}
+          >
+            <Ionicons 
+              name={
+                validationStatus === 'validating' ? "hourglass-outline" :
+                validationStatus === 'valid' ? "checkmark-circle" :
+                validationStatus === 'invalid' ? "close-circle" :
+                "shield-checkmark-outline"
+              } 
+              size={18} 
+              color="white" 
+            />
+            <Text style={styles.validateButtonText}>
+              {validationStatus === 'validating' ? 'Validando...' :
+               validationStatus === 'valid' ? 'Validada SAT' :
+               validationStatus === 'invalid' ? 'No encontrada' :
+               'Consultar SAT'}
+            </Text>
+            {validationStatus === 'validating' && (
+              <ActivityIndicator size="small" color="white" style={{ marginLeft: 6 }} />
+            )}
+          </TouchableOpacity>
+          {false && (
             <TouchableOpacity 
               style={[
                 styles.validateButton,
@@ -2966,6 +3187,9 @@ const styles = StyleSheet.create({
   },
   validateButtonValidating: {
     backgroundColor: '#64748b'
+  },
+  validateButtonDisabled: {
+    backgroundColor: '#a78bfa'
   },
   validateButtonText: { 
     color: 'white', 
