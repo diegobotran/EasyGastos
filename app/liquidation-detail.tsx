@@ -108,60 +108,6 @@ export default function LiquidationDetailScreen() {
     }
   };
 
-  // Función helper para sincronizar liquidación en segundo plano
-  const syncLiquidationInBackground = async (email: string) => {
-    try {
-      // PASO 1: Verificar conectividad
-      console.log('🌐 LiquidationDetail (BG): Verificando conexión...');
-      const isConnected = await BackendSyncService.checkConnection();
-      
-      if (!isConnected) {
-        console.log('⚠️ LiquidationDetail (BG): Sin conexión - sincronización pendiente');
-        console.log('💾 LiquidationDetail (BG): La liquidación se sincronizará cuando haya conexión');
-        return;
-      }
-      console.log('✅ LiquidationDetail (BG): Conexión OK');
-
-      // PASO 2: Obtener PIN y autenticar
-      const userPIN = await AuthService.getPIN();
-      if (!userPIN) {
-        console.log('⚠️ LiquidationDetail (BG): No se encontró PIN');
-        return;
-      }
-
-      console.log('🔐 LiquidationDetail (BG): Autenticando...');
-      let loginResult = await BackendSyncService.loginAndGetToken(email, userPIN);
-      
-      if (!loginResult.success || !loginResult.token) {
-        console.log('📝 LiquidationDetail (BG): Registrando usuario...');
-        const user = await AuthService.getLastLoggedInUser();
-        if (user) {
-          const registerResult = await BackendSyncService.syncUserRegistration(user, userPIN);
-          if (registerResult.success) {
-            loginResult = await BackendSyncService.loginAndGetToken(email, userPIN);
-          }
-        }
-      }
-
-      // PASO 3: Sincronizar liquidaciones
-      if (loginResult.success && loginResult.token) {
-        console.log('🔄 LiquidationDetail (BG): Sincronizando liquidaciones...');
-        const syncResult = await BackendSyncService.syncLiquidations(email, loginResult.token);
-        
-        if (syncResult.success) {
-          console.log('✅ LiquidationDetail (BG): ¡Liquidación sincronizada exitosamente!');
-        } else {
-          console.log('⚠️ LiquidationDetail (BG): Error en sincronización:', syncResult.error);
-        }
-      } else {
-        console.log('⚠️ LiquidationDetail (BG): No se pudo autenticar');
-      }
-    } catch (error) {
-      console.log('⚠️ LiquidationDetail (BG): Error en sincronización (no crítico):', error);
-      console.log('💾 LiquidationDetail (BG): La liquidación quedó guardada y se sincronizará después');
-    }
-  };
-
   const resolveBackendToken = async (): Promise<string> => {
     let token = await AuthService.getToken();
     if (token) {
@@ -172,12 +118,12 @@ export default function LiquidationDetailScreen() {
     const pin = await AuthService.getPIN();
 
     if (!user?.email || !pin) {
-      throw new Error('No se encontró una sesión activa para enviar a SAP');
+      throw new Error('No se encontró una sesión activa para operar con el backend');
     }
 
     const loginResult = await BackendSyncService.loginAndGetToken(user.email, pin);
     if (!loginResult.success || !loginResult.token) {
-      throw new Error(loginResult.error || 'No se pudo reautenticar la sesión para enviar a SAP');
+      throw new Error(loginResult.error || 'No se pudo reautenticar la sesión con el backend');
     }
 
     await AuthService.saveJWTToken(loginResult.token);

@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getAPI_BASE_URL } from "../config/backend";
 import { Category } from "../models/Category";
 import { Expense } from "../models/Expense";
+import { Liquidation } from "../models/Liquidation";
 import { User } from "../models/User";
 import * as AuthService from "./AuthService";
 import * as CategoryService from "./CategoryService";
@@ -60,6 +61,99 @@ export class BackendSyncService {
   private static readonly SYNC_IN_PROGRESS_KEY = "sync_in_progress";
   private static readonly DEFAULT_IP = "23.20.116.61";
   private static readonly DEFAULT_PORT = "3000";
+
+  private static withOptionalField<T extends Record<string, any>>(
+    target: T,
+    key: string,
+    value: unknown,
+  ): T {
+    if (value === undefined || value === null) {
+      return target;
+    }
+
+    if (typeof value === "string" && value.trim() === "") {
+      return target;
+    }
+
+    return {
+      ...target,
+      [key]: value,
+    };
+  }
+
+  private static validateLiquidationForSync(liquidation: Liquidation): string[] {
+    const issues: string[] = [];
+
+    if (!liquidation.id?.trim()) issues.push("id");
+    if (!liquidation.userId?.trim()) issues.push("userId");
+    if (!liquidation.employeeName?.trim()) issues.push("employeeName");
+    if (!liquidation.sociedad?.trim()) issues.push("sociedad");
+    if (!liquidation.createdDate?.trim()) issues.push("createdDate");
+    if (!Array.isArray(liquidation.expenseIds) || liquidation.expenseIds.length === 0) issues.push("expenseIds");
+    if (liquidation.totalAmount === null || liquidation.totalAmount === undefined || Number.isNaN(Number(liquidation.totalAmount))) issues.push("totalAmount");
+    if (!liquidation.status?.trim()) issues.push("status");
+
+    if (liquidation.status === "submitted" && !liquidation.submittedDate?.trim()) {
+      issues.push("submittedDate");
+    }
+
+    if (liquidation.status === "approved") {
+      if (!liquidation.approvedDate?.trim()) issues.push("approvedDate");
+      if (!liquidation.approverEmail?.trim()) issues.push("approverEmail");
+    }
+
+    if (liquidation.status === "rejected") {
+      if (!liquidation.rejectedDate?.trim()) issues.push("rejectedDate");
+      if (!liquidation.rejectedBy?.trim()) issues.push("rejectedBy");
+      if (!liquidation.managerComments?.trim()) issues.push("managerComments");
+    }
+
+    if (liquidation.sapSyncStatus === "SYNCED") {
+      if (!liquidation.sapSyncedAt?.trim()) issues.push("sapSyncedAt");
+      if (!liquidation.sapResponseMessage?.trim()) issues.push("sapResponseMessage");
+    }
+
+    if (liquidation.sapSyncStatus === "ERROR") {
+      if (!liquidation.sapSyncedAt?.trim()) issues.push("sapSyncedAt");
+      if (!liquidation.sapResponseMessage?.trim()) issues.push("sapResponseMessage");
+    }
+
+    return issues;
+  }
+
+  private static buildLiquidationSyncPayload(liquidation: Liquidation): Record<string, unknown> {
+    let payload: Record<string, unknown> = {
+      id: liquidation.id,
+      userId: liquidation.userId,
+      employeeName: liquidation.employeeName,
+      sociedad: liquidation.sociedad,
+      createdDate: liquidation.createdDate,
+      expenseIds: liquidation.expenseIds,
+      totalAmount: liquidation.totalAmount,
+      status: liquidation.status,
+    };
+
+    payload = this.withOptionalField(payload, "managerEmail", liquidation.managerEmail);
+    payload = this.withOptionalField(payload, "managerComments", liquidation.managerComments);
+    payload = this.withOptionalField(payload, "submittedDate", liquidation.submittedDate);
+    payload = this.withOptionalField(payload, "approvedDate", liquidation.approvedDate);
+    payload = this.withOptionalField(payload, "rejectedDate", liquidation.rejectedDate);
+    payload = this.withOptionalField(payload, "approverEmail", liquidation.approverEmail);
+    payload = this.withOptionalField(payload, "rejectedBy", liquidation.rejectedBy);
+    payload = this.withOptionalField(payload, "csvGeneratedAt", liquidation.csvGeneratedAt);
+    payload = this.withOptionalField(payload, "csvGeneratedBy", liquidation.csvGeneratedBy);
+    payload = this.withOptionalField(payload, "sapDocNumber", liquidation.sapDocNumber);
+    payload = this.withOptionalField(payload, "sapSyncStatus", liquidation.sapSyncStatus);
+    payload = this.withOptionalField(payload, "sapReferenceId", liquidation.sapReferenceId);
+    payload = this.withOptionalField(payload, "sapResponseMessage", liquidation.sapResponseMessage);
+    payload = this.withOptionalField(payload, "sapSyncedAt", liquidation.sapSyncedAt);
+    payload = this.withOptionalField(payload, "approverName", liquidation.approverName);
+    payload = this.withOptionalField(payload, "comments", liquidation.comments);
+    payload = this.withOptionalField(payload, "createdAt", liquidation.createdAt);
+    payload = this.withOptionalField(payload, "updatedAt", liquidation.updatedAt);
+
+    return payload;
+  }
 
   /**
    * Obtiene la URL base del backend según la configuración
@@ -1026,6 +1120,7 @@ export class BackendSyncService {
 
       let successCount = 0;
       let errorCount = 0;
+      const syncIssues: string[] = [];
 
       for (const liquidation of localLiquidations) {
         console.log(
@@ -1040,6 +1135,22 @@ export class BackendSyncService {
           liquidation.expenseIds.length,
         );
 
+        const validationIssues = this.validateLiquidationForSync(liquidation);
+        if (validationIssues.length > 0) {
+          const issueMessage = `Liquidación ${liquidation.id}: faltan ${validationIssues.join(", ")}`;
+          console.error(
+            "❌ BackendSync: Liquidación con contrato incompleto para sincronización:",
+            liquidation.id,
+            validationIssues,
+          );
+          syncIssues.push(issueMessage);
+          errorCount++;
+          continue;
+        }
+
+        const liquidationPayload =
+          this.buildLiquidationSyncPayload(liquidation);
+
         const requestUrl = `${backendUrl}/api/liquidations`;
         console.log(
           "🌐 BackendSync: URL COMPLETA de la petición POST:",
@@ -1047,7 +1158,7 @@ export class BackendSyncService {
         );
         console.log(
           "📦 BackendSync: JSON que se va a enviar:",
-          JSON.stringify(liquidation, null, 2),
+          JSON.stringify(liquidationPayload, null, 2),
         );
 
         try {
@@ -1067,7 +1178,7 @@ export class BackendSyncService {
               "Content-Type": "application/json",
               Authorization: `Bearer ${authToken}`,
             },
-            body: JSON.stringify(liquidation),
+            body: JSON.stringify(liquidationPayload),
             signal: controller.signal,
           });
 
@@ -1130,7 +1241,7 @@ export class BackendSyncService {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${authToken}`,
                   },
-                  body: JSON.stringify(liquidation),
+                  body: JSON.stringify(liquidationPayload),
                 });
 
                 if (putResponse.ok) {
@@ -1169,6 +1280,9 @@ export class BackendSyncService {
               console.log(
                 "❌ BackendSync: Error de validación - NO SE SINCRONIZARÁ",
               );
+              syncIssues.push(
+                `Liquidación ${liquidation.id}: el backend rechazó el payload (${response.status})`,
+              );
               errorCount++;
             }
           } else {
@@ -1176,12 +1290,18 @@ export class BackendSyncService {
             console.log("❌ BackendSync: ERROR DEL SERVIDOR");
             console.log("❌ BackendSync: Status:", response.status);
             console.log("❌ BackendSync: Error:", errorText);
+            syncIssues.push(
+              `Liquidación ${liquidation.id}: backend ${response.status} ${errorText}`,
+            );
             errorCount++;
           }
         } catch (fetchError) {
           console.error(
             "❌ BackendSync: Error en fetch de liquidación:",
             fetchError,
+          );
+          syncIssues.push(
+            `Liquidación ${liquidation.id}: ${(fetchError as Error).message || "error de red"}`,
           );
           errorCount++;
         }
@@ -1229,12 +1349,15 @@ export class BackendSyncService {
       } else if (successCount > 0 && errorCount > 0) {
         return {
           success: true,
-          error: `${errorCount} liquidaciones no se pudieron sincronizar`,
+          error: `${errorCount} liquidaciones no se pudieron sincronizar. ${syncIssues.join(" | ")}`,
         };
       } else {
         return {
           success: false,
-          error: "No se pudo sincronizar ninguna liquidación",
+          error:
+            syncIssues.length > 0
+              ? syncIssues.join(" | ")
+              : "No se pudo sincronizar ninguna liquidación",
         };
       }
     } catch (error) {
