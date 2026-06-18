@@ -866,6 +866,42 @@ export const insertLiquidationFromBackend = async (liquidation: any): Promise<vo
   }
 };
 
+export const updateLiquidationSAPSyncDataFromServer = async (
+  liquidationId: string,
+  sapData: {
+    sapDocNumber?: string | null;
+    sapSyncStatus?: string | null;
+    sapReferenceId?: string | null;
+    sapResponseMessage?: string | null;
+    sapSyncedAt?: string | null;
+  }
+): Promise<void> => {
+  if (Platform.OS === 'web') {
+    return;
+  }
+
+  if (!db) {
+    await initLiquidationsTable();
+    if (!db) {
+      throw new Error('No se pudo inicializar la base de datos');
+    }
+  }
+
+  await db.runAsync(
+    `UPDATE liquidations
+     SET sapDocNumber = ?, sapSyncStatus = ?, sapReferenceId = ?, sapResponseMessage = ?, sapSyncedAt = ?, synced = 1
+     WHERE id = ?`,
+    [
+      sapData.sapDocNumber || null,
+      sapData.sapSyncStatus || null,
+      sapData.sapReferenceId || null,
+      sapData.sapResponseMessage || null,
+      sapData.sapSyncedAt || null,
+      liquidationId
+    ]
+  );
+};
+
 export const LiquidationService = {
   initLiquidationsTable,
   createLiquidation,
@@ -880,5 +916,6 @@ export const LiquidationService = {
   markLiquidationAsSynced,
   generateCSVData,
   insertLiquidationFromBackend,
+  updateLiquidationSAPSyncDataFromServer,
   getDB: () => db
 };

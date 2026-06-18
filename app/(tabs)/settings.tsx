@@ -233,6 +233,8 @@ export default function SettingsScreen() {
     try {
       let syncedItems = 0;
       let errors = 0;
+      const syncedSections: string[] = [];
+      const failedSections: string[] = [];
       
       // 1. Sincronizar categorías
       setSyncStatus('📂 Sincronizando categorías...');
@@ -241,13 +243,16 @@ export default function SettingsScreen() {
         if (categoryResult.success) {
           console.log('✅ Settings: Categorías sincronizadas');
           syncedItems++;
+          syncedSections.push('Categorías');
         } else {
           console.error('❌ Settings: Error en categorías:', categoryResult.error);
           errors++;
+          failedSections.push('Categorías');
         }
       } catch (error) {
         console.error('❌ Settings: Error sincronizando categorías:', error);
         errors++;
+        failedSections.push('Categorías');
       }
       
       // 2. Sincronizar gastos
@@ -257,13 +262,16 @@ export default function SettingsScreen() {
         if (expenseResult.success) {
           console.log('✅ Settings: Gastos sincronizados');
           syncedItems++;
+          syncedSections.push('Gastos');
         } else {
           console.error('❌ Settings: Error en gastos:', expenseResult.error);
           errors++;
+          failedSections.push('Gastos');
         }
       } catch (error) {
         console.error('❌ Settings: Error sincronizando gastos:', error);
         errors++;
+        failedSections.push('Gastos');
       }
       
       // 3. Sincronizar liquidaciones
@@ -273,13 +281,16 @@ export default function SettingsScreen() {
         if (liquidationResult.success) {
           console.log('✅ Settings: Liquidaciones sincronizadas');
           syncedItems++;
+          syncedSections.push('Liquidaciones');
         } else {
           console.error('❌ Settings: Error en liquidaciones:', liquidationResult.error);
           errors++;
+          failedSections.push('Liquidaciones');
         }
       } catch (error) {
         console.error('❌ Settings: Error sincronizando liquidaciones:', error);
         errors++;
+        failedSections.push('Liquidaciones');
       }
       
       // Actualizar última sincronización
@@ -293,23 +304,23 @@ export default function SettingsScreen() {
         Alert.alert(
           '✅ Sincronización Exitosa',
           `Datos sincronizados correctamente:\n\n` +
-          `📂 Categorías\n` +
-          `💰 Gastos\n` +
-          `📁 Liquidaciones\n\n` +
+          `${syncedSections.map(item => `• ${item}`).join('\n')}\n\n` +
           `⏰ ${new Date().toLocaleTimeString()}`
         );
       } else if (syncedItems > 0) {
         setSyncStatus('⚠️ Sincronización parcial');
         Alert.alert(
           '⚠️ Sincronización Parcial',
-          `Se sincronizaron ${syncedItems} de 3 elementos.\n\n` +
-          `Algunos datos no se pudieron sincronizar. Intente nuevamente más tarde.`
+          `Sincronizado correctamente:\n${syncedSections.map(item => `• ${item}`).join('\n')}\n\n` +
+          `No se pudo sincronizar:\n${failedSections.map(item => `• ${item}`).join('\n')}\n\n` +
+          `Intente nuevamente más tarde.`
         );
       } else {
         setSyncStatus('❌ Error en sincronización');
         Alert.alert(
           '❌ Error de Sincronización',
           `No se pudo sincronizar ningún dato.\n\n` +
+          `${failedSections.length > 0 ? `Falló:\n${failedSections.map(item => `• ${item}`).join('\n')}\n\n` : ''}` +
           `Verifique su conexión e intente nuevamente.`
         );
       }

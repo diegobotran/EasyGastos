@@ -7,6 +7,43 @@ const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 const { buildLiquidationSAPPayloadPreview } = require('../services/SAPPayloadService');
 
 const { Liquidation, Expense, User } = models;
+const SAP_EA_DOCUMENT_URL = process.env.SAP_EA_DOCUMENT_URL || 'https://api-integration-plataform-qa-wozvko.0uij1w.usa-e2.cloudhub.io/api/ea-document';
+const SAP_EA_DOCUMENT_USER = process.env.SAP_EA_DOCUMENT_USER || 'easyapp';
+const SAP_EA_DOCUMENT_PASSWORD = process.env.SAP_EA_DOCUMENT_PASSWORD || '';
+
+const getSAPReturnMessages = (payload) => {
+  if (Array.isArray(payload?.retunr)) {
+    return payload.retunr;
+  }
+
+  if (Array.isArray(payload?.return)) {
+    return payload.return;
+  }
+
+  return [];
+};
+
+const getSAPResponseSummary = (payload, liquidationId) => {
+  const messages = getSAPReturnMessages(payload);
+  const messageText = messages
+    .map(item => String(item?.MESSAGE || '').trim())
+    .filter(Boolean)
+    .join(' | ');
+
+  const documentMessage = messages.find(item => item?.ID === 'ZCM' && item?.MESSAGE_V1);
+  const headerMessage = messages.find(item => item?.MESSAGE_V2 || item?.MESSAGE_V1);
+  const hasError = messages.some(item => ['E', 'A', 'X'].includes(String(item?.TYPE || '').toUpperCase()));
+
+  return {
+    rawMessages: messages,
+    hasError,
+    sapDocNumber: documentMessage?.MESSAGE_V1 ? String(documentMessage.MESSAGE_V1).trim() : '',
+    sapReferenceId: headerMessage?.MESSAGE_V2
+      ? String(headerMessage.MESSAGE_V2).trim()
+      : (headerMessage?.MESSAGE_V1 ? String(headerMessage.MESSAGE_V1).trim() : liquidationId),
+    sapResponseMessage: messageText || 'SAP no devolvió mensajes descriptivos',
+  };
+};
 
 /**
  * @route   POST /api/liquidations
@@ -609,6 +646,155 @@ router.get('/:id/sap-payload-preview', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error generando preview de payload SAP:', error);
     return res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+/**
+ * @route   POST /api/liquidations/:id/send-to-sap
+ * @desc    Enviar una liquidación aprobada al endpoint SAP
+ * @access  Private (autenticado)
+ */
+router.post('/:id/send-to-sap', authenticateToken, async (req, res) => {
+  const syncedAt = new Date().toISOString();
+
+  try {
+    const { id } = req.params;
+    const liquidation = await Liquidation.findOne({ id });
+
+    if (!liquidation) {
+      return res.status(404).json({ error: 'Liquidación no encontrada' });
+    }
+
+    if (req.user.email !== liquidation.userId && !req.user.isManager) {
+      return res.status(403).json({ error: 'No tienes permisos para enviar esta liquidación a SAP' });
+    }
+
+    if (liquidation.status !== 'approved') {
+      return res.status(400).json({ error: 'Solo se pueden enviar a SAP liquidaciones aprobadas' });
+    }
+
+    if (!SAP_EA_DOCUMENT_PASSWORD) {
+      liquidation.sapSyncStatus = 'ERROR';
+      liquidation.sapResponseMessage = 'Falta configurar SAP_EA_DOCUMENT_PASSWORD en el backend';
+      liquidation.sapSyncedAt = syncedAt;
+      await liquidation.save();
+
+      return res.status(500).json({ error: 'Configuración SAP incompleta en el backend' });
+    }
+
+    const previewResult = await buildLiquidationSAPPayloadPreview(id);
+    if (previewResult.notFound) {
+      return res.status(404).json({ error: 'Liquidación no encontrada' });
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    let sapResponse;
+    try {
+      sapResponse = await fetch(SAP_EA_DOCUMENT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Basic ${Buffer.from(`${SAP_EA_DOCUMENT_USER}:${SAP_EA_DOCUMENT_PASSWORD}`).toString('base64')}`,
+        },
+        body: JSON.stringify(previewResult.payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    const responseText = await sapResponse.text();
+    let parsedSAPResponse = null;
+
+    try {
+      parsedSAPResponse = responseText ? JSON.parse(responseText) : null;
+    } catch (error) {
+      liquidation.sapSyncStatus = 'ERROR';
+      liquidation.sapResponseMessage = `SAP devolvió una respuesta no JSON: ${responseText || 'vacía'}`;
+      liquidation.sapSyncedAt = syncedAt;
+      await liquidation.save();
+      await Expense.updateMany(
+        { id: { $in: liquidation.expenseIds } },
+        { $set: { status: 'ERROR_SAP' } }
+      );
+
+      return res.status(502).json({ error: 'SAP devolvió una respuesta inválida', details: String(error.message || error) });
+    }
+
+    if (!sapResponse.ok) {
+      liquidation.sapSyncStatus = 'ERROR';
+      liquidation.sapResponseMessage = parsedSAPResponse?.error || `SAP respondió HTTP ${sapResponse.status}`;
+      liquidation.sapSyncedAt = syncedAt;
+      await liquidation.save();
+      await Expense.updateMany(
+        { id: { $in: liquidation.expenseIds } },
+        { $set: { status: 'ERROR_SAP' } }
+      );
+
+      return res.status(502).json({
+        error: parsedSAPResponse?.error || 'Error al enviar la liquidación a SAP',
+        sapStatus: sapResponse.status,
+        sapResponse: parsedSAPResponse,
+      });
+    }
+
+    const sapSummary = getSAPResponseSummary(parsedSAPResponse, liquidation.id);
+    if (sapSummary.hasError) {
+      liquidation.sapSyncStatus = 'ERROR';
+      liquidation.sapDocNumber = sapSummary.sapDocNumber || null;
+      liquidation.sapReferenceId = sapSummary.sapReferenceId || null;
+      liquidation.sapResponseMessage = sapSummary.sapResponseMessage;
+      liquidation.sapSyncedAt = syncedAt;
+      await liquidation.save();
+
+      await Expense.updateMany(
+        { id: { $in: liquidation.expenseIds } },
+        { $set: { status: 'ERROR_SAP' } }
+      );
+
+      return res.status(422).json({
+        error: 'SAP devolvió errores de contabilización',
+        liquidation,
+        sapResult: {
+          status: 'ERROR',
+          sapDocNumber: sapSummary.sapDocNumber,
+          sapReferenceId: sapSummary.sapReferenceId,
+          sapResponseMessage: sapSummary.sapResponseMessage,
+          sapSyncedAt: syncedAt,
+          messages: sapSummary.rawMessages,
+        },
+      });
+    }
+
+    liquidation.sapSyncStatus = 'SYNCED';
+    liquidation.sapDocNumber = sapSummary.sapDocNumber || null;
+    liquidation.sapReferenceId = sapSummary.sapReferenceId || null;
+    liquidation.sapResponseMessage = sapSummary.sapResponseMessage;
+    liquidation.sapSyncedAt = syncedAt;
+    await liquidation.save();
+
+    await Expense.updateMany(
+      { id: { $in: liquidation.expenseIds } },
+      { $set: { status: 'CONTABILIZADO' } }
+    );
+
+    return res.json({
+      message: 'Liquidación enviada correctamente a SAP',
+      liquidation,
+      sapResult: {
+        status: 'SYNCED',
+        sapDocNumber: sapSummary.sapDocNumber,
+        sapReferenceId: sapSummary.sapReferenceId,
+        sapResponseMessage: sapSummary.sapResponseMessage,
+        sapSyncedAt: syncedAt,
+        messages: sapSummary.rawMessages,
+      },
+    });
+  } catch (error) {
+    console.error('Error enviando liquidación a SAP:', error);
+    return res.status(500).json({ error: error.message || 'Error del servidor al enviar a SAP' });
   }
 });
 

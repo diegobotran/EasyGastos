@@ -15,8 +15,8 @@ import {
 } from 'react-native';
 import { Liquidation, getLiquidationStatusColor, getLiquidationStatusText, canSubmitLiquidation, canGenerateCSV, canEditLiquidation } from '../models/Liquidation';
 import { Expense } from '../models/Expense';
-import { getLiquidationById, submitLiquidation, deleteLiquidation, removeExpenseFromLiquidation, addExpenseToLiquidation } from '../services/LiquidationService';
-import { getExpenseById } from '../services/ExpenseService';
+import { getLiquidationById, deleteLiquidation, removeExpenseFromLiquidation, addExpenseToLiquidation, insertLiquidationFromBackend, updateLiquidationSAPSyncDataFromServer } from '../services/LiquidationService';
+import { getExpenseById, updateExpenseStatusesFromServer } from '../services/ExpenseService';
 import { BackendSyncService } from '../services/BackendSyncService';
 import * as AuthService from '../services/AuthService';
 import { generateLiquidationCSV, generateDetailedLiquidationCSV } from '../services/ExportService';
@@ -36,6 +36,7 @@ export default function LiquidationDetailScreen() {
   const [sapPreviewJson, setSapPreviewJson] = useState('');
   const [sapPreviewError, setSapPreviewError] = useState('');
   const [isLoadingSapPreview, setIsLoadingSapPreview] = useState(false);
+  const [isSendingToSAP, setIsSendingToSAP] = useState(false);
 
   const liquidationId = params.liquidationId as string;
 
@@ -161,6 +162,131 @@ export default function LiquidationDetailScreen() {
     }
   };
 
+  const resolveBackendToken = async (): Promise<string> => {
+    let token = await AuthService.getToken();
+    if (token) {
+      return token;
+    }
+
+    const user = await AuthService.getLastLoggedInUser();
+    const pin = await AuthService.getPIN();
+
+    if (!user?.email || !pin) {
+      throw new Error('No se encontró una sesión activa para enviar a SAP');
+    }
+
+    const loginResult = await BackendSyncService.loginAndGetToken(user.email, pin);
+    if (!loginResult.success || !loginResult.token) {
+      throw new Error(loginResult.error || 'No se pudo reautenticar la sesión para enviar a SAP');
+    }
+
+    await AuthService.saveJWTToken(loginResult.token);
+    return loginResult.token;
+  };
+
+  const getSapSyncPresentation = (sapSyncStatus?: string | null) => {
+    switch (sapSyncStatus) {
+      case 'SYNCED':
+        return {
+          title: 'Contabilizada en SAP',
+          color: '#0f766e',
+          backgroundColor: '#ccfbf1',
+          icon: 'cloud-done-outline' as const,
+        };
+      case 'ERROR':
+        return {
+          title: 'Error de envío SAP',
+          color: '#b91c1c',
+          backgroundColor: '#fee2e2',
+          icon: 'alert-circle-outline' as const,
+        };
+      default:
+        return {
+          title: 'Pendiente de envío SAP',
+          color: '#7c3aed',
+          backgroundColor: '#ede9fe',
+          icon: 'cloud-upload-outline' as const,
+        };
+    }
+  };
+
+  const handleSendToSAP = async () => {
+    if (!liquidation) {
+      return;
+    }
+
+    Alert.alert(
+      'Enviar a SAP',
+      `Se enviará la liquidación aprobada a SAP por conexión en línea.\n\nTotal: Q${liquidation.totalAmount.toFixed(2)}\nGastos: ${expenses.length}`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: liquidation.sapSyncStatus === 'ERROR' ? 'Reintentar' : 'Enviar',
+          onPress: async () => {
+            try {
+              setIsSendingToSAP(true);
+
+              const isConnected = await BackendSyncService.checkConnection();
+              if (!isConnected) {
+                throw new Error('El envío a SAP requiere conexión activa con el backend');
+              }
+
+              const token = await resolveBackendToken();
+              const { url: backendUrl } = await BackendSyncService.getBackendConfig();
+              const requestUrl = `${backendUrl}/api/liquidations/${liquidation.id}/send-to-sap`;
+
+              const response = await fetch(requestUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+
+              const responseText = await response.text();
+              const parsed = responseText ? JSON.parse(responseText) : null;
+
+              if (parsed?.liquidation) {
+                await insertLiquidationFromBackend(parsed.liquidation);
+                await updateLiquidationSAPSyncDataFromServer(parsed.liquidation.id, {
+                  sapDocNumber: parsed.liquidation.sapDocNumber,
+                  sapSyncStatus: parsed.liquidation.sapSyncStatus,
+                  sapReferenceId: parsed.liquidation.sapReferenceId,
+                  sapResponseMessage: parsed.liquidation.sapResponseMessage,
+                  sapSyncedAt: parsed.liquidation.sapSyncedAt,
+                });
+              }
+
+              if (response.ok) {
+                await updateExpenseStatusesFromServer(liquidation.expenseIds, 'CONTABILIZADO');
+                await loadLiquidationData();
+
+                Alert.alert(
+                  'Enviado a SAP',
+                  `La liquidación fue contabilizada correctamente.\n\nDocumento SAP: ${parsed?.sapResult?.sapDocNumber || 'N/A'}\nReferencia: ${parsed?.sapResult?.sapReferenceId || 'N/A'}`
+                );
+                return;
+              }
+
+              if (response.status === 422) {
+                await updateExpenseStatusesFromServer(liquidation.expenseIds, 'ERROR_SAP');
+                await loadLiquidationData();
+                throw new Error(parsed?.sapResult?.sapResponseMessage || parsed?.error || 'SAP devolvió errores al contabilizar la liquidación');
+              }
+
+              throw new Error(parsed?.error || 'No se pudo enviar la liquidación a SAP');
+            } catch (error) {
+              console.error('❌ Error enviando liquidación a SAP:', error);
+              Alert.alert('Error SAP', (error as Error).message || 'No se pudo enviar la liquidación a SAP');
+            } finally {
+              setIsSendingToSAP(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const handleSubmitToManager = async () => {
     if (!liquidation) return;
 
@@ -198,29 +324,48 @@ Gastos: ${expenses.length}`;
                 console.log('📝 Notas del empleado:', employeeComments);
               }
               
-              // PASO 1: Guardar localmente primero (cambiar status a 'submitted')
-              await submitLiquidation(liquidation.id, userEmail);
-              console.log('✅ LiquidationDetail: Liquidación guardada localmente como "enviada"');
-              
-              // PASO 2: Notificar al usuario inmediatamente
+              const isConnected = await BackendSyncService.checkConnection();
+              if (!isConnected) {
+                throw new Error('El envío a aprobación requiere conexión activa con el backend');
+              }
+
+              const token = await resolveBackendToken();
+              const syncResult = await BackendSyncService.syncLiquidations(userEmail, token);
+              if (!syncResult.success) {
+                throw new Error(syncResult.error || 'No se pudo sincronizar la liquidación antes de enviarla a aprobación');
+              }
+
+              const { url: backendUrl } = await BackendSyncService.getBackendConfig();
+              const requestUrl = `${backendUrl}/api/liquidations/${liquidation.id}/submit`;
+              const response = await fetch(requestUrl, {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+
+              const responseText = await response.text();
+              const parsed = responseText ? JSON.parse(responseText) : null;
+
+              if (!response.ok) {
+                throw new Error(parsed?.error || 'No se pudo enviar la liquidación al jefe');
+              }
+
+              await insertLiquidationFromBackend(parsed);
+
               const successMessage = liquidation.status === 'rejected'
-                ? 'La liquidación corregida fue reenviada al jefe. Se sincronizará automáticamente cuando tenga conexión.'
-                : 'La liquidación fue enviada al jefe. Se sincronizará automáticamente cuando tenga conexión.';
-              
+                ? 'La liquidación corregida fue reenviada correctamente al jefe.'
+                : 'La liquidación fue enviada correctamente al jefe.';
+
               Alert.alert(
-                '✅ Enviado', 
+                'Enviado correctamente',
                 successMessage,
                 [{ text: 'OK', onPress: () => {
-                  setEmployeeComments(''); // Limpiar las notas
+                  setEmployeeComments('');
                   loadLiquidationData();
                 }}]
               );
-              
-              // PASO 3: Sincronizar en segundo plano (sin await, no bloqueante)
-              console.log('🔄 LiquidationDetail: Iniciando sincronización en segundo plano...');
-              (async () => {
-                await syncLiquidationInBackground(userEmail);
-              })();
               
             } catch (error) {
               console.error('❌ LiquidationDetail: Error enviando liquidación:', error);
@@ -567,6 +712,8 @@ Gastos: ${expenses.length}`;
   const statusText = getLiquidationStatusText(liquidation.status);
   const canSubmit = canSubmitLiquidation(liquidation.status);
   const canDownloadCSV = canGenerateCSV(liquidation.status);
+  const canSendToSAP = liquidation.status === 'approved' && liquidation.sapSyncStatus !== 'SYNCED';
+  const sapSyncPresentation = getSapSyncPresentation(liquidation.sapSyncStatus);
 
   return (
     <View style={styles.container}>
@@ -723,6 +870,52 @@ Gastos: ${expenses.length}`;
           </View>
         )}
 
+        {(liquidation.status === 'approved' || liquidation.sapSyncStatus || liquidation.sapDocNumber || liquidation.sapResponseMessage) && (
+          <View style={styles.sapStatusCard}>
+            <View style={styles.sapStatusHeader}>
+              <View style={[styles.sapStatusBadge, { backgroundColor: sapSyncPresentation.backgroundColor }]}>
+                <Ionicons name={sapSyncPresentation.icon} size={16} color={sapSyncPresentation.color} />
+                <Text style={[styles.sapStatusBadgeText, { color: sapSyncPresentation.color }]}>
+                  {sapSyncPresentation.title}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.sapStatusRows}>
+              <View style={styles.summaryRow}>
+                <Ionicons name="swap-horizontal-outline" size={18} color="#64748b" />
+                <Text style={styles.summaryLabel}>Estado SAP:</Text>
+                <Text style={styles.summaryValue}>{liquidation.sapSyncStatus || 'PENDING'}</Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Ionicons name="document-text-outline" size={18} color="#64748b" />
+                <Text style={styles.summaryLabel}>Documento SAP:</Text>
+                <Text style={styles.summaryValue}>{liquidation.sapDocNumber || 'Pendiente'}</Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Ionicons name="pricetag-outline" size={18} color="#64748b" />
+                <Text style={styles.summaryLabel}>Referencia SAP:</Text>
+                <Text style={styles.summaryValue}>{liquidation.sapReferenceId || 'Pendiente'}</Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Ionicons name="time-outline" size={18} color="#64748b" />
+                <Text style={styles.summaryLabel}>Último envío:</Text>
+                <Text style={styles.summaryValue}>
+                  {liquidation.sapSyncedAt ? liquidation.sapSyncedAt.replace('T', ' ').slice(0, 19) : 'No enviado'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.sapResponseBox}>
+              <Text style={styles.sapResponseLabel}>Respuesta SAP</Text>
+              <Text style={styles.sapResponseText}>{liquidation.sapResponseMessage || 'Sin respuesta registrada todavía.'}</Text>
+            </View>
+          </View>
+        )}
+
         {/* Comentarios del Manager */}
         {liquidation.managerComments && (
           <View style={styles.commentsCard}>
@@ -800,13 +993,32 @@ Gastos: ${expenses.length}`;
             </TouchableOpacity>
           )}
 
-          <TouchableOpacity 
-            style={styles.previewButton}
-            onPress={handleViewSapPreview}
-          >
-            <Ionicons name="code-slash-outline" size={20} color="white" />
-            <Text style={styles.previewButtonText}>Ver Preview SAP</Text>
-          </TouchableOpacity>
+          {canSendToSAP && (
+            <TouchableOpacity
+              style={styles.sapSendButton}
+              onPress={handleSendToSAP}
+              disabled={isSendingToSAP}
+            >
+              <Ionicons name={isSendingToSAP ? "hourglass-outline" : "cloud-upload-outline"} size={20} color="white" />
+              <Text style={styles.sapSendButtonText}>
+                {isSendingToSAP
+                  ? 'Enviando a SAP...'
+                  : liquidation.sapSyncStatus === 'ERROR'
+                    ? 'Reintentar envío SAP'
+                    : 'Enviar a SAP'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {liquidation.status === 'approved' && (
+            <TouchableOpacity 
+              style={styles.previewButton}
+              onPress={handleViewSapPreview}
+            >
+              <Ionicons name="code-slash-outline" size={20} color="white" />
+              <Text style={styles.previewButtonText}>Ver Preview SAP</Text>
+            </TouchableOpacity>
+          )}
 
           {liquidation.status === 'draft' && (
             <TouchableOpacity 
@@ -1076,6 +1288,53 @@ const styles = StyleSheet.create({
     minHeight: 100,
     maxHeight: 150,
   },
+  sapStatusCard: {
+    backgroundColor: 'white',
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd6fe',
+  },
+  sapStatusHeader: {
+    marginBottom: 12,
+  },
+  sapStatusBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  sapStatusBadgeText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  sapStatusRows: {
+    gap: 8,
+  },
+  sapResponseBox: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  sapResponseLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 6,
+  },
+  sapResponseText: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 19,
+  },
   expensesCard: {
     backgroundColor: 'white',
     marginHorizontal: 16,
@@ -1166,6 +1425,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   downloadButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  sapSendButton: {
+    flexDirection: 'row',
+    backgroundColor: '#7c3aed',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  sapSendButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',

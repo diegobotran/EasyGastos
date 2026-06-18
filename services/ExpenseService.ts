@@ -868,6 +868,53 @@ export const updateExpenseStatus = async (expenseId: string, newStatus: string):
   }
 };
 
+export const updateExpenseStatusesFromServer = async (
+  expenseIds: string[],
+  newStatus: string
+): Promise<void> => {
+  if (expenseIds.length === 0) {
+    return;
+  }
+
+  if (Platform.OS === 'web') {
+    const keys = await AsyncStorage.getAllKeys();
+    const expenseKeys = keys.filter(key => key.startsWith(STORAGE_KEY_PREFIX));
+
+    for (const key of expenseKeys) {
+      const expensesStr = await AsyncStorage.getItem(key);
+      if (!expensesStr) {
+        continue;
+      }
+
+      const expenses: Expense[] = JSON.parse(expensesStr);
+      let changed = false;
+
+      for (const expense of expenses) {
+        if (expenseIds.includes(expense.id)) {
+          expense.status = newStatus as any;
+          expense.needsSync = false;
+          expense.lastSync = Date.now();
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        await AsyncStorage.setItem(key, JSON.stringify(expenses));
+      }
+    }
+
+    return;
+  }
+
+  if (!db) throw new Error("La base de datos no está inicializada.");
+
+  const placeholders = expenseIds.map(() => '?').join(',');
+  await db.runAsync(
+    `UPDATE expenses SET status = ?, needsSync = 0, lastSync = ? WHERE id IN (${placeholders})`,
+    [newStatus, Date.now(), ...expenseIds]
+  );
+};
+
 /**
  * Inserta o actualiza un gasto desde el servidor
  */
