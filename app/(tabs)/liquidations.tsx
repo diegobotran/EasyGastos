@@ -245,6 +245,13 @@ export default function LiquidationsScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Liquidaciones</Text>
         <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.createButton}
+            onPress={() => router.push('/(tabs)/expenses')}
+          >
+            <Ionicons name="add" size={18} color="white" />
+            <Text style={styles.createButtonText}>Crear</Text>
+          </TouchableOpacity>
           <TouchableOpacity 
             style={styles.filterButtonCompact}
             onPress={() => setShowFilterModal(true)}
@@ -383,6 +390,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  createButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#2563eb',
+    gap: 6,
+  },
+  createButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '700',
   },
   filterButtonCompact: {
     flexDirection: 'row',

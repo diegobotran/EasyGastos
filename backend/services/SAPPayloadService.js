@@ -2,7 +2,6 @@ const { models } = require('../database/init');
 
 const { Liquidation, Expense, User } = models;
 
-const FIXED_CURRENCY = 'GTQ';
 const FIXED_PAYMENT_TERM = 'K001';
 const FIXED_TAX_CODE = '02';
 const HKONT_LENGTH = 10;
@@ -129,12 +128,21 @@ const buildHeaderWarnings = (liquidation, user, expenses, missingExpenseIds = []
     warnings.push({ field: 'BUKRS', message: 'La liquidaciÃ³n no tiene sociedad capturada.' });
   }
 
+  if (!liquidation.currency) {
+    warnings.push({ field: 'WAERS', message: 'La liquidaciÃ³n no tiene moneda capturada.' });
+  }
+
   if (!liquidation.id) {
     warnings.push({ field: 'XBLNR', message: 'La liquidaciÃ³n no tiene identificador para construir la referencia SAP.' });
   }
 
   if (!expenses.length) {
     warnings.push({ field: 'expenses', message: 'La liquidaciÃ³n no tiene gastos asociados para construir el payload SAP.' });
+  }
+
+  const totalAmount = Number(liquidation.totalAmount || expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0));
+  if (!(totalAmount > 0)) {
+    warnings.push({ field: 'DMBTR', message: 'La liquidaciÃ³n no tiene un monto total válido para SAP.' });
   }
 
   if (missingExpenseIds.length > 0) {
@@ -171,6 +179,7 @@ const buildPayload = (liquidation, user, expenses) => {
   const reference = buildLiquidationReference(liquidation);
   const today = new Date().toISOString().split('T')[0];
   const totalAmount = Number(liquidation.totalAmount || expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0));
+  const currency = asTrimmedString(liquidation.currency).toUpperCase();
 
   return {
     header: {
@@ -181,7 +190,7 @@ const buildPayload = (liquidation, user, expenses) => {
       XBLNR: reference,
       ZTERM: FIXED_PAYMENT_TERM,
       BKTXT: reference,
-      WAERS: FIXED_CURRENCY,
+      WAERS: currency,
       DMBTR: totalAmount > 0 ? formatAmountForSAP(totalAmount) : '',
       DZLSPR: '',
     },
@@ -200,6 +209,76 @@ const buildPayload = (liquidation, user, expenses) => {
       NAME1: asTrimmedString(expense.supplier),
       SGTXT: asTrimmedString(expense.description),
     })),
+  };
+};
+
+const buildFieldStatus = (field, label, value, required, section, source, extra = {}) => ({
+  field,
+  label,
+  value: value ?? '',
+  required,
+  section,
+  source,
+  isMissing: String(value ?? '').trim() === '',
+  ...extra,
+});
+
+const buildPreviewSummary = (liquidation, user, orderedExpenses, payload, missingExpenseIds, headerWarnings, itemWarnings) => {
+  const headerFields = [
+    buildFieldStatus('BLDAT', 'Fecha de documento cabecera', payload.header.BLDAT, true, 'header', 'Fecha actual del envío'),
+    buildFieldStatus('BUDAT', 'Fecha de contabilización', payload.header.BUDAT, true, 'header', 'Fecha actual del envío'),
+    buildFieldStatus('BUKRS', 'Sociedad', payload.header.BUKRS, true, 'header', 'Liquidación'),
+    buildFieldStatus('LIFNR', 'Código proveedor/usuario SAP', payload.header.LIFNR, true, 'header', 'Usuario'),
+    buildFieldStatus('XBLNR', 'Referencia SAP', payload.header.XBLNR, true, 'header', 'Liquidación'),
+    buildFieldStatus('BKTXT', 'Texto de cabecera', payload.header.BKTXT, true, 'header', 'Liquidación'),
+    buildFieldStatus('WAERS', 'Moneda', payload.header.WAERS, true, 'header', 'Liquidación'),
+    buildFieldStatus('DMBTR', 'Monto total', payload.header.DMBTR, true, 'header', 'Liquidación / gastos'),
+    buildFieldStatus('ZTERM', 'Condición de pago', payload.header.ZTERM, false, 'header', 'Valor fijo', { emptyByDesign: false }),
+    buildFieldStatus('DZLSPR', 'Bloqueo de pago', payload.header.DZLSPR, false, 'header', 'Vacío por diseño', { emptyByDesign: true }),
+  ];
+
+  const supplierFields = [
+    buildFieldStatus('LIFNR', 'Código proveedor/usuario SAP', payload.header.LIFNR, true, 'supplier', 'Usuario'),
+    buildFieldStatus('USER_EMAIL', 'Correo del usuario', user?.email || liquidation.userId || '', false, 'supplier', 'Usuario'),
+    buildFieldStatus('EMPLOYEE_NAME', 'Empleado', liquidation.employeeName || '', false, 'supplier', 'Liquidación'),
+  ];
+
+  const expenseFields = orderedExpenses.map((expense, index) => ({
+    expenseId: expense.id,
+    label: `Gasto ${index + 1}`,
+    description: expense.description || '',
+    fields: [
+      buildFieldStatus('HKONT', 'Cuenta contable', payload.items[index]?.HKONT || '', true, 'expense', 'Categoría / gasto', { expenseId: expense.id }),
+      buildFieldStatus('DMBTR', 'Monto', payload.items[index]?.DMBTR || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
+      buildFieldStatus('KOSTL', 'Centro de costo', payload.items[index]?.KOSTL || '', true, 'expense', 'Categoría / gasto', { expenseId: expense.id }),
+      buildFieldStatus('AUFNR', 'Orden CO', payload.items[index]?.AUFNR || '', true, 'expense', 'Categoría / gasto', { expenseId: expense.id }),
+      buildFieldStatus('ZSERFAC', 'Serie factura', payload.items[index]?.ZSERFAC || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
+      buildFieldStatus('ZNUMFAC', 'Número factura', payload.items[index]?.ZNUMFAC || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
+      buildFieldStatus('BLDAT', 'Fecha documento', payload.items[index]?.BLDAT || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
+      buildFieldStatus('STCD1', 'NIT emisor', payload.items[index]?.STCD1 || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
+      buildFieldStatus('NAME1', 'Nombre emisor', payload.items[index]?.NAME1 || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
+      buildFieldStatus('SGTXT', 'Descripción SAP', payload.items[index]?.SGTXT || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
+      buildFieldStatus('ZMWSKZ', 'Código de impuesto', payload.items[index]?.ZMWSKZ || '', false, 'expense', 'Valor fijo', { expenseId: expense.id, emptyByDesign: false }),
+      buildFieldStatus('ZUMSK', 'Indicador especial', payload.items[index]?.ZUMSK || '', false, 'expense', 'Vacío por diseño', { expenseId: expense.id, emptyByDesign: true }),
+      buildFieldStatus('BLART', 'Clase de documento', payload.items[index]?.BLART || '', false, 'expense', 'Vacío por diseño', { expenseId: expense.id, emptyByDesign: true }),
+    ],
+  }));
+
+  const allFields = [
+    ...headerFields,
+    ...supplierFields,
+    ...expenseFields.flatMap((item) => item.fields),
+  ];
+
+  return {
+    headerFields,
+    supplierFields,
+    expenseFields,
+    missingRequired: allFields.filter((field) => field.required && field.isMissing),
+    missingOptional: allFields.filter((field) => !field.required && field.isMissing && !field.emptyByDesign),
+    emptyByDesign: allFields.filter((field) => field.emptyByDesign),
+    missingExpenseIds,
+    warningCount: headerWarnings.length + itemWarnings.reduce((total, item) => total + item.warnings.length, 0),
   };
 };
 
@@ -222,14 +301,26 @@ const buildPreview = async (liquidationId) => {
     }))
     .filter((item) => item.warnings.length > 0);
 
+  const payload = buildPayload(liquidation, user, orderedExpenses);
+  const summary = buildPreviewSummary(
+    liquidation,
+    user,
+    orderedExpenses,
+    payload,
+    missingExpenseIds,
+    headerWarnings,
+    itemWarnings,
+  );
+
   return {
     notFound: false,
-    isValid: true,
-    payload: buildPayload(liquidation, user, orderedExpenses),
+    isValid: summary.missingRequired.length === 0,
+    payload,
     warnings: {
       headerWarnings,
       itemWarnings,
     },
+    summary,
   };
 };
 

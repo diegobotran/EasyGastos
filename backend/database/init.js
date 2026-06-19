@@ -121,6 +121,7 @@ const liquidationSchema = new mongoose.Schema({
   userId: { type: String, required: true }, // Email del empleado que creó la liquidación
   employeeName: { type: String, required: true },
   sociedad: { type: String, default: null },
+  currency: { type: String, default: null },
   createdDate: { type: String, required: true }, // YYYY-MM-DD
   expenseIds: { type: [String], required: true, default: [] }, // Array de IDs de gastos
   totalAmount: { type: Number, required: true },

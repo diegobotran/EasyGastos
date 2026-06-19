@@ -51,6 +51,7 @@ export const initLiquidationsTable = async (): Promise<void> => {
           userId TEXT NOT NULL,
           employeeName TEXT NOT NULL,
           sociedad TEXT,
+          currency TEXT,
           createdDate TEXT NOT NULL,
           expenseIds TEXT NOT NULL,
           totalAmount REAL NOT NULL,
@@ -75,6 +76,7 @@ export const initLiquidationsTable = async (): Promise<void> => {
 
       const liquidationColumns = [
         ['sociedad', 'TEXT'],
+        ['currency', 'TEXT'],
         ['approverEmail', 'TEXT'],
         ['rejectedBy', 'TEXT'],
         ['csvGeneratedAt', 'TEXT'],
@@ -132,6 +134,10 @@ export const createLiquidation = async (
       throw new Error('Debe seleccionar la sociedad de la liquidación');
     }
 
+    if (!dto.currency || !dto.currency.trim()) {
+      throw new Error('Debe seleccionar la moneda de la liquidación');
+    }
+
     // Calcular el monto total sumando los gastos
     let totalAmount = 0;
     for (const expenseId of dto.expenseIds) {
@@ -145,6 +151,9 @@ export const createLiquidation = async (
         if (expense.sociedad !== dto.sociedad) {
           throw new Error(`Todos los gastos de una liquidación deben pertenecer a la sociedad ${dto.sociedad}.`);
         }
+        if (String(expense.currency || '').trim() !== dto.currency.trim()) {
+          throw new Error(`Todos los gastos de una liquidación deben pertenecer a la moneda ${dto.currency}.`);
+        }
         totalAmount += expense.amount;
       }
     }
@@ -154,6 +163,7 @@ export const createLiquidation = async (
       userId: dto.userId,
       employeeName: dto.employeeName,
       sociedad: dto.sociedad,
+      currency: dto.currency,
       createdDate: getCurrentDateISO(),
       expenseIds: dto.expenseIds,
       totalAmount,
@@ -167,14 +177,15 @@ export const createLiquidation = async (
     // Insertar en SQLite
     await db.runAsync(
       `INSERT INTO liquidations (
-        id, userId, employeeName, sociedad, createdDate, expenseIds, 
+        id, userId, employeeName, sociedad, currency, createdDate, expenseIds, 
         totalAmount, status, sapSyncStatus, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       [
         liquidation.id,
         liquidation.userId,
         liquidation.employeeName,
         liquidation.sociedad,
+        liquidation.currency || '',
         liquidation.createdDate,
         JSON.stringify(liquidation.expenseIds),
         liquidation.totalAmount,
@@ -225,6 +236,7 @@ export const getLiquidations = async (userId: string): Promise<Liquidation[]> =>
       userId: row.userId,
       employeeName: row.employeeName,
       sociedad: row.sociedad || '',
+      currency: row.currency || '',
       createdDate: row.createdDate,
       expenseIds: JSON.parse(row.expenseIds),
       totalAmount: row.totalAmount,
@@ -276,6 +288,7 @@ export const getLiquidationById = async (id: string, userId: string): Promise<Li
       userId: result.userId,
       employeeName: result.employeeName,
       sociedad: result.sociedad || '',
+      currency: result.currency || '',
       createdDate: result.createdDate,
       expenseIds: JSON.parse(result.expenseIds),
       totalAmount: result.totalAmount,
@@ -337,6 +350,10 @@ export const addExpenseToLiquidation = async (
 
     if (expense.sociedad !== liquidation.sociedad) {
       throw new Error(`Solo puede agregar gastos de la sociedad ${liquidation.sociedad} a esta liquidación.`);
+    }
+
+    if (String(expense.currency || '').trim() !== String(liquidation.currency || '').trim()) {
+      throw new Error(`Solo puede agregar gastos de la moneda ${liquidation.currency} a esta liquidación.`);
     }
 
     const validation = await validateExpenseForLiquidation(expenseId, liquidation.userId, liquidationId);
@@ -511,6 +528,7 @@ export const updateLiquidationStatus = async (
       userId: result.userId,
       employeeName: result.employeeName,
       sociedad: result.sociedad || '',
+      currency: result.currency || '',
       createdDate: result.createdDate,
       expenseIds: JSON.parse(result.expenseIds),
       totalAmount: result.totalAmount,
@@ -687,6 +705,7 @@ export const getLiquidationsNeedingSync = async (userId: string): Promise<Liquid
           userId: row.userId,
           employeeName: row.employeeName,
           sociedad: row.sociedad || '',
+          currency: row.currency || '',
           createdDate: row.createdDate,
           expenseIds: expenseIds,
           totalAmount: row.totalAmount,
@@ -831,11 +850,11 @@ export const insertLiquidationFromBackend = async (liquidation: any): Promise<vo
     await db.runAsync(
       `INSERT OR REPLACE INTO liquidations (
         id, userId, employeeName, createdDate, expenseIds, 
-        sociedad, totalAmount, status, managerEmail, managerComments, submittedDate,
+        sociedad, currency, totalAmount, status, managerEmail, managerComments, submittedDate,
         approvedDate, rejectedDate, approverEmail, rejectedBy,
         csvGeneratedAt, csvGeneratedBy, sapDocNumber, sapSyncStatus,
         sapReferenceId, sapResponseMessage, sapSyncedAt, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         liquidation.id,
         liquidation.userId,
@@ -843,6 +862,7 @@ export const insertLiquidationFromBackend = async (liquidation: any): Promise<vo
         liquidation.createdDate,
         JSON.stringify(liquidation.expenseIds || []),
         liquidation.sociedad || '',
+        liquidation.currency || '',
         liquidation.totalAmount,
         liquidation.status,
         liquidation.managerEmail || null,

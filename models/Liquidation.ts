@@ -51,6 +51,7 @@ export interface CreateLiquidationDTO {
   userId: string;
   employeeName: string;
   sociedad: string;
+  currency: string;
   expenseIds: string[];
 }
 

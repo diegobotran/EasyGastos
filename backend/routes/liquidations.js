@@ -57,6 +57,7 @@ router.post('/',
     body('userId').isEmail().withMessage('userId debe ser un email válido'),
     body('employeeName').notEmpty().withMessage('employeeName es requerido'),
     body('sociedad').optional().trim(),
+    body('currency').optional().trim(),
     body('expenseIds').isArray({ min: 1 }).withMessage('Debe incluir al menos un gasto'),
     body('totalAmount').isNumeric().withMessage('totalAmount debe ser numérico'),
     body('status').optional().isIn(['draft', 'submitted', 'approved', 'rejected']),
@@ -90,7 +91,7 @@ router.post('/',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { id, userId, employeeName, sociedad, createdDate, expenseIds, totalAmount, status, sapDocNumber, sapSyncStatus, sapReferenceId, sapResponseMessage, sapSyncedAt, approverName, comments } = req.body;
+      const { id, userId, employeeName, sociedad, currency, createdDate, expenseIds, totalAmount, status, sapDocNumber, sapSyncStatus, sapReferenceId, sapResponseMessage, sapSyncedAt, approverName, comments } = req.body;
 
       console.log('✅ Validación exitosa para liquidación ID:', id);
       console.log('📋 ExpenseIds recibidos:', expenseIds);
@@ -166,6 +167,10 @@ router.post('/',
         return res.status(400).json({ error: 'La liquidación debe indicar una sociedad.' });
       }
 
+      if (!currency || !String(currency).trim()) {
+        return res.status(400).json({ error: 'La liquidación debe indicar una moneda.' });
+      }
+
       const conflictingSociedadExpenses = expensesToInclude.filter(exp => String(exp.sociedad || '').trim() !== String(sociedad).trim());
       if (conflictingSociedadExpenses.length > 0) {
         return res.status(400).json({
@@ -174,6 +179,19 @@ router.post('/',
             id: exp.id,
             description: exp.description,
             sociedad: exp.sociedad || ''
+          }))
+        });
+      }
+
+      const normalizedCurrency = String(currency).trim().toUpperCase();
+      const conflictingCurrencyExpenses = expensesToInclude.filter(exp => String(exp.currency || '').trim().toUpperCase() !== normalizedCurrency);
+      if (conflictingCurrencyExpenses.length > 0) {
+        return res.status(400).json({
+          error: 'Todos los gastos de una liquidación deben pertenecer a la misma moneda.',
+          conflictingExpenses: conflictingCurrencyExpenses.map(exp => ({
+            id: exp.id,
+            description: exp.description,
+            currency: exp.currency || ''
           }))
         });
       }
@@ -191,6 +209,7 @@ router.post('/',
         userId,
         employeeName,
         sociedad,
+        currency: normalizedCurrency,
         createdDate: createdDate || new Date().toISOString().split('T')[0],
         expenseIds,
         totalAmount,
@@ -633,16 +652,7 @@ router.get('/:id/sap-payload-preview', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Liquidación no encontrada' });
     }
 
-    if (!result.isValid) {
-      return res.status(422).json({
-        errors: {
-          headerErrors: result.errors.headerErrors,
-          itemErrors: result.errors.itemErrors,
-        },
-      });
-    }
-
-    return res.json(result.payload);
+    return res.json(result);
   } catch (error) {
     console.error('Error generando preview de payload SAP:', error);
     return res.status(500).json({ error: 'Error del servidor' });

@@ -19,6 +19,8 @@ import { createLiquidation } from '../../services/LiquidationService';
 import { formatDateToSpanish } from '../../utils/dateUtils';
 import { SOCIEDADES } from '../../constants/Sociedades';
 
+const LIQUIDATION_CURRENCIES = ['GTQ', 'USD', 'EUR'];
+
 // A dedicated component to render each item in the list for better organization.
 interface ExpenseListItemProps {
   item: Expense;
@@ -197,6 +199,7 @@ export default function ExpensesScreen() {
   const [liquidationMode, setLiquidationMode] = useState(false); // State for liquidation mode
   const [selectedExpenseIds, setSelectedExpenseIds] = useState<string[]>([]); // Selected expenses for liquidation
   const [selectedSociedad, setSelectedSociedad] = useState('');
+  const [selectedCurrency, setSelectedCurrency] = useState('');
   const router = useRouter();
 
   const filteredExpenses = expenses.filter(expense => {
@@ -210,6 +213,9 @@ export default function ExpensesScreen() {
         return false;
       }
       if (liquidationMode && selectedSociedad && expense.sociedad !== selectedSociedad) {
+        return false;
+      }
+      if (liquidationMode && selectedCurrency && expense.currency !== selectedCurrency) {
         return false;
       }
       return true;
@@ -254,6 +260,9 @@ export default function ExpensesScreen() {
     if (liquidationMode && selectedSociedad && expense.sociedad !== selectedSociedad) {
       return false;
     }
+    if (liquidationMode && selectedCurrency && expense.currency !== selectedCurrency) {
+      return false;
+    }
     
     return matchesSearch;
   });
@@ -273,6 +282,9 @@ export default function ExpensesScreen() {
 
     setLiquidationMode(!liquidationMode);
     setSelectedExpenseIds([]); // Limpiar selección al cambiar de modo
+    if (liquidationMode) {
+      setSelectedCurrency('');
+    }
   };
 
   const handleToggleExpenseSelection = (expenseId: string) => {
@@ -303,18 +315,25 @@ export default function ExpensesScreen() {
         return;
       }
 
+      if (!selectedCurrency) {
+        Alert.alert('Error', 'Debe seleccionar la moneda de la liquidaci?n');
+        return;
+      }
+
       console.log('🚀 Creando liquidación con', selectedExpenseIds.length, 'gastos');
 
       const liquidation = await createLiquidation({
         userId: user.email,
         employeeName: `${user.firstName} ${user.lastName}`.trim() || user.email,
         sociedad: selectedSociedad,
+        currency: selectedCurrency,
         expenseIds: selectedExpenseIds
       });
 
       // Limpiar inmediatamente
       setLiquidationMode(false);
       setSelectedExpenseIds([]);
+      setSelectedCurrency('');
 
       // Recargar gastos UNA SOLA VEZ para reflejar cambios de estado
       if (loadExpenses) {
@@ -323,7 +342,7 @@ export default function ExpensesScreen() {
 
       Alert.alert(
         '✅ Liquidación Creada',
-        `Se creó la liquidación con ${selectedExpenseIds.length} gastos por Q${liquidation.totalAmount.toFixed(2)}\n\n💡 Puedes verla ahora o ir a la pestaña "Liquidaciones" cuando desees.`,
+        `Se creó la liquidación con ${selectedExpenseIds.length} gastos por ${liquidation.currency || selectedCurrency} ${liquidation.totalAmount.toFixed(2)}\n\n💡 Puedes verla ahora o ir a la pestaña "Liquidaciones" cuando desees.`,
         [
           {
             text: 'Ver Ahora',
@@ -423,22 +442,39 @@ export default function ExpensesScreen() {
               {selectedExpenseIds.length} gastos seleccionados
             </Text>
           </View>
-          <View style={styles.liquidationSociedadPicker}>
-            <Picker
-              selectedValue={selectedSociedad}
-              onValueChange={(value) => {
-                setSelectedSociedad(value);
-                setSelectedExpenseIds([]);
-              }}
-              style={styles.liquidationPicker}
-            >
-              <Picker.Item label="Seleccionar sociedad" value="" />
-              {SOCIEDADES.map((sociedad) => (
-                <Picker.Item key={sociedad.code} label={sociedad.label} value={sociedad.code} />
-              ))}
-            </Picker>
+          <View style={styles.liquidationSelectorsRow}>
+            <View style={styles.liquidationSociedadPicker}>
+              <Picker
+                selectedValue={selectedSociedad}
+                onValueChange={(value) => {
+                  setSelectedSociedad(value);
+                  setSelectedExpenseIds([]);
+                }}
+                style={styles.liquidationPicker}
+              >
+                <Picker.Item label="Seleccionar sociedad" value="" />
+                {SOCIEDADES.map((sociedad) => (
+                  <Picker.Item key={sociedad.code} label={sociedad.label} value={sociedad.code} />
+                ))}
+              </Picker>
+            </View>
+            <View style={styles.liquidationCurrencyPicker}>
+              <Picker
+                selectedValue={selectedCurrency}
+                onValueChange={(value) => {
+                  setSelectedCurrency(value);
+                  setSelectedExpenseIds([]);
+                }}
+                style={styles.liquidationPicker}
+              >
+                <Picker.Item label="Moneda" value="" />
+                {LIQUIDATION_CURRENCIES.map((currency) => (
+                  <Picker.Item key={currency} label={currency} value={currency} />
+                ))}
+              </Picker>
+            </View>
           </View>
-          {selectedExpenseIds.length > 0 && (
+          {selectedExpenseIds.length > 0 && selectedSociedad && selectedCurrency && (
             <TouchableOpacity 
               style={styles.createLiquidationButton}
               onPress={handleCreateLiquidation}
@@ -560,9 +596,7 @@ const styles = StyleSheet.create({
     color: 'gray',
   },
   liquidationBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 12,
     padding: 15,
     backgroundColor: '#dbeafe',
     borderBottomWidth: 1,
@@ -578,13 +612,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1e40af',
   },
+  liquidationSelectorsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
   createLiquidationButton: {
     flexDirection: 'row',
     backgroundColor: '#2563eb',
-    paddingVertical: 8,
+    paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
   },
   createLiquidationButtonText: {
@@ -593,7 +632,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   liquidationSociedadPicker: {
-    minWidth: 160,
+    flex: 1,
+    backgroundColor: 'white',
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+  },
+  liquidationCurrencyPicker: {
+    width: 132,
     backgroundColor: 'white',
     borderRadius: 8,
     overflow: 'hidden',

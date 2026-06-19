@@ -35,6 +35,7 @@ export default function LiquidationDetailScreen() {
   const [showSapPreviewModal, setShowSapPreviewModal] = useState(false);
   const [sapPreviewJson, setSapPreviewJson] = useState('');
   const [sapPreviewError, setSapPreviewError] = useState('');
+  const [sapPreviewData, setSapPreviewData] = useState<any | null>(null);
   const [isLoadingSapPreview, setIsLoadingSapPreview] = useState(false);
   const [isSendingToSAP, setIsSendingToSAP] = useState(false);
 
@@ -78,7 +79,7 @@ export default function LiquidationDetailScreen() {
       
       // Si la liquidación puede editarse, cargar gastos disponibles
       if (canEditLiquidation(liq.status)) {
-        await loadAvailableExpenses(user?.email || '', liq.expenseIds, liq.sociedad || '');
+        await loadAvailableExpenses(user?.email || '', liq.expenseIds, liq.sociedad || '', liq.currency || '');
       }
     } catch (error) {
       console.error('❌ Error cargando liquidación:', error);
@@ -88,7 +89,7 @@ export default function LiquidationDetailScreen() {
     }
   };
 
-  const loadAvailableExpenses = async (userEmail: string, excludeIds: string[], liquidationSociedad: string) => {
+  const loadAvailableExpenses = async (userEmail: string, excludeIds: string[], liquidationSociedad: string, liquidationCurrency: string) => {
     try {
       const { getExpenses } = require('../services/ExpenseService');
       const allExpenses = await getExpenses(userEmail);
@@ -98,6 +99,7 @@ export default function LiquidationDetailScreen() {
         exp.expenseStatus === 'draft' &&
         exp.satStatus === 'VALIDADO_SAT' &&
         exp.sociedad === liquidationSociedad &&
+        exp.currency === liquidationCurrency &&
         !excludeIds.includes(exp.id)
       );
       
@@ -156,81 +158,166 @@ export default function LiquidationDetailScreen() {
     }
   };
 
+  const fetchSapPreviewData = async (liquidationId: string) => {
+    const token = await resolveBackendToken();
+    const { url: backendUrl } = await BackendSyncService.getBackendConfig();
+    const requestUrl = `${backendUrl}/api/liquidations/${liquidationId}/sap-payload-preview`;
+
+    const response = await fetch(requestUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const responseText = await response.text();
+    const parsedPayload = responseText ? JSON.parse(responseText) : null;
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error(
+          parsedPayload?.error === 'Liquidaci?n no encontrada'
+            ? 'La liquidaci?n no existe en el backend para construir el preview SAP'
+            : `El backend no expone el endpoint de preview SAP (${requestUrl})`
+        );
+      }
+
+      throw new Error(parsedPayload?.error || 'No se pudo obtener el preview SAP');
+    }
+
+    return parsedPayload;
+  };
+
+  const buildMissingFieldsMessage = (previewData: any) => {
+    const summary = previewData?.summary;
+    const missingRequired = Array.isArray(summary?.missingRequired) ? summary.missingRequired : [];
+    const missingOptional = Array.isArray(summary?.missingOptional) ? summary.missingOptional : [];
+    const emptyByDesign = Array.isArray(summary?.emptyByDesign) ? summary.emptyByDesign : [];
+
+    const requiredLines = missingRequired.map((field: any) =>
+      `- ${field.section === 'expense' ? `Gasto ${field.expenseId}: ` : ''}${field.label}`
+    );
+    const optionalLines = missingOptional.map((field: any) =>
+      `- ${field.section === 'expense' ? `Gasto ${field.expenseId}: ` : ''}${field.label}`
+    );
+
+    const parts = [
+      `Total: ${liquidation?.currency || 'GTQ'} ${liquidation?.totalAmount.toFixed(2)}`,
+      `Gastos: ${expenses.length}`,
+    ];
+
+    if (requiredLines.length > 0) {
+      parts.push(`\nFaltan campos requeridos:\n${requiredLines.join('\n')}`);
+    }
+
+    if (optionalLines.length > 0) {
+      parts.push(`\nCampos opcionales sin valor:\n${optionalLines.join('\n')}`);
+    }
+
+    if (emptyByDesign.length > 0) {
+      parts.push(`\nCampos vac?os por dise?o: ${emptyByDesign.map((field: any) => field.field).filter((value: string, index: number, self: string[]) => self.indexOf(value) === index).join(', ' )}`);
+    }
+
+    if (requiredLines.length > 0 || optionalLines.length > 0) {
+      parts.push('\n?Desea enviarla de todos modos a SAP?');
+    } else {
+      parts.push('\nEl payload SAP qued? completo. ?Desea enviarlo?');
+    }
+
+    return parts.join('\n');
+  };
+
+  const executeSendToSAP = async () => {
+    if (!liquidation) {
+      return;
+    }
+
+    try {
+      setIsSendingToSAP(true);
+
+      const isConnected = await BackendSyncService.checkConnection();
+      if (!isConnected) {
+        throw new Error('El env?o a SAP requiere conexi?n activa con el backend');
+      }
+
+      const token = await resolveBackendToken();
+      const { url: backendUrl } = await BackendSyncService.getBackendConfig();
+      const requestUrl = `${backendUrl}/api/liquidations/${liquidation.id}/send-to-sap`;
+
+      const response = await fetch(requestUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const responseText = await response.text();
+      const parsed = responseText ? JSON.parse(responseText) : null;
+
+      if (parsed?.liquidation) {
+        await insertLiquidationFromBackend(parsed.liquidation);
+        await updateLiquidationSAPSyncDataFromServer(parsed.liquidation.id, {
+          sapDocNumber: parsed.liquidation.sapDocNumber,
+          sapSyncStatus: parsed.liquidation.sapSyncStatus,
+          sapReferenceId: parsed.liquidation.sapReferenceId,
+          sapResponseMessage: parsed.liquidation.sapResponseMessage,
+          sapSyncedAt: parsed.liquidation.sapSyncedAt,
+        });
+      }
+
+      if (response.ok) {
+        await updateExpenseStatusesFromServer(liquidation.expenseIds, 'CONTABILIZADO');
+        await loadLiquidationData();
+
+        Alert.alert(
+          'Enviado a SAP',
+          `La liquidaci?n fue contabilizada correctamente.\n\nDocumento SAP: ${parsed?.sapResult?.sapDocNumber || 'N/A'}\nReferencia: ${parsed?.sapResult?.sapReferenceId || 'N/A'}`
+        );
+        return;
+      }
+
+      if (response.status === 422) {
+        await updateExpenseStatusesFromServer(liquidation.expenseIds, 'ERROR_SAP');
+        await loadLiquidationData();
+        throw new Error(parsed?.sapResult?.sapResponseMessage || parsed?.error || 'SAP devolvi? errores al contabilizar la liquidaci?n');
+      }
+
+      throw new Error(parsed?.error || 'No se pudo enviar la liquidaci?n a SAP');
+    } catch (error) {
+      console.error('? Error enviando liquidaci?n a SAP:', error);
+      Alert.alert('Error SAP', (error as Error).message || 'No se pudo enviar la liquidaci?n a SAP');
+    } finally {
+      setIsSendingToSAP(false);
+    }
+  };
+
   const handleSendToSAP = async () => {
     if (!liquidation) {
       return;
     }
 
-    Alert.alert(
-      'Enviar a SAP',
-      `Se enviará la liquidación aprobada a SAP por conexión en línea.\n\nTotal: Q${liquidation.totalAmount.toFixed(2)}\nGastos: ${expenses.length}`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: liquidation.sapSyncStatus === 'ERROR' ? 'Reintentar' : 'Enviar',
-          onPress: async () => {
-            try {
-              setIsSendingToSAP(true);
+    try {
+      const previewData = await fetchSapPreviewData(liquidation.id);
+      const confirmationMessage = buildMissingFieldsMessage(previewData);
 
-              const isConnected = await BackendSyncService.checkConnection();
-              if (!isConnected) {
-                throw new Error('El envío a SAP requiere conexión activa con el backend');
-              }
-
-              const token = await resolveBackendToken();
-              const { url: backendUrl } = await BackendSyncService.getBackendConfig();
-              const requestUrl = `${backendUrl}/api/liquidations/${liquidation.id}/send-to-sap`;
-
-              const response = await fetch(requestUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${token}`,
-                },
-              });
-
-              const responseText = await response.text();
-              const parsed = responseText ? JSON.parse(responseText) : null;
-
-              if (parsed?.liquidation) {
-                await insertLiquidationFromBackend(parsed.liquidation);
-                await updateLiquidationSAPSyncDataFromServer(parsed.liquidation.id, {
-                  sapDocNumber: parsed.liquidation.sapDocNumber,
-                  sapSyncStatus: parsed.liquidation.sapSyncStatus,
-                  sapReferenceId: parsed.liquidation.sapReferenceId,
-                  sapResponseMessage: parsed.liquidation.sapResponseMessage,
-                  sapSyncedAt: parsed.liquidation.sapSyncedAt,
-                });
-              }
-
-              if (response.ok) {
-                await updateExpenseStatusesFromServer(liquidation.expenseIds, 'CONTABILIZADO');
-                await loadLiquidationData();
-
-                Alert.alert(
-                  'Enviado a SAP',
-                  `La liquidación fue contabilizada correctamente.\n\nDocumento SAP: ${parsed?.sapResult?.sapDocNumber || 'N/A'}\nReferencia: ${parsed?.sapResult?.sapReferenceId || 'N/A'}`
-                );
-                return;
-              }
-
-              if (response.status === 422) {
-                await updateExpenseStatusesFromServer(liquidation.expenseIds, 'ERROR_SAP');
-                await loadLiquidationData();
-                throw new Error(parsed?.sapResult?.sapResponseMessage || parsed?.error || 'SAP devolvió errores al contabilizar la liquidación');
-              }
-
-              throw new Error(parsed?.error || 'No se pudo enviar la liquidación a SAP');
-            } catch (error) {
-              console.error('❌ Error enviando liquidación a SAP:', error);
-              Alert.alert('Error SAP', (error as Error).message || 'No se pudo enviar la liquidación a SAP');
-            } finally {
-              setIsSendingToSAP(false);
+      Alert.alert(
+        'Enviar a SAP',
+        confirmationMessage,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: liquidation.sapSyncStatus === 'ERROR' ? 'Reintentar' : 'Enviar',
+            onPress: () => {
+              void executeSendToSAP();
             }
           }
-        }
-      ]
-    );
+        ]
+      );
+    } catch (error) {
+      console.error('? Error preparando env?o SAP:', error);
+      Alert.alert('Error SAP', (error as Error).message || 'No se pudo preparar el env?o a SAP');
+    }
   };
 
   const handleSubmitToManager = async () => {
@@ -491,21 +578,6 @@ Gastos: ${expenses.length}`;
     );
   };
 
-  const buildSapPreviewErrorMessage = (payload: any) => {
-    const headerErrors = Array.isArray(payload?.errors?.headerErrors)
-      ? payload.errors.headerErrors.map((error: any) => `• ${error.field}: ${error.message}`)
-      : [];
-
-    const itemErrors = Array.isArray(payload?.errors?.itemErrors)
-      ? payload.errors.itemErrors.flatMap((item: any) => {
-          const errors = Array.isArray(item?.errors) ? item.errors : [];
-          return errors.map((error: any) => `• Gasto ${item.expenseId}: ${error.field} - ${error.message}`);
-        })
-      : [];
-
-    return [...headerErrors, ...itemErrors].join('\n');
-  };
-
   const handleViewSapPreview = async () => {
     if (!liquidation) {
       return;
@@ -515,47 +587,14 @@ Gastos: ${expenses.length}`;
       setIsLoadingSapPreview(true);
       setSapPreviewError('');
       setSapPreviewJson('');
+      setSapPreviewData(null);
       setShowSapPreviewModal(true);
 
-      const token = await AuthService.getToken();
-      if (!token) {
-        throw new Error('No se encontró token de autenticación para consultar el preview SAP');
-      }
-
-      const { url: backendUrl } = await BackendSyncService.getBackendConfig();
-      const requestUrl = `${backendUrl}/api/liquidations/${liquidation.id}/sap-payload-preview`;
-
-      const response = await fetch(requestUrl, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      const responseText = await response.text();
-      const parsedPayload = responseText ? JSON.parse(responseText) : null;
-
-      if (response.ok) {
-        setSapPreviewJson(JSON.stringify(parsedPayload, null, 2));
-        return;
-      }
-
-      if (response.status === 422) {
-        setSapPreviewError(buildSapPreviewErrorMessage(parsedPayload) || 'El payload SAP no es válido para esta liquidación');
-        return;
-      }
-
-      if (response.status === 404) {
-        throw new Error(
-          parsedPayload?.error === 'Liquidación no encontrada'
-            ? 'La liquidación no existe en el backend para construir el preview SAP'
-            : `El backend no expone el endpoint de preview SAP (${requestUrl})`
-        );
-      }
-
-      throw new Error(parsedPayload?.error || 'No se pudo obtener el preview SAP');
+      const previewData = await fetchSapPreviewData(liquidation.id);
+      setSapPreviewData(previewData);
+      setSapPreviewJson(JSON.stringify(previewData?.payload || {}, null, 2));
     } catch (error) {
-      console.error('❌ Error obteniendo preview SAP:', error);
+      console.error('? Error obteniendo preview SAP:', error);
       setSapPreviewError((error as Error).message || 'Error desconocido obteniendo preview SAP');
     } finally {
       setIsLoadingSapPreview(false);
@@ -1023,6 +1062,37 @@ Gastos: ${expenses.length}`;
                 </ScrollView>
               ) : (
                 <ScrollView style={styles.sapPreviewScroll} contentContainerStyle={styles.sapPreviewScrollContent}>
+                  {sapPreviewData?.summary && (
+                    <View style={styles.sapSummaryCard}>
+                      <Text style={styles.sapSummaryTitle}>Resumen de datos SAP</Text>
+                      <Text style={styles.sapSummarySubtitle}>
+                        Faltantes requeridos: {sapPreviewData.summary.missingRequired?.length || 0} | Opcionales: {sapPreviewData.summary.missingOptional?.length || 0}
+                      </Text>
+
+                      {Array.isArray(sapPreviewData.summary.missingRequired) && sapPreviewData.summary.missingRequired.length > 0 && (
+                        <View style={styles.sapSummarySection}>
+                          <Text style={styles.sapSummarySectionTitle}>Faltantes requeridos</Text>
+                          {sapPreviewData.summary.missingRequired.map((field: any, index: number) => (
+                            <Text key={`required-${index}`} style={styles.sapSummaryBullet}>
+                              {'\u2022'} {field.section === 'expense' ? `Gasto ${field.expenseId}: ` : ''}{field.label}
+                            </Text>
+                          ))}
+                        </View>
+                      )}
+
+                      {Array.isArray(sapPreviewData.summary.emptyByDesign) && sapPreviewData.summary.emptyByDesign.length > 0 && (
+                        <View style={styles.sapSummarySection}>
+                          <Text style={styles.sapSummarySectionTitle}>Vac?os por dise?o</Text>
+                          <Text style={styles.sapSummaryBullet}>
+                            {sapPreviewData.summary.emptyByDesign
+                              .map((field: any) => field.field)
+                              .filter((value: string, index: number, self: string[]) => self.indexOf(value) === index)
+                              .join(', ')}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
                   <Text style={styles.sapPreviewJson}>{sapPreviewJson}</Text>
                 </ScrollView>
               )}
@@ -1634,6 +1704,38 @@ const styles = StyleSheet.create({
   },
   sapPreviewScrollContent: {
     padding: 20,
+  },
+  sapSummaryCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    gap: 10,
+  },
+  sapSummaryTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  sapSummarySubtitle: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 18,
+  },
+  sapSummarySection: {
+    gap: 6,
+  },
+  sapSummarySectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  sapSummaryBullet: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
   },
   sapPreviewJson: {
     fontFamily: 'monospace',

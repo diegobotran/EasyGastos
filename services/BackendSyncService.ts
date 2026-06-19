@@ -88,6 +88,7 @@ export class BackendSyncService {
     if (!liquidation.userId?.trim()) issues.push("userId");
     if (!liquidation.employeeName?.trim()) issues.push("employeeName");
     if (!liquidation.sociedad?.trim()) issues.push("sociedad");
+    if (!liquidation.currency?.trim()) issues.push("currency");
     if (!liquidation.createdDate?.trim()) issues.push("createdDate");
     if (!Array.isArray(liquidation.expenseIds) || liquidation.expenseIds.length === 0) issues.push("expenseIds");
     if (liquidation.totalAmount === null || liquidation.totalAmount === undefined || Number.isNaN(Number(liquidation.totalAmount))) issues.push("totalAmount");
@@ -127,6 +128,7 @@ export class BackendSyncService {
       userId: liquidation.userId,
       employeeName: liquidation.employeeName,
       sociedad: liquidation.sociedad,
+      currency: liquidation.currency,
       createdDate: liquidation.createdDate,
       expenseIds: liquidation.expenseIds,
       totalAmount: liquidation.totalAmount,
@@ -2214,6 +2216,7 @@ export class BackendSyncService {
               userId: liquidation.userId || liquidation.employeeEmail,
               employeeName: liquidation.employeeName,
               sociedad: liquidation.sociedad || '',
+              currency: liquidation.currency || '',
               expenseIds: liquidation.expenseIds || [],
             };
 
