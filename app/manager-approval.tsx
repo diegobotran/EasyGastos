@@ -45,6 +45,7 @@ export default function ManagerApprovalScreen() {
   const [backendUrl, setBackendUrl] = useState<string>('');
   const [approvalAction, setApprovalAction] = useState<boolean>(true);
   const [comments, setComments] = useState('');
+  const [isForceSyncing, setIsForceSyncing] = useState(false);
 
   // Cargar URL del backend al iniciar
   const loadBackendUrl = async () => {
@@ -257,6 +258,58 @@ export default function ManagerApprovalScreen() {
     loadPendingLiquidations();
   }, [user?.email]);
 
+  const handleForceRecovery = async () => {
+    if (!user?.email) {
+      Alert.alert('Error', 'No hay usuario activo para recuperar aprobaciones.');
+      return;
+    }
+
+    if (!pin) {
+      Alert.alert('Error', 'No hay PIN disponible. Desbloquee la app primero.');
+      return;
+    }
+
+    try {
+      setIsForceSyncing(true);
+      console.log('🔄 ManagerApproval: Forzando recuperación de aprobaciones pendientes...');
+
+      const loginResult = await BackendSyncService.loginAndGetToken(user.email, pin);
+      if (!loginResult.success || !loginResult.token) {
+        throw new Error(loginResult.error || 'No se pudo autenticar la sesión del manager');
+      }
+
+      const pendingLiquidationsResult =
+        await BackendSyncService.downloadPendingLiquidationsForManager(
+          user.email,
+          loginResult.token,
+        );
+
+      const pendingExpensesResult =
+        await BackendSyncService.downloadPendingExpensesForManager(
+          user.email,
+          loginResult.token,
+        );
+
+      await loadPendingLiquidations();
+
+      const liquidationCount = pendingLiquidationsResult.count || 0;
+      const expenseCount = pendingExpensesResult.count || 0;
+
+      Alert.alert(
+        'Recuperación completada',
+        `Liquidaciones recuperadas: ${liquidationCount}\nGastos recuperados: ${expenseCount}`,
+      );
+    } catch (error) {
+      console.error('❌ ManagerApproval: Error forzando recuperación:', error);
+      Alert.alert(
+        'Error',
+        (error as Error).message || 'No se pudo recuperar las aprobaciones pendientes.',
+      );
+    } finally {
+      setIsForceSyncing(false);
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
       // Limpiar badge de notificaciones cuando el manager abre la pantalla
@@ -349,6 +402,25 @@ export default function ManagerApprovalScreen() {
       {summary.departmentName && (
         <Text style={styles.departmentName}>Departamento: {summary.departmentName}</Text>
       )}
+
+      <TouchableOpacity
+        style={[styles.forceSyncButton, isForceSyncing && styles.forceSyncButtonDisabled]}
+        onPress={handleForceRecovery}
+        disabled={isForceSyncing}
+      >
+        {isForceSyncing ? (
+          <ActivityIndicator size="small" color="white" />
+        ) : (
+          <Ionicons name="cloud-download-outline" size={18} color="white" />
+        )}
+        <Text style={styles.forceSyncButtonText}>
+          {isForceSyncing ? 'Recuperando...' : 'Recuperar Solicitudes'}
+        </Text>
+      </TouchableOpacity>
+
+      <Text style={styles.syncHintText}>
+        La recuperación automática sigue ejecutándose periódicamente en segundo plano.
+      </Text>
     </View>
   );
 
@@ -605,6 +677,31 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  forceSyncButton: {
+    marginTop: 16,
+    backgroundColor: '#1d4ed8',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  forceSyncButtonDisabled: {
+    opacity: 0.7,
+  },
+  forceSyncButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  syncHintText: {
+    marginTop: 10,
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'center',
   },
   expenseCard: {
     backgroundColor: 'white',

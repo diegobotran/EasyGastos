@@ -575,13 +575,16 @@ export const updateLiquidationStatus = async (
     // Actualizar el estado de los gastos según la decisión del jefe
     if (status === 'approved') {
       // Si se aprueba → gastos pasan a 'approved'
-      await updateExpensesLiquidationStatus(liquidation.expenseIds, 'approved');
+      await updateExpensesLiquidationStatus(liquidation.expenseIds, 'approved', !fromSync);
       console.log(`✅ ${liquidation.expenseIds.length} gasto(s) marcados como 'approved'`);
     } else if (status === 'rejected') {
       // Si se rechaza → gastos vuelven a 'draft' y se limpia liquidationId
-      await updateExpensesLiquidationStatus(liquidation.expenseIds, 'draft');
+      await updateExpensesLiquidationStatus(liquidation.expenseIds, 'draft', !fromSync);
       for (const expenseId of liquidation.expenseIds) {
-        await db.runAsync(`UPDATE expenses SET liquidationId = NULL WHERE id = ?`, [expenseId]);
+        await db.runAsync(
+          `UPDATE expenses SET liquidationId = NULL, needsSync = ? WHERE id = ?`,
+          [fromSync ? 0 : 1, expenseId]
+        );
       }
       console.log(`✅ ${liquidation.expenseIds.length} gasto(s) regresados a 'draft'`);
     }

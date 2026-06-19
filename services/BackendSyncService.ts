@@ -814,6 +814,7 @@ export class BackendSyncService {
   static async syncExpenses(
     userEmail: string,
     authToken: string,
+    expenseIds?: string[],
   ): Promise<{ success: boolean; error?: string }> {
     console.log(
       "💰 BackendSync: ============ INICIO SINCRONIZACIÓN GASTOS ============",
@@ -826,7 +827,7 @@ export class BackendSyncService {
       console.log("🌐 BackendSync: URL del backend obtenida:", backendUrl);
 
       const localExpenses =
-        await ExpenseService.getExpensesNeedingSync(userEmail);
+        await ExpenseService.getExpensesNeedingSync(userEmail, expenseIds);
       console.log(
         "💰 BackendSync: Gastos que necesitan sincronización:",
         localExpenses.length,
@@ -845,6 +846,7 @@ export class BackendSyncService {
 
       let successCount = 0;
       let errorCount = 0;
+      const failedExpenses: string[] = [];
 
       for (const expense of localExpenses) {
         console.log("📤 BackendSync: ========== PROCESANDO GASTO ==========");
@@ -1006,12 +1008,20 @@ export class BackendSyncService {
                 } else {
                   const patchError = await patchResponse.text();
                   console.error("❌ BackendSync: Error en PATCH:", patchError);
+                  failedExpenses.push(
+                    `${expense.id}: PATCH ${patchResponse.status}${patchError ? ` - ${patchError}` : ""}`,
+                  );
                   errorCount++;
                 }
               } catch (patchError) {
                 console.error(
                   "❌ BackendSync: Error ejecutando PATCH:",
                   patchError,
+                );
+                failedExpenses.push(
+                  `${expense.id}: PATCH exception - ${
+                    patchError instanceof Error ? patchError.message : String(patchError)
+                  }`,
                 );
                 errorCount++;
               }
@@ -1020,6 +1030,7 @@ export class BackendSyncService {
                 "❌ BackendSync: Conflicto funcional de gasto, no se puede sincronizar automáticamente:",
                 conflictMessage,
               );
+              failedExpenses.push(`${expense.id}: 409 - ${conflictMessage}`);
               errorCount++;
             }
           } else {
@@ -1027,6 +1038,9 @@ export class BackendSyncService {
             console.log("❌ BackendSync: ERROR DEL SERVIDOR");
             console.log("❌ BackendSync: Status:", response.status);
             console.log("❌ BackendSync: Error texto:", errorText);
+            failedExpenses.push(
+              `${expense.id}: ${response.status}${errorText ? ` - ${errorText}` : ""}`,
+            );
             errorCount++;
           }
         } catch (fetchError) {
@@ -1034,6 +1048,11 @@ export class BackendSyncService {
             "❌ BackendSync: Error en fetch para gasto:",
             expense.description,
             fetchError,
+          );
+          failedExpenses.push(
+            `${expense.id}: fetch - ${
+              fetchError instanceof Error ? fetchError.message : String(fetchError)
+            }`,
           );
           errorCount++;
         }
@@ -1078,10 +1097,15 @@ export class BackendSyncService {
       } else if (successCount > 0 && errorCount > 0) {
         return {
           success: true,
-          error: `${errorCount} gastos no se pudieron sincronizar`,
+          error: `${errorCount} gastos no se pudieron sincronizar: ${failedExpenses.join(" | ")}`,
         };
       } else {
-        return { success: false, error: "No se pudo sincronizar ningún gasto" };
+        return {
+          success: false,
+          error: failedExpenses.length > 0
+            ? `No se pudo sincronizar ningún gasto: ${failedExpenses.join(" | ")}`
+            : "No se pudo sincronizar ningún gasto",
+        };
       }
     } catch (error) {
       console.error(

@@ -753,17 +753,26 @@ export const voidExpense = async (id: string, userEmail: string, reason: string)
 /**
  * Obtiene gastos que necesitan ser sincronizados con el backend
  */
-export const getExpensesNeedingSync = async (userEmail: string): Promise<Expense[]> => {
+export const getExpensesNeedingSync = async (
+  userEmail: string,
+  expenseIds?: string[]
+): Promise<Expense[]> => {
   if (Platform.OS === 'web') {
     const expenses = await getExpenses(userEmail);
-    return expenses.filter(expense => expense.needsSync);
+    return expenses.filter(expense =>
+      expense.needsSync && (!expenseIds || expenseIds.includes(expense.id))
+    );
   } else {
     if (!db) throw new Error("La base de datos no está inicializada.");
-    
-    const rows = await db.getAllAsync<any>(
-      'SELECT * FROM expenses WHERE userEmail = ? AND needsSync = 1',
-      [userEmail]
-    );
+
+    const hasExpenseFilter = Array.isArray(expenseIds) && expenseIds.length > 0;
+    const placeholders = hasExpenseFilter ? expenseIds.map(() => '?').join(',') : '';
+    const query = hasExpenseFilter
+      ? `SELECT * FROM expenses WHERE userEmail = ? AND needsSync = 1 AND id IN (${placeholders})`
+      : 'SELECT * FROM expenses WHERE userEmail = ? AND needsSync = 1';
+    const params = hasExpenseFilter ? [userEmail, ...expenseIds] : [userEmail];
+
+    const rows = await db.getAllAsync<any>(query, params);
     
     const expenses: Expense[] = rows.map(row => ({
       id: row.id,
@@ -1115,8 +1124,13 @@ export const validateExpenseForLiquidation = async (
  */
 export const updateExpensesLiquidationStatus = async (
   expenseIds: string[], 
-  newExpenseStatus: 'draft' | 'in_liquidation' | 'approved'
+  newExpenseStatus: 'draft' | 'in_liquidation' | 'approved',
+  markNeedsSync: boolean = true
 ): Promise<void> => {
+  if (expenseIds.length === 0) {
+    return;
+  }
+
   if (Platform.OS === 'web') {
     // Para web, necesitaríamos iterar sobre todos los usuarios (no implementado completamente)
     console.warn('updateExpenseStatus en web no está completamente implementado');
@@ -1126,10 +1140,10 @@ export const updateExpensesLiquidationStatus = async (
     
     const placeholders = expenseIds.map(() => '?').join(',');
     await db.runAsync(
-      `UPDATE expenses SET expenseStatus = ?, needsSync = 1 WHERE id IN (${placeholders})`,
-      [newExpenseStatus, ...expenseIds]
+      `UPDATE expenses SET expenseStatus = ?, needsSync = ? WHERE id IN (${placeholders})`,
+      [newExpenseStatus, markNeedsSync ? 1 : 0, ...expenseIds]
     );
     
-    console.log(`✅ ${expenseIds.length} gasto(s) actualizados a estado: ${newExpenseStatus}`);
+    console.log(`✅ ${expenseIds.length} gasto(s) actualizados a estado: ${newExpenseStatus} (needsSync=${markNeedsSync ? 1 : 0})`);
   }
 };

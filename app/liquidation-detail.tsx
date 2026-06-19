@@ -276,7 +276,11 @@ Gastos: ${expenses.length}`;
               }
 
               const token = await resolveBackendToken();
-              const expenseSyncResult = await BackendSyncService.syncExpenses(userEmail, token);
+              const expenseSyncResult = await BackendSyncService.syncExpenses(
+                userEmail,
+                token,
+                liquidation.expenseIds
+              );
               if (!expenseSyncResult.success) {
                 throw new Error(
                   expenseSyncResult.error ||

@@ -111,37 +111,6 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* Alerta para MANAGERS: Liquidaciones pendientes de aprobar */}
-      {userRole === 'Jefe' && pendingLiquidationsForManager > 0 && (
-        <View style={styles.section}>
-          <TouchableOpacity 
-            style={styles.managerAlertCard}
-            onPress={() => router.push('/manager-approval')}
-          >
-            <View style={styles.managerAlertIcon}>
-              <Ionicons name="notifications" size={32} color="white" />
-              {pendingLiquidationsForManager > 0 && (
-                <View style={styles.managerAlertBadge}>
-                  <Text style={styles.managerAlertBadgeText}>
-                    {pendingLiquidationsForManager}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.managerAlertContent}>
-              <Text style={styles.managerAlertTitle}>
-                ¡Tienes liquidaciones pendientes!
-              </Text>
-              <Text style={styles.managerAlertSubtitle}>
-                {pendingLiquidationsForManager} liquidación{pendingLiquidationsForManager > 1 ? 'es' : ''} esperando tu aprobación
-              </Text>
-              <Text style={styles.managerAlertAction}>
-                Toca para revisar →
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-      )}
 
       {/* Sección: Mis Gastos */}
       <View style={styles.section}>
@@ -284,6 +253,34 @@ export default function DashboardScreen() {
             <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
           </TouchableOpacity>
         )}
+        {userRole === 'Jefe' && (
+          <TouchableOpacity
+            style={styles.managerPendingShortcut}
+            onPress={() => router.push('/manager-approval')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.managerPendingShortcutIcon}>
+              <Ionicons name="notifications-outline" size={18} color="#2563eb" />
+              {pendingLiquidationsForManager > 0 && (
+                <View style={styles.managerPendingShortcutBadge}>
+                  <Text style={styles.managerPendingShortcutBadgeText}>
+                    {pendingLiquidationsForManager}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.managerPendingShortcutInfo}>
+              <Text style={styles.managerPendingShortcutTitle}>
+                Ver Liquidaciones de Empleados
+              </Text>
+              <Text style={styles.managerPendingShortcutSubtitle}>
+                Consultar y recuperar solicitudes enviadas a aprobaci?n
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
+          </TouchableOpacity>
+        )}
+
       </View>
 
       {/* Acciones Rápidas */}
@@ -541,68 +538,58 @@ const styles = StyleSheet.create({
     color: '#3b82f6',
     marginTop: 2,
   },
-  
-  // Manager Alert Card (para notificaciones de aprobación)
-  managerAlertCard: {
-    backgroundColor: '#3b82f6',
-    borderRadius: 16,
-    padding: 20,
+  managerPendingShortcut: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-    shadowColor: '#3b82f6',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    gap: 12,
   },
-  managerAlertIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  managerPendingShortcutIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
   },
-  managerAlertBadge: {
+  managerPendingShortcutBadge: {
     position: 'absolute',
     top: -5,
     right: -5,
     backgroundColor: '#ef4444',
-    borderRadius: 12,
-    minWidth: 24,
-    height: 24,
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     borderWidth: 2,
     borderColor: 'white',
   },
-  managerAlertBadgeText: {
+  managerPendingShortcutBadgeText: {
     color: 'white',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '700',
   },
-  managerAlertContent: {
+  managerPendingShortcutInfo: {
     flex: 1,
   },
-  managerAlertTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: 'white',
-    marginBottom: 4,
-  },
-  managerAlertSubtitle: {
+  managerPendingShortcutTitle: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.9)',
-    marginBottom: 8,
-  },
-  managerAlertAction: {
-    fontSize: 13,
-    color: 'white',
     fontWeight: '600',
-    opacity: 0.9,
+    color: '#1e293b',
+    marginBottom: 2,
+  },
+  managerPendingShortcutSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
   },
   
   // Liquidation Stats
