@@ -276,6 +276,14 @@ Gastos: ${expenses.length}`;
               }
 
               const token = await resolveBackendToken();
+              const expenseSyncResult = await BackendSyncService.syncExpenses(userEmail, token);
+              if (!expenseSyncResult.success) {
+                throw new Error(
+                  expenseSyncResult.error ||
+                    'No se pudieron sincronizar los gastos antes de enviar la liquidación a aprobación'
+                );
+              }
+
               const syncResult = await BackendSyncService.syncLiquidations(userEmail, token);
               if (!syncResult.success) {
                 throw new Error(syncResult.error || 'No se pudo sincronizar la liquidación antes de enviarla a aprobación');

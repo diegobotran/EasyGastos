@@ -159,28 +159,43 @@ export const useDashboardViewModel = () => {
     try {
       const user = await AuthService.getLastLoggedInUser();
       if (user) {
-        // Para identificar managers, usaremos el department o lo verificaremos con el backend
-        // Por ahora, asumimos que todos son empleados y el backend dirá quién es manager
-        const isManager = user.department?.toLowerCase().includes('manager') || 
-                          user.department?.toLowerCase().includes('jefe');
-        setUserRole(isManager ? 'Jefe' : 'Empleado');
         setUserGreeting(`Hola, ${user.firstName} ${user.lastName}`);
-        console.log('✅ Dashboard: Saludo configurado para:', user.firstName, '- Rol:', isManager ? 'Jefe' : 'Empleado');
-        
-        // Si es manager, cargar contador de liquidaciones pendientes
-        if (isManager) {
-          const count = await getPendingLiquidationsCount();
-          setPendingLiquidationsForManager(count);
-          console.log('📊 Dashboard: Liquidaciones pendientes para manager:', count);
+
+        let isManager = false;
+
+        try {
+          if (!authTokenRef.current) {
+            const pin = await AuthService.getPIN();
+            if (pin) {
+              const loginResult = await BackendSyncService.loginAndGetToken(user.email, pin);
+              if (loginResult.success && loginResult.token) {
+                authTokenRef.current = loginResult.token;
+              }
+            }
+          }
+
+          if (authTokenRef.current) {
+            const managerCheck = await BackendSyncService.checkIfUserIsManager(
+              user.email,
+              authTokenRef.current,
+            );
+            isManager = managerCheck.isManager;
+            console.log(
+              '✅ Dashboard: Rol validado contra backend:',
+              isManager ? 'Jefe' : 'Empleado',
+              '- Empleados:',
+              managerCheck.employeeCount,
+            );
+          }
+        } catch (roleError) {
+          console.log('⚠️ Dashboard: No se pudo validar rol contra backend:', roleError);
         }
-        
-        // SIEMPRE cargar el contador (para managers reales que sincronicen desde el backend)
+
+        setUserRole(isManager ? 'Jefe' : 'Empleado');
+
         const count = await getPendingLiquidationsCount();
-        if (count > 0) {
-          setPendingLiquidationsForManager(count);
-          setUserRole('Jefe'); // Si tiene liquidaciones pendientes, es manager
-          console.log('📊 Dashboard: Manager detectado por liquidaciones pendientes:', count);
-        }
+        setPendingLiquidationsForManager(count);
+        console.log('📊 Dashboard: Liquidaciones pendientes para manager:', count);
       } else {
         setUserGreeting('Bienvenido, Usuario');
         setUserRole('Empleado');

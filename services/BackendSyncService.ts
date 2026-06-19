@@ -958,15 +958,33 @@ export class BackendSyncService {
           } else if (response.status === 409) {
             // Error 409 = Conflict, el gasto ya existe en el servidor
             const errorText = await response.text();
+            let parsedConflict: any = null;
+
+            try {
+              parsedConflict = JSON.parse(errorText);
+            } catch {
+              parsedConflict = null;
+            }
+
+            const conflictMessage =
+              parsedConflict?.error || errorText || "Conflicto no especificado";
+            const sameExpenseAlreadyExists =
+              conflictMessage.includes("Ya existe un gasto con ese ID") ||
+              parsedConflict?.duplicateExpenseId === expense.id;
+
             console.log(
               "⚠️ BackendSync: Gasto ya existe en el servidor (409 Conflict)",
             );
             console.log("⚠️ BackendSync: Detalles:", errorText);
+            console.log(
+              "⚠️ BackendSync: Conflicto interpretado:",
+              conflictMessage,
+            );
 
-            // Si el gasto está anulado o tiene cambios importantes, usar PATCH para actualizar
-            if (expense.expenseStatus === "voided" || expense.voidedAt) {
+            // Si el conflicto corresponde al mismo gasto existente en backend, usar PATCH
+            if (sameExpenseAlreadyExists) {
               console.log(
-                "🔄 BackendSync: Gasto anulado localmente, usando PATCH para actualizar...",
+                "🔄 BackendSync: Gasto existente en backend, usando PATCH para alinear cambios locales...",
               );
               try {
                 const patchUrl = `${backendUrl}/api/expenses/${expense.id}`;
@@ -998,13 +1016,11 @@ export class BackendSyncService {
                 errorCount++;
               }
             } else {
-              // Gasto ya existe y no está anulado, marcar como sincronizado
-              await ExpenseService.markExpenseAsSynced(expense.id);
-              console.log(
-                "✅ BackendSync: Gasto marcado como sincronizado (ya existía):",
-                expense.description,
+              console.error(
+                "❌ BackendSync: Conflicto funcional de gasto, no se puede sincronizar automáticamente:",
+                conflictMessage,
               );
-              successCount++;
+              errorCount++;
             }
           } else {
             const errorText = await response.text();
@@ -1205,27 +1221,44 @@ export class BackendSyncService {
           } else if (response.status === 400 || response.status === 409) {
             // Error 400/409 = Conflict, la liquidación ya existe en el servidor
             const errorText = await response.text();
+            let backendMessage = errorText;
+
+            try {
+              const parsedError = JSON.parse(errorText);
+              backendMessage =
+                parsedError?.error ||
+                (Array.isArray(parsedError?.errors)
+                  ? parsedError.errors
+                      .map((item: any) => item?.msg || item?.message || JSON.stringify(item))
+                      .filter(Boolean)
+                      .join(" | ")
+                  : errorText);
+            } catch {
+              backendMessage = errorText;
+            }
+
             console.log(
               "⚠️ BackendSync: ========== ERROR 400/409 DETECTADO ==========",
             );
             console.log("⚠️ BackendSync: Status:", response.status);
             console.log("⚠️ BackendSync: Error texto completo:", errorText);
+            console.log("⚠️ BackendSync: Mensaje interpretado:", backendMessage);
             console.log(
               '⚠️ BackendSync: Contiene "ya existe"?:',
-              errorText.includes("ya existe"),
+              backendMessage.includes("ya existe"),
             );
             console.log(
               '⚠️ BackendSync: Contiene "already exists"?:',
-              errorText.includes("already exists"),
+              backendMessage.includes("already exists"),
             );
             console.log("⚠️ BackendSync: Tipo de errorText:", typeof errorText);
             console.log("⚠️ BackendSync: Liquidación ID:", liquidation.id);
 
             // Si el error es "ya existe", intentar actualizar con PUT
             if (
-              errorText.includes("ya existe") ||
-              errorText.includes("already exists") ||
-              errorText.includes("Liquidación ya existe")
+              backendMessage.includes("ya existe") ||
+              backendMessage.includes("already exists") ||
+              backendMessage.includes("Liquidación ya existe")
             ) {
               console.log(
                 "🔄 BackendSync: Liquidación ya existe en servidor - Actualizando cambios locales...",
@@ -1281,7 +1314,7 @@ export class BackendSyncService {
                 "❌ BackendSync: Error de validación - NO SE SINCRONIZARÁ",
               );
               syncIssues.push(
-                `Liquidación ${liquidation.id}: el backend rechazó el payload (${response.status})`,
+                `Liquidación ${liquidation.id}: ${backendMessage || `el backend rechazó el payload (${response.status})`}`,
               );
               errorCount++;
             }
@@ -2062,6 +2095,8 @@ export class BackendSyncService {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
         },
       });
 
@@ -2211,6 +2246,8 @@ export class BackendSyncService {
         headers: {
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
         },
       });
 
@@ -2307,6 +2344,8 @@ export class BackendSyncService {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
         },
         signal: controller.signal,
       });

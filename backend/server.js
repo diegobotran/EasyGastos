@@ -29,6 +29,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const BIND_IP = process.env.BIND_IP || '0.0.0.0';
 
+// Las rutas operativas de la app móvil no deben usar validación HTTP por ETag/304.
+app.disable('etag');
+
+const disableApiCaching = (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+};
+
 // Middleware de seguridad
 app.use(helmet());
 
@@ -53,6 +63,10 @@ app.use(cors({
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Deshabilitar caché HTTP para endpoints JSON/operativos.
+app.use('/health', disableApiCaching);
+app.use('/api', disableApiCaching);
 
 // Logging
 app.use(morgan('combined'));

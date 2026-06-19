@@ -480,7 +480,10 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         throw new Error('El gasto debe conservar categoría, sociedad, centro, cuenta y orden CO válidos.');
     }
 
-    const normalizedExpense = normalizeSatValidationState(expense);
+    const normalizedExpense = {
+        ...normalizeSatValidationState(expense),
+        needsSync: true,
+    };
 
     if (Platform.OS === 'web') {
         let expenses = await getExpenses(userEmail);
@@ -494,7 +497,7 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         if (!db) throw new Error("La base de datos no está inicializada.");
         
         await db.runAsync(
-            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ? WHERE id = ? AND userEmail = ?',
+            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
             [
                 normalizedExpense.description, 
                 normalizedExpense.amount, 
@@ -781,6 +784,7 @@ export const getExpensesNeedingSync = async (userEmail: string): Promise<Expense
       notes: row.notes,
       noinvoice: row.noinvoice,
       serie: row.serie,
+      uuid: row.uuid || undefined,
       centro: row.centro,
       cuenta: row.cuenta,
       ordenco: row.ordenco,
@@ -1036,6 +1040,7 @@ export const getExpensesForApproval = async (managerEmail: string): Promise<Expe
       notes: row.notes,
       noinvoice: row.noinvoice,
       serie: row.serie,
+      uuid: row.uuid || undefined,
       centro: row.centro,
       cuenta: row.cuenta,
       ordenco: row.ordenco,
