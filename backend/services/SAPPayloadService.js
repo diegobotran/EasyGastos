@@ -8,8 +8,13 @@ const HKONT_LENGTH = 10;
 const KOSTL_LENGTH = 10;
 const AUFNR_LENGTH = 12;
 const LIFNR_LENGTH = 10;
-const ZNUMFAC_LENGTH = 11;
+const ZSERFAC_LENGTH = 15;
+const ZNUMFAC_LENGTH = 25;
+const STCD1_LENGTH = 16;
+const NAME1_LENGTH = 50;
+const SGTXT_LENGTH = 50;
 const BUKRS_LENGTH = 4;
+const XBLNR_SUFFIX_LENGTH = 5;
 
 const asTrimmedString = (value) => String(value ?? '').trim();
 
@@ -19,6 +24,15 @@ const padLeft = (value, length) => {
   }
 
   return String(value).trim().padStart(length, '0');
+};
+
+const truncateRight = (value, length) => {
+  const normalized = asTrimmedString(value);
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.slice(0, length);
 };
 
 const parseDateParts = (dateValue) => {
@@ -105,12 +119,13 @@ const getOrderedExpenses = (liquidation, expenses) => {
 const buildLiquidationReference = (liquidation) => {
   const createdDate = liquidation.createdDate || liquidation.submittedDate || liquidation.approvedDate;
   const formattedDate = formatDateForReference(createdDate);
+  const suffix = String(liquidation.id || '').trim().slice(-XBLNR_SUFFIX_LENGTH);
 
   if (!formattedDate) {
-    return `LIQ-${liquidation.id}`;
+    return `LIQ${suffix}`;
   }
 
-  return `LIQ-${formattedDate}-${liquidation.id}`;
+  return `LIQ${formattedDate}${suffix}`;
 };
 
 const buildHeaderWarnings = (liquidation, user, expenses, missingExpenseIds = []) => {
@@ -201,13 +216,13 @@ const buildPayload = (liquidation, user, expenses) => {
       ZUMSK: '',
       KOSTL: expense.centro ? padLeft(expense.centro, KOSTL_LENGTH) : '',
       AUFNR: expense.ordenco ? padLeft(expense.ordenco, AUFNR_LENGTH) : '',
-      ZSERFAC: asTrimmedString(expense.serie),
+      ZSERFAC: truncateRight(expense.serie, ZSERFAC_LENGTH),
       ZNUMFAC: expense.noinvoice ? padLeft(expense.noinvoice, ZNUMFAC_LENGTH) : '',
       BLART: '',
       BLDAT: formatDateForSAP(expense.date),
-      STCD1: asTrimmedString(expense.vat_number),
-      NAME1: asTrimmedString(expense.supplier),
-      SGTXT: asTrimmedString(expense.description),
+      STCD1: truncateRight(expense.vat_number, STCD1_LENGTH),
+      NAME1: truncateRight(expense.supplier, NAME1_LENGTH),
+      SGTXT: truncateRight(expense.description, SGTXT_LENGTH),
     })),
   };
 };
@@ -220,50 +235,59 @@ const buildFieldStatus = (field, label, value, required, section, source, extra 
   section,
   source,
   isMissing: String(value ?? '').trim() === '',
+  originalValue: extra.originalValue ?? '',
+  originalLength: String(extra.originalValue ?? '').trim().length,
+  sentLength: String(value ?? '').trim().length,
+  wasTrimmed: Boolean(extra.originalValue) && String(extra.originalValue).trim().length > String(value ?? '').trim().length,
+  wasPadded: Boolean(extra.originalValue) && String(extra.originalValue).trim().length < String(value ?? '').trim().length,
   ...extra,
 });
 
+const formattedDateFromLiquidation = (liquidation) => {
+  const createdDate = liquidation.createdDate || liquidation.submittedDate || liquidation.approvedDate;
+  const formattedDate = formatDateForReference(createdDate);
+  return formattedDate ? `LIQ-${formattedDate}-${liquidation.id || ''}` : String(liquidation.id || '').trim();
+};
+
 const buildPreviewSummary = (liquidation, user, orderedExpenses, payload, missingExpenseIds, headerWarnings, itemWarnings) => {
+  const originalReference = formattedDateFromLiquidation(liquidation);
   const headerFields = [
-    buildFieldStatus('BLDAT', 'Fecha de documento cabecera', payload.header.BLDAT, true, 'header', 'Fecha actual del envío'),
-    buildFieldStatus('BUDAT', 'Fecha de contabilización', payload.header.BUDAT, true, 'header', 'Fecha actual del envío'),
-    buildFieldStatus('BUKRS', 'Sociedad', payload.header.BUKRS, true, 'header', 'Liquidación'),
-    buildFieldStatus('LIFNR', 'Código proveedor/usuario SAP', payload.header.LIFNR, true, 'header', 'Usuario'),
-    buildFieldStatus('XBLNR', 'Referencia SAP', payload.header.XBLNR, true, 'header', 'Liquidación'),
-    buildFieldStatus('BKTXT', 'Texto de cabecera', payload.header.BKTXT, true, 'header', 'Liquidación'),
-    buildFieldStatus('WAERS', 'Moneda', payload.header.WAERS, true, 'header', 'Liquidación'),
-    buildFieldStatus('DMBTR', 'Monto total', payload.header.DMBTR, true, 'header', 'Liquidación / gastos'),
-    buildFieldStatus('ZTERM', 'Condición de pago', payload.header.ZTERM, false, 'header', 'Valor fijo', { emptyByDesign: false }),
-    buildFieldStatus('DZLSPR', 'Bloqueo de pago', payload.header.DZLSPR, false, 'header', 'Vacío por diseño', { emptyByDesign: true }),
+    buildFieldStatus('BLDAT', 'Fecha de documento cabecera', payload.header.BLDAT, true, 'header', 'Fecha actual del env?o', { originalValue: new Date().toISOString().split('T')[0] }),
+    buildFieldStatus('BUDAT', 'Fecha de contabilizaci?n', payload.header.BUDAT, true, 'header', 'Fecha actual del env?o', { originalValue: new Date().toISOString().split('T')[0] }),
+    buildFieldStatus('BUKRS', 'Sociedad', payload.header.BUKRS, true, 'header', 'Liquidaci?n', { originalValue: liquidation.sociedad || '' }),
+    buildFieldStatus('LIFNR', 'C?digo proveedor/usuario SAP', payload.header.LIFNR, true, 'header', 'Usuario', { originalValue: user?.lifnr || '' }),
+    buildFieldStatus('XBLNR', 'Referencia SAP', payload.header.XBLNR, true, 'header', 'Liquidaci?n', { originalValue: originalReference }),
+    buildFieldStatus('BKTXT', 'Texto de cabecera', payload.header.BKTXT, true, 'header', 'Liquidaci?n', { originalValue: originalReference }),
+    buildFieldStatus('WAERS', 'Moneda', payload.header.WAERS, true, 'header', 'Liquidaci?n', { originalValue: liquidation.currency || '' }),
+    buildFieldStatus('DMBTR', 'Monto total', payload.header.DMBTR, true, 'header', 'Liquidaci?n / gastos', { originalValue: liquidation.totalAmount ?? '' }),
+    buildFieldStatus('ZTERM', 'Condici?n de pago', payload.header.ZTERM, false, 'header', 'Valor fijo', { emptyByDesign: false }),
+    buildFieldStatus('DZLSPR', 'Bloqueo de pago', payload.header.DZLSPR, false, 'header', 'Vac?o por dise?o', { emptyByDesign: true }),
   ];
-
   const supplierFields = [
-    buildFieldStatus('LIFNR', 'Código proveedor/usuario SAP', payload.header.LIFNR, true, 'supplier', 'Usuario'),
-    buildFieldStatus('USER_EMAIL', 'Correo del usuario', user?.email || liquidation.userId || '', false, 'supplier', 'Usuario'),
-    buildFieldStatus('EMPLOYEE_NAME', 'Empleado', liquidation.employeeName || '', false, 'supplier', 'Liquidación'),
+    buildFieldStatus('LIFNR', 'C?digo proveedor/usuario SAP', payload.header.LIFNR, true, 'supplier', 'Usuario', { originalValue: user?.lifnr || '' }),
+    buildFieldStatus('USER_EMAIL', 'Correo del usuario', user?.email || liquidation.userId || '', false, 'supplier', 'Usuario', { originalValue: user?.email || liquidation.userId || '' }),
+    buildFieldStatus('EMPLOYEE_NAME', 'Empleado', liquidation.employeeName || '', false, 'supplier', 'Liquidaci?n', { originalValue: liquidation.employeeName || '' }),
   ];
-
   const expenseFields = orderedExpenses.map((expense, index) => ({
     expenseId: expense.id,
     label: `Gasto ${index + 1}`,
     description: expense.description || '',
     fields: [
-      buildFieldStatus('HKONT', 'Cuenta contable', payload.items[index]?.HKONT || '', true, 'expense', 'Categoría / gasto', { expenseId: expense.id }),
-      buildFieldStatus('DMBTR', 'Monto', payload.items[index]?.DMBTR || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
-      buildFieldStatus('KOSTL', 'Centro de costo', payload.items[index]?.KOSTL || '', true, 'expense', 'Categoría / gasto', { expenseId: expense.id }),
-      buildFieldStatus('AUFNR', 'Orden CO', payload.items[index]?.AUFNR || '', true, 'expense', 'Categoría / gasto', { expenseId: expense.id }),
-      buildFieldStatus('ZSERFAC', 'Serie factura', payload.items[index]?.ZSERFAC || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
-      buildFieldStatus('ZNUMFAC', 'Número factura', payload.items[index]?.ZNUMFAC || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
-      buildFieldStatus('BLDAT', 'Fecha documento', payload.items[index]?.BLDAT || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
-      buildFieldStatus('STCD1', 'NIT emisor', payload.items[index]?.STCD1 || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
-      buildFieldStatus('NAME1', 'Nombre emisor', payload.items[index]?.NAME1 || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
-      buildFieldStatus('SGTXT', 'Descripción SAP', payload.items[index]?.SGTXT || '', true, 'expense', 'Gasto', { expenseId: expense.id }),
-      buildFieldStatus('ZMWSKZ', 'Código de impuesto', payload.items[index]?.ZMWSKZ || '', false, 'expense', 'Valor fijo', { expenseId: expense.id, emptyByDesign: false }),
-      buildFieldStatus('ZUMSK', 'Indicador especial', payload.items[index]?.ZUMSK || '', false, 'expense', 'Vacío por diseño', { expenseId: expense.id, emptyByDesign: true }),
-      buildFieldStatus('BLART', 'Clase de documento', payload.items[index]?.BLART || '', false, 'expense', 'Vacío por diseño', { expenseId: expense.id, emptyByDesign: true }),
+      buildFieldStatus('HKONT', 'Cuenta contable', payload.items[index]?.HKONT || '', true, 'expense', 'Categor?a / gasto', { expenseId: expense.id, originalValue: expense.cuenta || '' }),
+      buildFieldStatus('DMBTR', 'Monto', payload.items[index]?.DMBTR || '', true, 'expense', 'Gasto', { expenseId: expense.id, originalValue: expense.amount ?? '' }),
+      buildFieldStatus('KOSTL', 'Centro de costo', payload.items[index]?.KOSTL || '', true, 'expense', 'Categor?a / gasto', { expenseId: expense.id, originalValue: expense.centro || '' }),
+      buildFieldStatus('AUFNR', 'Orden CO', payload.items[index]?.AUFNR || '', true, 'expense', 'Categor?a / gasto', { expenseId: expense.id, originalValue: expense.ordenco || '' }),
+      buildFieldStatus('ZSERFAC', 'Serie factura', payload.items[index]?.ZSERFAC || '', true, 'expense', 'Gasto', { expenseId: expense.id, originalValue: expense.serie || '' }),
+      buildFieldStatus('ZNUMFAC', 'N?mero factura', payload.items[index]?.ZNUMFAC || '', true, 'expense', 'Gasto', { expenseId: expense.id, originalValue: expense.noinvoice || '' }),
+      buildFieldStatus('BLDAT', 'Fecha documento', payload.items[index]?.BLDAT || '', true, 'expense', 'Gasto', { expenseId: expense.id, originalValue: expense.date || '' }),
+      buildFieldStatus('STCD1', 'NIT emisor', payload.items[index]?.STCD1 || '', true, 'expense', 'Gasto', { expenseId: expense.id, originalValue: expense.vat_number || '' }),
+      buildFieldStatus('NAME1', 'Nombre emisor', payload.items[index]?.NAME1 || '', true, 'expense', 'Gasto', { expenseId: expense.id, originalValue: expense.supplier || '' }),
+      buildFieldStatus('SGTXT', 'Descripci?n SAP', payload.items[index]?.SGTXT || '', true, 'expense', 'Gasto', { expenseId: expense.id, originalValue: expense.description || '' }),
+      buildFieldStatus('ZMWSKZ', 'C?digo de impuesto', payload.items[index]?.ZMWSKZ || '', false, 'expense', 'Valor fijo', { expenseId: expense.id, emptyByDesign: false }),
+      buildFieldStatus('ZUMSK', 'Indicador especial', payload.items[index]?.ZUMSK || '', false, 'expense', 'Vac?o por dise?o', { expenseId: expense.id, emptyByDesign: true }),
+      buildFieldStatus('BLART', 'Clase de documento', payload.items[index]?.BLART || '', false, 'expense', 'Vac?o por dise?o', { expenseId: expense.id, emptyByDesign: true }),
     ],
   }));
-
   const allFields = [
     ...headerFields,
     ...supplierFields,

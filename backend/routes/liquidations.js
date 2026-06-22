@@ -45,6 +45,75 @@ const getSAPResponseSummary = (payload, liquidationId) => {
   };
 };
 
+const extractXMLTagValue = (xmlText, tagName) => {
+  const match = String(xmlText || '').match(new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'i'));
+  return match ? String(match[1] || '').trim() : '';
+};
+
+const extractXMLItemBlocks = (xmlText, containerTag) => {
+  const containerMatch = String(xmlText || '').match(new RegExp(`<${containerTag}>([\\s\\S]*?)<\\/${containerTag}>`, 'i'));
+  if (!containerMatch) {
+    return [];
+  }
+
+  const blocks = [];
+  const regex = /<item>([\s\S]*?)<\/item>/gi;
+  let match;
+  while ((match = regex.exec(containerMatch[1])) !== null) {
+    blocks.push(match[1]);
+  }
+
+  return blocks;
+};
+
+const parseXMLSAPResponse = (xmlText, liquidationId) => {
+  const rawMessages = extractXMLItemBlocks(xmlText, 'TAB_RETURN').map((block) => ({
+    TYPE: extractXMLTagValue(block, 'TYPE'),
+    ID: extractXMLTagValue(block, 'ID'),
+    NUMBER: extractXMLTagValue(block, 'NUMBER'),
+    MESSAGE: extractXMLTagValue(block, 'MESSAGE'),
+    MESSAGE_V1: extractXMLTagValue(block, 'MESSAGE_V1'),
+    MESSAGE_V2: extractXMLTagValue(block, 'MESSAGE_V2'),
+    MESSAGE_V3: extractXMLTagValue(block, 'MESSAGE_V3'),
+    MESSAGE_V4: extractXMLTagValue(block, 'MESSAGE_V4'),
+    PARAMETER: extractXMLTagValue(block, 'PARAMETER'),
+    ROW: extractXMLTagValue(block, 'ROW'),
+    FIELD: extractXMLTagValue(block, 'FIELD'),
+    SYSTEM: extractXMLTagValue(block, 'SYSTEM'),
+  }));
+
+  const meaningfulMessages = rawMessages.filter((item) =>
+    Object.values(item).some((value) => String(value || '').trim() !== '')
+  );
+
+  const messageText = meaningfulMessages
+    .map((item) => String(item.MESSAGE || item.MESSAGE_V1 || item.MESSAGE_V2 || '').trim())
+    .filter(Boolean)
+    .join(' | ');
+
+  const hasError = meaningfulMessages.some((item) =>
+    ['E', 'A', 'X'].includes(String(item.TYPE || '').toUpperCase())
+  );
+
+  const documentMessage = meaningfulMessages.find((item) =>
+    (String(item.ID || '').toUpperCase() === 'ZCM' && item.MESSAGE_V1) ||
+    /documento|doc/i.test(String(item.MESSAGE || ''))
+  );
+
+  return {
+    format: 'xml',
+    rawMessages: meaningfulMessages,
+    hasError,
+    hasConfirmation: meaningfulMessages.length > 0,
+    sapDocNumber: documentMessage?.MESSAGE_V1 ? String(documentMessage.MESSAGE_V1).trim() : '',
+    sapReferenceId: meaningfulMessages[0]?.MESSAGE_V2
+      ? String(meaningfulMessages[0].MESSAGE_V2).trim()
+      : liquidationId,
+    sapResponseMessage: messageText || 'El middleware devolvió XML sin mensajes de confirmación en TAB_RETURN',
+    rawXML: xmlText,
+  };
+};
+
 /**
  * @route   POST /api/liquidations
  * @desc    Crear una nueva liquidación
@@ -717,20 +786,124 @@ router.post('/:id/send-to-sap', authenticateToken, async (req, res) => {
 
     const responseText = await sapResponse.text();
     let parsedSAPResponse = null;
+    let parsedXMLResponse = null;
 
     try {
       parsedSAPResponse = responseText ? JSON.parse(responseText) : null;
     } catch (error) {
-      liquidation.sapSyncStatus = 'ERROR';
-      liquidation.sapResponseMessage = `SAP devolvió una respuesta no JSON: ${responseText || 'vacía'}`;
+      if (responseText && responseText.trim().startsWith('<?xml')) {
+        parsedXMLResponse = parseXMLSAPResponse(responseText, liquidation.id);
+      } else {
+        liquidation.sapSyncStatus = 'ERROR';
+        liquidation.sapResponseMessage = `SAP devolvi? una respuesta no JSON: ${responseText || 'vac?a'}`;
+        liquidation.sapSyncedAt = syncedAt;
+        await liquidation.save();
+        await Expense.updateMany(
+          { id: { $in: liquidation.expenseIds } },
+          { $set: { status: 'ERROR_SAP' } }
+        );
+
+        return res.status(502).json({ error: 'SAP devolvi? una respuesta inv?lida', details: String(error.message || error) });
+      }
+    }
+
+    if (parsedXMLResponse) {
+      if (!sapResponse.ok) {
+        liquidation.sapSyncStatus = 'ERROR';
+        liquidation.sapResponseMessage = parsedXMLResponse.sapResponseMessage;
+        liquidation.sapSyncedAt = syncedAt;
+        await liquidation.save();
+        await Expense.updateMany(
+          { id: { $in: liquidation.expenseIds } },
+          { $set: { status: 'ERROR_SAP' } }
+        );
+
+        return res.status(502).json({
+          error: 'El middleware devolvi? XML de error al enviar a SAP',
+          sapStatus: sapResponse.status,
+          sapResult: parsedXMLResponse,
+        });
+      }
+
+      if (parsedXMLResponse.hasError) {
+        liquidation.sapSyncStatus = 'ERROR';
+        liquidation.sapDocNumber = parsedXMLResponse.sapDocNumber || null;
+        liquidation.sapReferenceId = parsedXMLResponse.sapReferenceId || null;
+        liquidation.sapResponseMessage = parsedXMLResponse.sapResponseMessage;
+        liquidation.sapSyncedAt = syncedAt;
+        await liquidation.save();
+
+        await Expense.updateMany(
+          { id: { $in: liquidation.expenseIds } },
+          { $set: { status: 'ERROR_SAP' } }
+        );
+
+        return res.status(422).json({
+          error: 'SAP devolvi? errores de contabilizaci?n en XML',
+          liquidation,
+          sapResult: {
+            status: 'ERROR',
+            sapDocNumber: parsedXMLResponse.sapDocNumber,
+            sapReferenceId: parsedXMLResponse.sapReferenceId,
+            sapResponseMessage: parsedXMLResponse.sapResponseMessage,
+            sapSyncedAt: syncedAt,
+            messages: parsedXMLResponse.rawMessages,
+            format: 'xml',
+          },
+        });
+      }
+
+      if (!parsedXMLResponse.hasConfirmation) {
+        liquidation.sapSyncStatus = 'ERROR';
+        liquidation.sapReferenceId = parsedXMLResponse.sapReferenceId || null;
+        liquidation.sapResponseMessage = parsedXMLResponse.sapResponseMessage;
+        liquidation.sapSyncedAt = syncedAt;
+        await liquidation.save();
+        await Expense.updateMany(
+          { id: { $in: liquidation.expenseIds } },
+          { $set: { status: 'ERROR_SAP' } }
+        );
+
+        return res.status(502).json({
+          error: 'El middleware devolvi? XML, pero no confirm? la contabilizaci?n en SAP',
+          liquidation,
+          sapResult: {
+            status: 'UNCONFIRMED',
+            sapDocNumber: parsedXMLResponse.sapDocNumber,
+            sapReferenceId: parsedXMLResponse.sapReferenceId,
+            sapResponseMessage: parsedXMLResponse.sapResponseMessage,
+            sapSyncedAt: syncedAt,
+            messages: parsedXMLResponse.rawMessages,
+            format: 'xml',
+          },
+        });
+      }
+
+      liquidation.sapSyncStatus = 'SYNCED';
+      liquidation.sapDocNumber = parsedXMLResponse.sapDocNumber || null;
+      liquidation.sapReferenceId = parsedXMLResponse.sapReferenceId || null;
+      liquidation.sapResponseMessage = parsedXMLResponse.sapResponseMessage;
       liquidation.sapSyncedAt = syncedAt;
       await liquidation.save();
+
       await Expense.updateMany(
         { id: { $in: liquidation.expenseIds } },
-        { $set: { status: 'ERROR_SAP' } }
+        { $set: { status: 'CONTABILIZADO' } }
       );
 
-      return res.status(502).json({ error: 'SAP devolvió una respuesta inválida', details: String(error.message || error) });
+      return res.json({
+        message: 'Liquidaci?n enviada correctamente a SAP',
+        liquidation,
+        sapResult: {
+          status: 'SYNCED',
+          sapDocNumber: parsedXMLResponse.sapDocNumber,
+          sapReferenceId: parsedXMLResponse.sapReferenceId,
+          sapResponseMessage: parsedXMLResponse.sapResponseMessage,
+          sapSyncedAt: syncedAt,
+          messages: parsedXMLResponse.rawMessages,
+          format: 'xml',
+        },
+      });
     }
 
     if (!sapResponse.ok) {
