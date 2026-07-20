@@ -1,0 +1,95 @@
+{
+  "version": "mvp2-ep01-v1",
+  "satStatuses": [
+    "PENDIENTE_VALIDACION_SAT",
+    "VALIDADO_SAT"
+  ],
+  "satValidationCauses": [
+    "NO_ENCONTRADO_D_PLUS_1",
+    "DATOS_FISCALES_MODIFICADOS",
+    "NINGUNA"
+  ],
+  "fiscalStatuses": [
+    "PENDIENTE",
+    "APTO_PARA_LIQUIDAR",
+    "BLOQUEADO_NIT_SOCIEDAD",
+    "BLOQUEADO_ANTIGUEDAD"
+  ],
+  "validationSources": [
+    "SAT_INTERNO"
+  ],
+  "errorCodes": {
+    "sat": [
+      "SAT_INVOICE_FOUND",
+      "SAT_NOT_FOUND_D_PLUS_1",
+      "SAT_CORRECTIONS_REQUIRED",
+      "SAT_VALIDATION_TECHNICAL_ERROR",
+      "SAT_INVALID_REQUEST"
+    ],
+    "expense": [
+      "EXPENSE_NIT_SOCIETY_MISMATCH",
+      "CATEGORY_WITHOUT_SOCIETY",
+      "SOCIETY_NOT_FOUND",
+      "SOCIETY_WITHOUT_NIT",
+      "RECEIVER_NIT_WITHOUT_SOCIETY",
+      "EXPENSE_EXPIRED_AT_CAPTURE",
+      "EXPENSE_NOT_SAT_VALIDATED"
+    ],
+    "liquidation": [
+      "LIQUIDATION_HAS_EXPIRED_EXPENSES",
+      "LIQUIDATION_FISCAL_BLOCKED"
+    ],
+    "catalog": [
+      "CATALOG_ENTRY_INACTIVE",
+      "CATALOG_CONFLICT",
+      "CATALOG_VERSION_CONFLICT"
+    ],
+    "admin": [
+      "ADMIN_REQUIRED"
+    ]
+  },
+  "satInternalValidation": {
+    "method": "POST",
+    "path": "/api/sat/validar-interno",
+    "requiredRequestFields": [
+      "serie",
+      "noinvoice"
+    ],
+    "optionalRequestFields": [
+      "uuid",
+      "nitEmisor",
+      "supplier",
+      "date",
+      "amount",
+      "currency",
+      "totiva"
+    ],
+    "foundResponseFields": [
+      "code",
+      "encontrada",
+      "facturaId",
+      "campos",
+      "complementados",
+      "corregidos",
+      "snapshot",
+      "validatedAt"
+    ],
+    "notFoundResponseFields": [
+      "code",
+      "encontrada",
+      "mensaje"
+    ]
+  },
+  "adminCatalogs": {
+    "resources": [
+      "sociedades",
+      "centros",
+      "cuentas",
+      "ordenes-co"
+    ],
+    "adminPrefix": "/api/admin",
+    "readOnlyPrefix": "/api/catalogs",
+    "invoiceValidityPath": "/api/admin/parameters/invoice-validity",
+    "catalogVersionPath": "/api/catalogs/version"
+  }
+}

@@ -316,7 +316,10 @@ router.post('/login', [
         lastName: user.lastName,
         department: user.department,
         managerEmail: user.managerEmail,
-        isManager: user.isManager
+        sociedad: user.sociedad,
+        nitEmpresa: user.nitEmpresa,
+        isManager: user.isManager,
+        isAdmin: Boolean(user.isAdmin)
       }
     });
   } catch (error) {
@@ -509,7 +512,10 @@ router.post('/login', [
         lastName: user.lastName,
         department: user.department,
         managerEmail: user.managerEmail,
-        isManager: user.isManager
+        sociedad: user.sociedad,
+        nitEmpresa: user.nitEmpresa,
+        isManager: user.isManager,
+        isAdmin: Boolean(user.isAdmin)
       }
     });
   } catch (error) {
@@ -537,7 +543,10 @@ router.get('/profile/:email', authenticateToken, canAccessUserData, async (req, 
         lastName: user.lastName,
         department: user.department,
         managerEmail: user.managerEmail,
+        sociedad: user.sociedad,
+        nitEmpresa: user.nitEmpresa,
         isManager: user.isManager,
+        isAdmin: Boolean(user.isAdmin),
         createdAt: user.createdAt,
         lastLoginAt: user.lastLoginAt
       }

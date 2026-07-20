@@ -41,8 +41,9 @@ export interface Liquidation {
  * - submitted: Enviada al jefe, usuario NO puede modificar
  * - approved: Aprobada por el jefe, se puede generar CSV
  * - rejected: Rechazada por el jefe, usuario puede revisar y reenviar
+ * - fiscal_blocked: Bloqueada antes de SAP por vencimiento fiscal
  */
-export type LiquidationStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
+export type LiquidationStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'fiscal_blocked';
 
 /**
  * DTO para crear una nueva liquidación
@@ -76,6 +77,8 @@ export const getLiquidationStatusText = (status: LiquidationStatus): string => {
       return 'Aprobada';
     case 'rejected':
       return 'Rechazada';
+    case 'fiscal_blocked':
+      return 'Bloqueada Fiscalmente';
     default:
       return 'Desconocido';
   }
@@ -94,6 +97,8 @@ export const getLiquidationStatusColor = (status: LiquidationStatus): string => 
       return '#4CAF50'; // Verde
     case 'rejected':
       return '#F44336'; // Rojo
+    case 'fiscal_blocked':
+      return '#B91C1C'; // Rojo oscuro
     default:
       return '#999999'; // Gris
   }

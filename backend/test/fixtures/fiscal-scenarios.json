@@ -1,0 +1,86 @@
+{
+  "satInvoiceFound": {
+    "request": {
+      "serie": "A1B2C3D4",
+      "noinvoice": "1000001",
+      "nitEmisor": "1234567K",
+      "supplier": "PROVEEDOR DEMO, S.A.",
+      "date": "2026-07-10",
+      "amount": 150.25,
+      "currency": "GTQ"
+    },
+    "satSnapshot": {
+      "numeroAutorizacion": "00000000-0000-4000-8000-000000000001",
+      "serie": "A1B2C3D4",
+      "numeroDTE": "1000001",
+      "nitEmisor": "1234567K",
+      "idReceptor": "9876543",
+      "fechaEmision": "2026-07-10",
+      "granTotal": 150.25,
+      "moneda": "GTQ"
+    },
+    "expected": {
+      "satStatus": "VALIDADO_SAT",
+      "satValidationCause": "NINGUNA",
+      "fiscalStatusBeforeSave": "PENDIENTE"
+    }
+  },
+  "satInvoiceNotFoundDPlus1": {
+    "request": {
+      "serie": "DPLUS1",
+      "noinvoice": "2000001"
+    },
+    "expected": {
+      "code": "SAT_NOT_FOUND_D_PLUS_1",
+      "satStatus": "PENDIENTE_VALIDACION_SAT",
+      "satValidationCause": "NO_ENCONTRADO_D_PLUS_1",
+      "fiscalStatus": "PENDIENTE",
+      "canSaveDraft": true,
+      "canLiquidate": false
+    }
+  },
+  "nitSocietyMismatch": {
+    "category": {
+      "name": "Categoría demostrativa",
+      "sociedad": "1000"
+    },
+    "selectedSociety": {
+      "codigo": "1000",
+      "nit": "1111111"
+    },
+    "actualReceiverSociety": {
+      "codigo": "2000",
+      "nit": "9876543"
+    },
+    "expected": {
+      "code": "EXPENSE_NIT_SOCIETY_MISMATCH",
+      "canSave": false
+    }
+  },
+  "expiredInvoice": {
+    "issueDate": "2026-05-22",
+    "referenceDate": "2026-07-17",
+    "allowedDays": 55,
+    "timeZone": "America/Guatemala",
+    "expected": {
+      "elapsedDays": 56,
+      "fiscalStatus": "BLOQUEADO_ANTIGUEDAD",
+      "canSaveAtCapture": false
+    }
+  },
+  "approvedLiquidation": {
+    "liquidation": {
+      "id": "LIQ-DEMO-001",
+      "status": "approved",
+      "expenseIds": [
+        "EXP-DEMO-001"
+      ]
+    },
+    "expectedWhenExpenseExpires": {
+      "code": "LIQUIDATION_FISCAL_BLOCKED",
+      "nextStatus": "fiscal_blocked",
+      "sapMustBeCalled": false,
+      "requiresNewApproval": true
+    }
+  }
+}

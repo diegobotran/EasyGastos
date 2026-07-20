@@ -57,18 +57,52 @@ const normalizeSatValidationState = (expense: Expense): Expense => {
   if (expense.satStatus === 'VALIDADO_SAT' && hasMetadata && expense.satValidationFingerprint === fingerprint) {
     return {
       ...expense,
+      satValidationCause: expense.satValidationCause || 'NINGUNA',
+      fiscalStatus: expense.fiscalStatus || 'PENDIENTE',
       satValidationFingerprint: fingerprint,
     };
   }
 
   return {
     ...expense,
-    satStatus: 'NO_VALIDADO_SAT',
+    satStatus: 'PENDIENTE_VALIDACION_SAT',
+    satValidationCause: expense.satValidationCause || 'NINGUNA',
+    fiscalStatus: 'PENDIENTE',
     satValidatedAt: undefined,
     satValidationSource: undefined,
     satValidationFingerprint: undefined,
+    satFacturaId: undefined,
+    satInvoiceSnapshot: undefined,
+    fiscalValidatedAt: undefined,
+    fiscalValidityDaysApplied: undefined,
   };
 };
+
+const serializeSatInvoiceSnapshot = (expense: Expense): string | null => {
+  return expense.satInvoiceSnapshot
+    ? JSON.stringify(expense.satInvoiceSnapshot)
+    : null;
+};
+
+const parseSatInvoiceSnapshot = (value: unknown): Expense['satInvoiceSnapshot'] => {
+  if (!value) return undefined;
+  if (typeof value === 'object') return value as Expense['satInvoiceSnapshot'];
+
+  try {
+    return JSON.parse(String(value)) as Expense['satInvoiceSnapshot'];
+  } catch {
+    return undefined;
+  }
+};
+
+const mapFiscalFieldsFromRow = <T extends Record<string, any>>(row: T): T & Partial<Expense> => ({
+  ...row,
+  satStatus: row.satStatus || 'PENDIENTE_VALIDACION_SAT',
+  satValidationCause: row.satValidationCause || 'NINGUNA',
+  fiscalStatus: row.fiscalStatus || 'PENDIENTE',
+  satInvoiceSnapshot: parseSatInvoiceSnapshot(row.satInvoiceSnapshot),
+  fiscalValidityDaysApplied: row.fiscalValidityDaysApplied ?? undefined,
+});
 
 const hasAccountingSnapshot = (expense: Pick<Expense, 'category' | 'sociedad' | 'centro' | 'cuenta' | 'ordenco'>): boolean => {
   return Boolean(
@@ -127,10 +161,17 @@ export const initDB = async (): Promise<void> => {
           sociedad TEXT,
           status TEXT NOT NULL,
           expenseStatus TEXT NOT NULL DEFAULT 'draft',
-          satStatus TEXT DEFAULT 'NO_VALIDADO_SAT',
+          satStatus TEXT DEFAULT 'PENDIENTE_VALIDACION_SAT',
           satValidatedAt TEXT,
           satValidationSource TEXT,
           satValidationFingerprint TEXT,
+          satValidationCause TEXT DEFAULT 'NINGUNA',
+          fiscalStatus TEXT DEFAULT 'PENDIENTE',
+          satFacturaId TEXT,
+          satInvoiceSnapshot TEXT,
+          fiscalValidatedAt TEXT,
+          fiscalValidityDaysApplied INTEGER,
+          imageValidationFingerprint TEXT,
           supplier TEXT,
           vat_number TEXT,
           department TEXT,
@@ -210,7 +251,7 @@ export const initDB = async (): Promise<void> => {
       }
 
       try {
-        await db.execAsync(`ALTER TABLE expenses ADD COLUMN satStatus TEXT DEFAULT 'NO_VALIDADO_SAT';`);
+        await db.execAsync(`ALTER TABLE expenses ADD COLUMN satStatus TEXT DEFAULT 'PENDIENTE_VALIDACION_SAT';`);
         console.log("✅ Columna satStatus agregada");
       } catch (e) {
         console.log("ℹ️ Columna satStatus ya existe o no se pudo agregar");
@@ -236,6 +277,53 @@ export const initDB = async (): Promise<void> => {
       } catch (e) {
         console.log("ℹ️ Columna satValidationFingerprint ya existe o no se pudo agregar");
       }
+
+      const fiscalColumns = [
+        ['satValidationCause', "TEXT DEFAULT 'NINGUNA'"],
+        ['fiscalStatus', "TEXT DEFAULT 'PENDIENTE'"],
+        ['satFacturaId', 'TEXT'],
+        ['satInvoiceSnapshot', 'TEXT'],
+        ['fiscalValidatedAt', 'TEXT'],
+        ['fiscalValidityDaysApplied', 'INTEGER'],
+        ['imageValidationFingerprint', 'TEXT'],
+      ] as const;
+
+      for (const [columnName, columnType] of fiscalColumns) {
+        try {
+          await db.execAsync(`ALTER TABLE expenses ADD COLUMN ${columnName} ${columnType};`);
+          console.log(`✅ Columna ${columnName} agregada`);
+        } catch (e) {
+          console.log(`ℹ️ Columna ${columnName} ya existe o no se pudo agregar`);
+        }
+      }
+
+      // Migración idempotente de estados legacy. Un VALIDADO_SAT sin evidencia
+      // completa vuelve a pendiente de forma conservadora.
+      await db.execAsync(`
+        UPDATE expenses
+        SET satStatus = 'PENDIENTE_VALIDACION_SAT',
+            satValidationCause = COALESCE(satValidationCause, 'NINGUNA'),
+            fiscalStatus = COALESCE(fiscalStatus, 'PENDIENTE'),
+            satValidatedAt = NULL,
+            satValidationSource = NULL,
+            satValidationFingerprint = NULL
+        WHERE satStatus IS NULL
+           OR satStatus = ''
+           OR satStatus = 'NO_VALIDADO_SAT'
+           OR (
+             satStatus = 'VALIDADO_SAT'
+             AND (
+               satValidatedAt IS NULL OR satValidatedAt = ''
+               OR satValidationSource != 'SAT_INTERNO'
+               OR satValidationFingerprint IS NULL OR satValidationFingerprint = ''
+             )
+           );
+
+        UPDATE expenses
+        SET satValidationCause = COALESCE(satValidationCause, 'NINGUNA'),
+            fiscalStatus = COALESCE(fiscalStatus, 'PENDIENTE')
+        WHERE satValidationCause IS NULL OR fiscalStatus IS NULL;
+      `);
       
       console.log("✅ ExpenseService: Tabla 'expenses' verificada/creada con éxito.");
       isDBInitialized = true;
@@ -390,9 +478,11 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
         await db.runAsync(
             `INSERT INTO expenses 
              (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, 
-                sociedad, satStatus, satValidatedAt, satValidationSource, satValidationFingerprint, department, notes, noinvoice, serie, uuid, centro, cuenta, ordenco, managerEmail, 
+                sociedad, satStatus, satValidatedAt, satValidationSource, satValidationFingerprint,
+                satValidationCause, fiscalStatus, satFacturaId, satInvoiceSnapshot, fiscalValidatedAt, fiscalValidityDaysApplied, imageValidationFingerprint,
+                department, notes, noinvoice, serie, uuid, centro, cuenta, ordenco, managerEmail,
                 createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 normalizedExpense.id, 
                 userEmail, 
@@ -405,10 +495,17 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
                 normalizedExpense.supplier || null, 
                 normalizedExpense.vat_number || null, 
                 normalizedExpense.sociedad || null,
-                normalizedExpense.satStatus || 'NO_VALIDADO_SAT',
+                normalizedExpense.satStatus || 'PENDIENTE_VALIDACION_SAT',
                 normalizedExpense.satValidatedAt || null,
                 normalizedExpense.satValidationSource || null,
                 normalizedExpense.satValidationFingerprint || null,
+                normalizedExpense.satValidationCause || 'NINGUNA',
+                normalizedExpense.fiscalStatus || 'PENDIENTE',
+                normalizedExpense.satFacturaId || null,
+                serializeSatInvoiceSnapshot(normalizedExpense),
+                normalizedExpense.fiscalValidatedAt || null,
+                normalizedExpense.fiscalValidityDaysApplied ?? null,
+                normalizedExpense.imageValidationFingerprint || null,
                 normalizedExpense.department || null, 
                 normalizedExpense.notes || null, 
                 normalizedExpense.noinvoice || null, 
@@ -444,12 +541,12 @@ export const getExpenses = async (userEmail: string): Promise<Expense[]> => {
     } else {
         if (!db) throw new Error("La base de datos no está inicializada.");
         
-        const result = await db.getAllAsync<Expense>(
+        const result = await db.getAllAsync<Record<string, any>>(
             'SELECT * FROM expenses WHERE userEmail = ?',
             [userEmail]
         );
         
-        return result;
+        return result.map(row => mapFiscalFieldsFromRow(row) as Expense);
     }
 };
 
@@ -463,12 +560,12 @@ export const getExpenseById = async (id: string, userEmail: string): Promise<Exp
     } else {
         if (!db) throw new Error("La base de datos no está inicializada.");
         
-        const result = await db.getFirstAsync<Expense>(
+        const result = await db.getFirstAsync<Record<string, any>>(
             'SELECT * FROM expenses WHERE id = ? AND userEmail = ?',
             [id, userEmail]
         );
         
-        return result || null;
+        return result ? mapFiscalFieldsFromRow(result) as Expense : null;
     }
 };
 
@@ -497,7 +594,7 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         if (!db) throw new Error("La base de datos no está inicializada.");
         
         await db.runAsync(
-            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
+            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, satValidationCause = ?, fiscalStatus = ?, satFacturaId = ?, satInvoiceSnapshot = ?, fiscalValidatedAt = ?, fiscalValidityDaysApplied = ?, imageValidationFingerprint = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
             [
                 normalizedExpense.description, 
                 normalizedExpense.amount, 
@@ -506,10 +603,17 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
                 normalizedExpense.sociedad || null,
                 normalizedExpense.status, 
                 normalizedExpense.expenseStatus || 'draft',
-                normalizedExpense.satStatus || 'NO_VALIDADO_SAT',
+                normalizedExpense.satStatus || 'PENDIENTE_VALIDACION_SAT',
                 normalizedExpense.satValidatedAt || null,
                 normalizedExpense.satValidationSource || null,
                 normalizedExpense.satValidationFingerprint || null,
+                normalizedExpense.satValidationCause || 'NINGUNA',
+                normalizedExpense.fiscalStatus || 'PENDIENTE',
+                normalizedExpense.satFacturaId || null,
+                serializeSatInvoiceSnapshot(normalizedExpense),
+                normalizedExpense.fiscalValidatedAt || null,
+                normalizedExpense.fiscalValidityDaysApplied ?? null,
+                normalizedExpense.imageValidationFingerprint || null,
                 normalizedExpense.supplier, 
                 normalizedExpense.vat_number, 
                 normalizedExpense.department, 
@@ -783,10 +887,17 @@ export const getExpensesNeedingSync = async (
       sociedad: row.sociedad,
       status: row.status as any,
       expenseStatus: row.expenseStatus || 'draft',
-      satStatus: row.satStatus || 'NO_VALIDADO_SAT',
+      satStatus: row.satStatus || 'PENDIENTE_VALIDACION_SAT',
       satValidatedAt: row.satValidatedAt || undefined,
       satValidationSource: row.satValidationSource || undefined,
       satValidationFingerprint: row.satValidationFingerprint || undefined,
+      satValidationCause: row.satValidationCause || 'NINGUNA',
+      fiscalStatus: row.fiscalStatus || 'PENDIENTE',
+      satFacturaId: row.satFacturaId || undefined,
+      satInvoiceSnapshot: parseSatInvoiceSnapshot(row.satInvoiceSnapshot),
+      fiscalValidatedAt: row.fiscalValidatedAt || undefined,
+      fiscalValidityDaysApplied: row.fiscalValidityDaysApplied ?? undefined,
+      imageValidationFingerprint: row.imageValidationFingerprint || undefined,
       supplier: row.supplier,
       vat_number: row.vat_number,
       department: row.department,
@@ -955,11 +1066,12 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
     
     await db.runAsync(
       `INSERT OR REPLACE INTO expenses 
-       (id, userEmail, description, amount, date, category, sociedad, status, expenseStatus, satStatus, satValidatedAt, satValidationSource, satValidationFingerprint, supplier, vat_number, 
+       (id, userEmail, description, amount, date, category, sociedad, status, expenseStatus, satStatus, satValidatedAt, satValidationSource, satValidationFingerprint,
+        satValidationCause, fiscalStatus, satFacturaId, satInvoiceSnapshot, fiscalValidatedAt, fiscalValidityDaysApplied, imageValidationFingerprint, supplier, vat_number,
         department, notes, noinvoice, serie, centro, cuenta, ordenco, managerEmail, liquidationId,
         voidedAt, voidedReason, createdAt, updatedAt,
         needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency, synced, uuid) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         normalizedExpense.id,
         normalizedExpense.email,
@@ -970,10 +1082,17 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
         normalizedExpense.sociedad || null,
         normalizedExpense.status,
         normalizedExpense.expenseStatus || 'draft',
-        normalizedExpense.satStatus || 'NO_VALIDADO_SAT',
+        normalizedExpense.satStatus || 'PENDIENTE_VALIDACION_SAT',
         normalizedExpense.satValidatedAt || null,
         normalizedExpense.satValidationSource || null,
         normalizedExpense.satValidationFingerprint || null,
+        normalizedExpense.satValidationCause || 'NINGUNA',
+        normalizedExpense.fiscalStatus || 'PENDIENTE',
+        normalizedExpense.satFacturaId || null,
+        serializeSatInvoiceSnapshot(normalizedExpense),
+        normalizedExpense.fiscalValidatedAt || null,
+        normalizedExpense.fiscalValidityDaysApplied ?? null,
+        normalizedExpense.imageValidationFingerprint || null,
         normalizedExpense.supplier || null,
         normalizedExpense.vat_number || null,
         normalizedExpense.department || null,
@@ -989,11 +1108,13 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
         normalizedExpense.voidedReason || null,
         normalizedExpense.createdAt || Date.now(),
         normalizedExpense.updatedAt || Date.now(),
+        0,
         Date.now(),
         normalizedExpense.serverUpdatedAt || Date.now(),
         normalizedExpense.imageuri || null,
         normalizedExpense.totiva || null,
         normalizedExpense.currency || null,
+        1,
         normalizedExpense.uuid || null
       ]
     );
@@ -1039,10 +1160,17 @@ export const getExpensesForApproval = async (managerEmail: string): Promise<Expe
       sociedad: row.sociedad,
       status: row.status as any,
       expenseStatus: row.expenseStatus || 'draft',
-      satStatus: row.satStatus || 'NO_VALIDADO_SAT',
+      satStatus: row.satStatus || 'PENDIENTE_VALIDACION_SAT',
       satValidatedAt: row.satValidatedAt || undefined,
       satValidationSource: row.satValidationSource || undefined,
       satValidationFingerprint: row.satValidationFingerprint || undefined,
+      satValidationCause: row.satValidationCause || 'NINGUNA',
+      fiscalStatus: row.fiscalStatus || 'PENDIENTE',
+      satFacturaId: row.satFacturaId || undefined,
+      satInvoiceSnapshot: parseSatInvoiceSnapshot(row.satInvoiceSnapshot),
+      fiscalValidatedAt: row.fiscalValidatedAt || undefined,
+      fiscalValidityDaysApplied: row.fiscalValidityDaysApplied ?? undefined,
+      imageValidationFingerprint: row.imageValidationFingerprint || undefined,
       supplier: row.supplier,
       vat_number: row.vat_number,
       department: row.department,

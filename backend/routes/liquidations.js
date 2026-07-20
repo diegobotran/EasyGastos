@@ -129,7 +129,7 @@ router.post('/',
     body('currency').optional().trim(),
     body('expenseIds').isArray({ min: 1 }).withMessage('Debe incluir al menos un gasto'),
     body('totalAmount').isNumeric().withMessage('totalAmount debe ser numérico'),
-    body('status').optional().isIn(['draft', 'submitted', 'approved', 'rejected']),
+    body('status').optional().isIn(['draft', 'submitted', 'approved', 'rejected', 'fiscal_blocked']),
     body('createdDate').optional(),
     body('managerEmail').optional().isEmail(),
     body('managerComments').optional(),
@@ -214,7 +214,7 @@ router.post('/',
           nonValidatedExpenses: nonValidatedExpenses.map(exp => ({
             id: exp.id,
             description: exp.description,
-            satStatus: exp.satStatus || 'NO_VALIDADO_SAT'
+            satStatus: exp.satStatus || 'PENDIENTE_VALIDACION_SAT'
           }))
         });
       }

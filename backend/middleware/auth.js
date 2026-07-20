@@ -31,7 +31,10 @@ const authenticateToken = async (req, res, next) => {
       firstName: user.firstName,
       lastName: user.lastName,
       department: user.department,
-      isManager: user.isManager
+      sociedad: user.sociedad,
+      nitEmpresa: user.nitEmpresa,
+      isManager: Boolean(user.isManager),
+      isAdmin: Boolean(user.isAdmin)
     };
 
     next();
@@ -67,7 +70,10 @@ const optionalAuth = async (req, res, next) => {
           firstName: user.firstName,
           lastName: user.lastName,
           department: user.department,
-          isManager: user.isManager
+          sociedad: user.sociedad,
+          nitEmpresa: user.nitEmpresa,
+          isManager: Boolean(user.isManager),
+          isAdmin: Boolean(user.isAdmin)
         };
       }
     }
@@ -117,6 +123,27 @@ const requireManager = (req, res, next) => {
 };
 
 /**
+ * Middleware para restringir operaciones de maestros al rol administrativo.
+ */
+const requireAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      code: 'AUTHENTICATION_REQUIRED',
+      error: 'Autenticación requerida'
+    });
+  }
+
+  if (!req.user.isAdmin) {
+    return res.status(403).json({
+      code: 'ADMIN_REQUIRED',
+      error: 'Acceso restringido a administradores'
+    });
+  }
+
+  next();
+};
+
+/**
  * Middleware para verificar que el usuario puede acceder a los datos
  * (es el mismo usuario o es su manager)
  */
@@ -159,5 +186,6 @@ module.exports = {
   optionalAuth,
   generateToken,
   requireManager,
-  canAccessUserData
+  canAccessUserData,
+  requireAdmin
 };

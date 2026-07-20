@@ -46,16 +46,24 @@ const normalizeSatValidationState = (expenseData = {}) => {
   if (expenseData.satStatus === 'VALIDADO_SAT' && hasMetadata && expenseData.satValidationFingerprint === fingerprint) {
     return {
       ...expenseData,
+      satValidationCause: expenseData.satValidationCause || 'NINGUNA',
+      fiscalStatus: expenseData.fiscalStatus || 'PENDIENTE',
       satValidationFingerprint: fingerprint,
     };
   }
 
   return {
     ...expenseData,
-    satStatus: 'NO_VALIDADO_SAT',
+    satStatus: 'PENDIENTE_VALIDACION_SAT',
+    satValidationCause: expenseData.satValidationCause || 'NINGUNA',
+    fiscalStatus: 'PENDIENTE',
     satValidatedAt: null,
     satValidationSource: null,
     satValidationFingerprint: null,
+    satFacturaId: null,
+    satInvoiceSnapshot: null,
+    fiscalValidatedAt: null,
+    fiscalValidityDaysApplied: null,
   };
 };
 
@@ -92,9 +100,11 @@ router.post('/full-sync', authenticateToken, [
       lastName: user.lastName,
       lifnr: user.lifnr,
       sociedad: user.sociedad,
+      nitEmpresa: user.nitEmpresa,
       department: user.department,
       managerEmail: user.managerEmail,
       isManager: user.isManager,
+      isAdmin: Boolean(user.isAdmin),
       updatedAt: user.updatedAt
     };
 
@@ -135,10 +145,17 @@ router.post('/full-sync', authenticateToken, [
       sociedad: expense.sociedad,
       status: expense.status,
       expenseStatus: expense.expenseStatus || 'draft',
-      satStatus: expense.satStatus || 'NO_VALIDADO_SAT',
+      satStatus: expense.satStatus || 'PENDIENTE_VALIDACION_SAT',
       satValidatedAt: expense.satValidatedAt || null,
       satValidationSource: expense.satValidationSource || null,
       satValidationFingerprint: expense.satValidationFingerprint || null,
+      satValidationCause: expense.satValidationCause || 'NINGUNA',
+      fiscalStatus: expense.fiscalStatus || 'PENDIENTE',
+      satFacturaId: expense.satFacturaId || null,
+      satInvoiceSnapshot: expense.satInvoiceSnapshot || null,
+      fiscalValidatedAt: expense.fiscalValidatedAt || null,
+      fiscalValidityDaysApplied: expense.fiscalValidityDaysApplied || null,
+      imageValidationFingerprint: expense.imageValidationFingerprint || null,
       liquidationId: expense.liquidationId || '',
       supplier: expense.supplier,
       vat_number: expense.vat_number,

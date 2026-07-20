@@ -21,6 +21,8 @@ const appRoutes = require('./routes/app');
 const chatHistoryRoutes = require('./routes/chat-history');
 const satRoutes = require('./routes/sat');
 const sociedadesRoutes = require('./routes/sociedades');
+const adminCatalogRoutes = require('./routes/admin-catalogs');
+const catalogRoutes = require('./routes/catalogs');
 
 // Inicializar base de datos
 const { initDatabase } = require('./database/init');
@@ -53,7 +55,12 @@ app.use(limiter);
 // CORS - permitir solicitudes desde la app móvil
 const allowedOrigins = process.env.NODE_ENV === 'production' 
   ? true // En producción, permitir todas las conexiones
-  : (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:8081', 'http://192.168.1.100:8081']);
+  : (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [
+      'http://localhost:8081',
+      'http://192.168.1.100:8081',
+      'http://localhost:5173',
+      'http://127.0.0.1:5173'
+    ]);
 
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' ? true : allowedOrigins,
@@ -168,6 +175,8 @@ app.use('/api/liquidations', liquidationsRoutes);
 app.use('/api/chat-history', chatHistoryRoutes);
 app.use('/api/sat', satRoutes);
 app.use('/api/sociedades', sociedadesRoutes);
+app.use('/api/admin', adminCatalogRoutes);
+app.use('/api/catalogs', catalogRoutes);
 // Rutas para subir archivos (imágenes de comprobantes)
 app.use('/api/uploads', uploadsRoutes);
 // Rutas para actualizaciones de la app móvil

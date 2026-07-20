@@ -8,6 +8,7 @@ try {
   console.log('   - authenticateToken: ' + typeof auth.authenticateToken);
   console.log('   - generateToken: ' + typeof auth.generateToken);
   console.log('   - requireManager: ' + typeof auth.requireManager);
+  console.log('   - requireAdmin: ' + typeof auth.requireAdmin);
   console.log('   - canAccessUserData: ' + typeof auth.canAccessUserData);
 
   console.log('✅ Verificando rutas de usuarios...');
@@ -33,6 +34,11 @@ try {
   console.log('✅ Verificando rutas de health...');
   const health = require('./routes/health');
   console.log('   - Rutas de health cargadas correctamente');
+
+  console.log('✅ Verificando rutas administrativas y catálogos...');
+  require('./routes/admin-catalogs');
+  require('./routes/catalogs');
+  console.log('   - Rutas administrativas y de catálogos cargadas correctamente');
 
   console.log('');
   console.log('🎉 ¡Todas las rutas se cargaron correctamente!');

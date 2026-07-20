@@ -10,6 +10,14 @@
 const mongoose = require('mongoose');
 
 const sociedadSchema = new mongoose.Schema({
+  // Etiqueta corta visible; opcional para conservar documentos históricos.
+  acronimo: {
+    type: String,
+    default: null,
+    trim: true,
+    maxlength: 15
+  },
+
   // Código de sociedad (puede ser número o nombre)
   codigo: { 
     type: String, 
@@ -17,7 +25,9 @@ const sociedadSchema = new mongoose.Schema({
     unique: true, 
     index: true,
     uppercase: true, // Normalizar a mayúsculas
-    trim: true
+    trim: true,
+    maxlength: 4,
+    match: [/^\d+$/, 'El código de sociedad debe ser numérico']
   },
   
   // NIT de la sociedad/empresa
@@ -27,7 +37,8 @@ const sociedadSchema = new mongoose.Schema({
     unique: true, 
     index: true,
     uppercase: true, // Para NITs con letras como "820781K"
-    trim: true
+    trim: true,
+    maxlength: 15
   },
   
   // Nombre completo de la sociedad (opcional, para display)
@@ -59,6 +70,13 @@ const sociedadSchema = new mongoose.Schema({
     monedaPrincipal: { type: String, default: 'GTQ' },
     requiereAprobacion: { type: Boolean, default: true },
     limiteGastoSinAprobacion: { type: Number, default: 0 }
+  },
+
+  updatedBy: {
+    type: String,
+    default: null,
+    trim: true,
+    lowercase: true
   }
 }, {
   timestamps: true,
@@ -99,6 +117,6 @@ sociedadSchema.statics.getActivas = function() {
   return this.find({ activa: true }).sort({ codigo: 1 });
 };
 
-const Sociedad = mongoose.model('Sociedad', sociedadSchema);
+const Sociedad = mongoose.models.Sociedad || mongoose.model('Sociedad', sociedadSchema);
 
 module.exports = Sociedad;

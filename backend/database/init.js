@@ -1,4 +1,9 @@
 const mongoose = require('mongoose');
+const Centro = require('../models/Centro');
+const Cuenta = require('../models/Cuenta');
+const OrdenCO = require('../models/OrdenCO');
+const SystemParameter = require('../models/SystemParameter');
+const Sociedad = require('../models/Sociedad');
 
 // Configuración de MongoDB
 const DEFAULT_MONGODB_URI = 'mongodb://localhost:27017';
@@ -34,6 +39,7 @@ const userSchema = new mongoose.Schema({
   sociedad: { type: String, default: null }, // Código de sociedad (ej: "1000", "2000")
   nitEmpresa: { type: String, default: null }, // NIT de la empresa/sociedad (para filtrar facturas SAT)
   isManager: { type: Boolean, default: false },
+  isAdmin: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
   lastLoginAt: { type: Date, default: null },
   needsSync: { type: Boolean, default: false },
@@ -77,8 +83,18 @@ const expenseSchema = new mongoose.Schema({
   },
   satStatus: {
     type: String,
-    enum: ['VALIDADO_SAT', 'NO_VALIDADO_SAT'],
-    default: 'NO_VALIDADO_SAT'
+    enum: ['VALIDADO_SAT', 'PENDIENTE_VALIDACION_SAT'],
+    default: 'PENDIENTE_VALIDACION_SAT'
+  },
+  satValidationCause: {
+    type: String,
+    enum: ['NO_ENCONTRADO_D_PLUS_1', 'DATOS_FISCALES_MODIFICADOS', 'NINGUNA'],
+    default: 'NINGUNA'
+  },
+  fiscalStatus: {
+    type: String,
+    enum: ['PENDIENTE', 'APTO_PARA_LIQUIDAR', 'BLOQUEADO_NIT_SOCIEDAD', 'BLOQUEADO_ANTIGUEDAD'],
+    default: 'PENDIENTE'
   },
   satValidatedAt: { type: String, default: null },
   satValidationSource: {
@@ -87,6 +103,20 @@ const expenseSchema = new mongoose.Schema({
     default: null
   },
   satValidationFingerprint: { type: String, default: null },
+  satFacturaId: { type: String, default: null },
+  satInvoiceSnapshot: {
+    numeroAutorizacion: { type: String, default: null },
+    serie: { type: String, default: null },
+    numeroDTE: { type: String, default: null },
+    nitEmisor: { type: String, default: null },
+    idReceptor: { type: String, default: null },
+    fechaEmision: { type: String, default: null },
+    granTotal: { type: Number, default: null },
+    moneda: { type: String, default: null }
+  },
+  fiscalValidatedAt: { type: String, default: null },
+  fiscalValidityDaysApplied: { type: Number, default: null },
+  imageValidationFingerprint: { type: String, default: null },
   liquidationId: { type: String, default: null }, // ID de la liquidación a la que pertenece
   voidedAt: { type: String, default: null }, // Fecha de anulación (ISO string)
   voidedReason: { type: String, default: null }, // Razón de anulación
@@ -128,7 +158,7 @@ const liquidationSchema = new mongoose.Schema({
   status: { 
     type: String, 
     required: true, 
-    enum: ['draft', 'submitted', 'approved', 'rejected'],
+    enum: ['draft', 'submitted', 'approved', 'rejected', 'fiscal_blocked'],
     default: 'draft'
   },
   managerEmail: { type: String, default: null }, // Email del jefe que debe aprobar
@@ -192,7 +222,6 @@ const chatConversationSchema = new mongoose.Schema({
 });
 
 // Crear índices
-userSchema.index({ email: 1 });
 userSchema.index({ department: 1 });
 userSchema.index({ managerEmail: 1 });
 
@@ -243,6 +272,11 @@ const createCollectionsIfNotExist = async () => {
       { name: 'expenses', model: Expense },
       { name: 'sync_logs', model: SyncLog },
       { name: 'config', model: Config },
+      { name: 'sociedades', model: Sociedad },
+      { name: 'centros', model: Centro },
+      { name: 'cuentas', model: Cuenta },
+      { name: 'ordenes_co', model: OrdenCO },
+      { name: 'system_parameters', model: SystemParameter },
       { name: 'manageremployeelinks', model: ManagerEmployeeLink },
       { name: 'chat_conversations', model: ChatConversation }
     ];
@@ -295,6 +329,27 @@ const createCollectionsIfNotExist = async () => {
             tempDoc.key = 'temp-key';
             tempDoc.value = 'temp-value';
           }
+          else if (name === 'sociedades') {
+            tempDoc.acronimo = '0000';
+            tempDoc.codigo = '0000';
+            tempDoc.nit = 'TEMP-NIT';
+          }
+          // Para los nuevos catálogos maestros
+          else if (name === 'centros') {
+            tempDoc.acronimo = 'TEMP';
+            tempDoc.codigo = 'TEMP';
+            tempDoc.ownerEmail = 'temp@temp.com';
+          }
+          else if (name === 'cuentas' || name === 'ordenes_co') {
+            tempDoc.acronimo = 'TEMP';
+            tempDoc.codigo = 'TEMP';
+          }
+          // Para parámetros del sistema
+          else if (name === 'system_parameters') {
+            tempDoc.key = 'TEMP_PARAMETER';
+            tempDoc.name = 'Temporary parameter';
+            tempDoc.value = 1;
+          }
           // Para manageremployeelinks
           else if (name === 'manageremployeelinks') {
             tempDoc.employeeEmail = 'temp@temp.com';
@@ -330,6 +385,11 @@ const createIndexes = async () => {
     await Expense.createIndexes();
     await SyncLog.createIndexes();
     await Config.createIndexes();
+    await Sociedad.createIndexes();
+    await Centro.createIndexes();
+    await Cuenta.createIndexes();
+    await OrdenCO.createIndexes();
+    await SystemParameter.createIndexes();
     
     // Los índices de ManagerEmployeeLink se crean en su propio esquema
     await ManagerEmployeeLink.createIndexes();
@@ -446,7 +506,12 @@ const getDatabaseStats = async () => {
       liquidations: await Liquidation.countDocuments(),
       syncLogs: await SyncLog.countDocuments(),
       managerLinks: await ManagerEmployeeLink.countDocuments({ isActive: true }),
-      chatConversations: await ChatConversation.countDocuments()
+      chatConversations: await ChatConversation.countDocuments(),
+      centros: await Centro.countDocuments({ activo: true }),
+      cuentas: await Cuenta.countDocuments({ activo: true }),
+      ordenesCO: await OrdenCO.countDocuments({ activo: true }),
+      systemParameters: await SystemParameter.countDocuments({ active: true }),
+      sociedades: await Sociedad.countDocuments({ activa: true })
     };
     
     return stats;
@@ -478,6 +543,11 @@ module.exports = {
     SyncLog,
     Config,
     ManagerEmployeeLink,
-    ChatConversation
+    ChatConversation,
+    Centro,
+    Cuenta,
+    OrdenCO,
+    SystemParameter,
+    Sociedad
   }
 };

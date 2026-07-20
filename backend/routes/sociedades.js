@@ -10,7 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const Sociedad = require('../models/Sociedad');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 /**
  * GET /api/sociedades
@@ -154,7 +154,7 @@ router.get('/nit/:nit', async (req, res) => {
  *   errores: 0
  * }
  */
-router.post('/sync', async (req, res) => {
+router.post('/sync', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { sociedades } = req.body;
 

@@ -1,3 +1,12 @@
+import type {
+  FiscalStatus,
+  FiscalValidationMetadata,
+  SatStatus,
+  SatValidationCause,
+} from './FiscalValidation';
+
+export type { FiscalStatus, SatStatus, SatValidationCause } from './FiscalValidation';
+
 export const STATUSES = {
   BORRADOR: { code: 1, text: 'Borrador', color: '#475569', backgroundColor: '#f1f5f9' },
   ENVIADO_JEFE: { code: 2, text: 'Enviado al Jefe', color: '#d97706', backgroundColor: '#fef3c7' },
@@ -14,10 +23,9 @@ type StatusCode = keyof typeof STATUSES;
 
 // Estados del gasto en el flujo de liquidación
 export type ExpenseStatus = 'draft' | 'in_liquidation' | 'approved' | 'voided';
-export type SatStatus = 'VALIDADO_SAT' | 'NO_VALIDADO_SAT';
 export type SatValidationSource = 'SAT_INTERNO';
 
-export interface Expense {
+export interface Expense extends FiscalValidationMetadata {
   id: string; // Timestamp para uniqueness - sirve también como fecha de creación
   description: string;
   amount: number;
@@ -27,9 +35,12 @@ export interface Expense {
   status: StatusCode;
   expenseStatus: ExpenseStatus;  // Estado en flujo de liquidación: draft, in_liquidation, approved
   satStatus?: SatStatus;
+  satValidationCause?: SatValidationCause;
+  fiscalStatus?: FiscalStatus;
   satValidatedAt?: string;
   satValidationSource?: SatValidationSource;
   satValidationFingerprint?: string;
+  imageValidationFingerprint?: string;
   supplier: string;
   vat_number: string;
   department: string;

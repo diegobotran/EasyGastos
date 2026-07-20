@@ -16,6 +16,9 @@ export interface User {
   department?: string;
   managerEmail?: string;
   sociedad?: string;
+  nitEmpresa?: string;
+  isManager?: boolean;
+  isAdmin?: boolean;
   pin?: string;
   needsSync: boolean;
   lastSync: number;

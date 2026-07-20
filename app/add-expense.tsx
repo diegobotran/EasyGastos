@@ -833,7 +833,7 @@ export default function AddExpenseScreen() {
         sociedad: expenseSociedad || undefined,
         status,
         expenseStatus: 'draft', // Estado inicial en el flujo de liquidación
-        satStatus: validationStatus === 'valid' ? 'VALIDADO_SAT' : 'NO_VALIDADO_SAT',
+        satStatus: validationStatus === 'valid' ? 'VALIDADO_SAT' : 'PENDIENTE_VALIDACION_SAT',
         satValidatedAt: validationStatus === 'valid' ? satValidatedAt : undefined,
         satValidationSource: validationStatus === 'valid' ? 'SAT_INTERNO' : undefined,
         satValidationFingerprint: validationStatus === 'valid'
