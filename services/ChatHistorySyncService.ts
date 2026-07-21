@@ -2,26 +2,19 @@
  * Servicio para sincronizar conversaciones de chat con el backend
  */
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ChatConversation } from "../models/ChatHistory";
+import { getAPI_BASE_URL } from "../config/backend";
 import { ChatHistoryService } from "./ChatHistoryService";
-
-const BACKEND_IP_KEY = "@backend_ip_address";
-const BACKEND_PORT_KEY = "@backend_port";
 
 /**
  * Obtiene la configuración del backend
  */
 async function getBackendConfig(): Promise<{ url: string }> {
   try {
-    const ip = (await AsyncStorage.getItem(BACKEND_IP_KEY)) || "23.20.116.61";
-    const port = (await AsyncStorage.getItem(BACKEND_PORT_KEY)) || "3000";
-    return {
-      url: `http://${ip}:${port}`,
-    };
+    return { url: await getAPI_BASE_URL() };
   } catch (error) {
     console.error("Error obteniendo config del backend:", error);
-    return { url: "http://23.20.116.61:3000" };
+    return { url: "http://23.20.116.61" };
   }
 }
 

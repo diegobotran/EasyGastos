@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { models } = require('../database/init');
 const { authenticateToken, canAccessUserData } = require('../middleware/auth');
+const CatalogService = require('../services/CatalogService');
 const router = express.Router();
 
 const { Category, Expense, SyncLog } = models;
@@ -27,6 +28,8 @@ router.post('/', authenticateToken, validateCategory, async (req, res) => {
     }
 
     const { id, userEmail, name, icon, sociedad, centro, cuenta, ordenco } = req.body;
+
+    await CatalogService.assertActiveReferences({ sociedad, centro, cuenta, ordenco });
 
     // Verificar si ya existe una categoría con ese ID
     const existingCategory = await Category.findOne({ id });
@@ -89,6 +92,9 @@ router.post('/', authenticateToken, validateCategory, async (req, res) => {
       await errorLog.save().catch(() => {});
     }
     
+    if (error instanceof CatalogService.CatalogError) {
+      return res.status(error.status).json({ code: error.code, error: error.message, details: error.details });
+    }
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
@@ -137,6 +143,8 @@ router.put('/:id', authenticateToken, validateCategory, async (req, res) => {
 
     const { id } = req.params;
     const { userEmail, name, icon, sociedad, centro, cuenta, ordenco } = req.body;
+
+    await CatalogService.assertActiveReferences({ sociedad, centro, cuenta, ordenco });
 
     // Buscar categoría
     const category = await Category.findOne({ id, userEmail, isActive: true });
@@ -193,6 +201,9 @@ router.put('/:id', authenticateToken, validateCategory, async (req, res) => {
     });
     await errorLog.save().catch(() => {});
     
+    if (error instanceof CatalogService.CatalogError) {
+      return res.status(error.status).json({ code: error.code, error: error.message, details: error.details });
+    }
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });

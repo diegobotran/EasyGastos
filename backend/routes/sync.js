@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const { models } = require('../database/init');
 const { authenticateToken, canAccessUserData } = require('../middleware/auth');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
+const CatalogService = require('../services/CatalogService');
 const router = express.Router();
 
 const { User, Category, Expense, SyncLog } = models;
@@ -267,6 +268,7 @@ router.post('/upload', authenticateToken, [
     // Procesar categorías
     for (const categoryData of categories) {
       try {
+        await CatalogService.assertActiveReferences(categoryData);
         await Category.findOneAndUpdate(
           { id: categoryData.id },
           {

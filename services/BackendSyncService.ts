@@ -8,6 +8,7 @@ import * as AuthService from "./AuthService";
 import * as CategoryService from "./CategoryService";
 import * as ExpenseService from "./ExpenseService";
 import * as LiquidationService from "./LiquidationService";
+import * as AccountingCatalogService from "./AccountingCatalogService";
 
 /**
  * Servicio para sincronización con el backend
@@ -60,7 +61,7 @@ export class BackendSyncService {
   private static readonly LAST_SYNC_KEY = "last_sync_timestamp";
   private static readonly SYNC_IN_PROGRESS_KEY = "sync_in_progress";
   private static readonly DEFAULT_IP = "23.20.116.61";
-  private static readonly DEFAULT_PORT = "3000";
+  private static readonly DEFAULT_PORT = "80";
 
   private static withOptionalField<T extends Record<string, any>>(
     target: T,
@@ -183,7 +184,7 @@ export class BackendSyncService {
       // Extraer IP y puerto de la URL
       const urlObj = new URL(url);
       const ip = urlObj.hostname;
-      const port = urlObj.port || "7300";
+      const port = urlObj.port || (urlObj.protocol === "https:" ? "443" : "80");
 
       const finalConfig = { ip, port, url };
       console.log("🔧 BackendSync: Configuración obtenida:", finalConfig);
@@ -196,7 +197,7 @@ export class BackendSyncService {
       const defaultConfig = {
         ip: this.DEFAULT_IP,
         port: this.DEFAULT_PORT,
-        url: `http://${this.DEFAULT_IP}:${this.DEFAULT_PORT}`,
+        url: `http://${this.DEFAULT_IP}`,
       };
       console.log(
         "🔧 BackendSync: Usando configuración por defecto:",
@@ -411,6 +412,7 @@ export class BackendSyncService {
 
       if (response.ok) {
         const result = await response.json();
+        await AuthService.saveJWTToken(result.token);
         console.log("✅ BackendSync: Login exitoso:", result.message);
         console.log(
           "🎫 BackendSync: Token obtenido (primeros 50 chars):",
@@ -2001,6 +2003,13 @@ export class BackendSyncService {
         }
         console.log("✅ BackendSync: Token JWT obtenido exitosamente");
 
+        // Los maestros contables se descargan antes que las categorías que los referencian.
+        const accountingCatalogResult = await this.syncAccountingCatalogs(loginResult.token);
+        console.log(
+          "📚 BackendSync: Resultado catálogos contables:",
+          accountingCatalogResult.success ? "✅ ÉXITO" : "⚠️ SIN CAMBIOS/OFFLINE",
+        );
+
         // PASO 3: SINCRONIZAR CATEGORÍAS CON TOKEN
         console.log(
           "📂 BackendSync: ========== PASO 3: SINCRONIZAR CATEGORÍAS ==========",
@@ -2056,6 +2065,7 @@ export class BackendSyncService {
         // EVALUAR RESULTADOS
         const anySuccess =
           userResult.success ||
+          accountingCatalogResult.success ||
           categoryResult.success ||
           expenseResult.success ||
           liquidationResult.success ||
@@ -2097,6 +2107,13 @@ export class BackendSyncService {
       console.error("Error obteniendo última sincronización:", error);
       return null;
     }
+  }
+
+  static async syncAccountingCatalogs(
+    authToken: string,
+    force = false,
+  ) {
+    return AccountingCatalogService.syncCatalogs(authToken, force);
   }
 
   /**

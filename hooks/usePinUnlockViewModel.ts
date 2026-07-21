@@ -86,6 +86,12 @@ export const usePinUnlockViewModel = ({ onUnlockSuccess, email }: UsePinUnlockVi
       const authToken = loginResult.token;
       console.log('✅ Unlock: Token obtenido');
 
+      // Actualizar maestros antes de descargar categorías que los referencian.
+      const catalogsResult = await BackendSyncService.syncAccountingCatalogs(authToken);
+      if (!catalogsResult.success) {
+        console.warn('⚠️ Unlock: Se conserva la caché local de catálogos:', catalogsResult.error);
+      }
+
       // Paso 2: Descargar CATEGORÍAS del backend
       console.log('📂 Unlock: Descargando categorías del backend...');
       const categoriesResult = await BackendSyncService.downloadCategoriesFromBackend(

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const adminRouter = require('../../routes/admin-catalogs');
 const catalogRouter = require('../../routes/catalogs');
 const legacySocietyRouter = require('../../routes/sociedades');
+const CatalogService = require('../../services/CatalogService');
 
 const routes = router => router.stack
   .filter(layer => layer.route)
@@ -57,4 +58,37 @@ test('la sincronización histórica de sociedades también exige isAdmin', () =>
   const handlers = syncLayer.route.stack.map(layer => layer.handle.name);
   assert.ok(handlers.includes('authenticateToken'));
   assert.ok(handlers.includes('requireAdmin'));
+});
+
+test('el backend rechaza referencias contables inexistentes o inactivas', async () => {
+  const originals = Object.fromEntries(Object.entries(CatalogService.definitions)
+    .map(([name, definition]) => [name, definition.model.exists]));
+  try {
+    for (const definition of Object.values(CatalogService.definitions)) {
+      definition.model.exists = async query => query.codigo !== '999999';
+    }
+
+    await assert.doesNotReject(() => CatalogService.assertActiveReferences({
+      sociedad: '4000',
+      centro: '50004',
+      cuenta: '71311901',
+      ordenco: '2000001667'
+    }));
+
+    await assert.rejects(
+      () => CatalogService.assertActiveReferences({
+        sociedad: '4000',
+        centro: '50004',
+        cuenta: '999999',
+        ordenco: '2000001667'
+      }),
+      error => error.code === 'INACTIVE_CATALOG_REFERENCE' &&
+        error.status === 422 &&
+        error.details.invalid.some(item => item.catalog === 'cuentas' && item.codigo === '999999')
+    );
+  } finally {
+    for (const [name, exists] of Object.entries(originals)) {
+      CatalogService.definitions[name].model.exists = exists;
+    }
+  }
 });

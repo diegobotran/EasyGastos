@@ -58,8 +58,9 @@ Write-Host ""
 # Paso 4: Compilar APK
 Write-Host "[4/5] Compilando APK (build limpio)..." -ForegroundColor Yellow
 Set-Location "$PSScriptRoot\android"
+$env:NODE_ENV = "production"
 
-& .\gradlew.bat assembleRelease
+& .\gradlew.bat assembleRelease --console=plain
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Fallo la compilacion" -ForegroundColor Red

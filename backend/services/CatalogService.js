@@ -240,6 +240,32 @@ const updateInvoiceValidity = async (input, updatedBy) => {
   return updated.toObject();
 };
 
+const assertActiveReferences = async references => {
+  const checks = [
+    ['sociedades', references.sociedad, 'Sociedad'],
+    ['centros', references.centro, 'Centro'],
+    ['cuentas', references.cuenta, 'Cuenta'],
+    ['ordenesCO', references.ordenco, 'Orden CO']
+  ];
+  const results = await Promise.all(checks.map(async ([catalog, rawCode, label]) => {
+    const codigo = String(rawCode || '').trim();
+    if (!codigo) return { catalog, codigo, label, active: false };
+    const definition = getDefinition(catalog);
+    const active = Boolean(await definition.model.exists({ codigo, [definition.activeField]: true }));
+    return { catalog, codigo, label, active };
+  }));
+  const invalid = results.filter(result => !result.active);
+  if (invalid.length) {
+    throw new CatalogError(
+      422,
+      'INACTIVE_CATALOG_REFERENCE',
+      'La categoría contiene referencias contables inexistentes o inactivas.',
+      { invalid: invalid.map(({ catalog, codigo, label }) => ({ catalog, codigo, label })) }
+    );
+  }
+  return true;
+};
+
 module.exports = {
   CatalogError,
   definitions,
@@ -250,6 +276,7 @@ module.exports = {
   setActive,
   getInvoiceValidity,
   updateInvoiceValidity,
+  assertActiveReferences,
   validateOwner,
   validateCode
 };

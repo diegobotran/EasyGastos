@@ -135,11 +135,13 @@ export const useSetupViewModel = () => {
         
         // Ejecutar descarga en background usando Promise sin await
         Promise.all([
+          BackendSyncService.syncAccountingCatalogs(authToken),
           BackendSyncService.downloadCategoriesFromBackend(profile.email, authToken),
           BackendSyncService.downloadExpensesFromBackend(profile.email, authToken),
           BackendSyncService.downloadLiquidationsFromBackend(profile.email, authToken)
-        ]).then(async ([categoriesResult, expensesResult, liquidationsResult]) => {
+        ]).then(async ([catalogsResult, categoriesResult, expensesResult, liquidationsResult]) => {
           console.log('✅ Setup: ========== DESCARGA EN BACKGROUND COMPLETADA ==========');
+          console.log('📚 Catálogos contables:', catalogsResult.success ? 'sincronizados' : `Error: ${catalogsResult.error}`);
           console.log('📂 Categorías:', categoriesResult.success ? `${categoriesResult.count} descargadas` : `Error: ${categoriesResult.error}`);
           console.log('💰 Gastos:', expensesResult.success ? `${expensesResult.count} descargados` : `Error: ${expensesResult.error}`);
           console.log('📁 Liquidaciones:', liquidationsResult.success ? `${liquidationsResult.count} descargadas` : `Error: ${liquidationsResult.error}`);

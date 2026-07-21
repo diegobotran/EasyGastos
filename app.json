@@ -2,7 +2,7 @@
   "expo": {
     "name": "EasyGastosMobile",
     "slug": "EasyGastosMobile",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "easygastosmobile",
@@ -18,7 +18,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.masuagt.EasyGastosMobile",
-      "versionCode": 2
+      "versionCode": 3
     },
     "web": {
       "bundler": "metro",

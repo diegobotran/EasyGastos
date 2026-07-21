@@ -55,11 +55,11 @@ const BackendConfigScreen = () => {
       const savedUrl = await AsyncStorage.getItem("backend_custom_url");
       if (savedUrl) {
         // Verificar si es una URL vieja y limpiarla
-        const oldUrls = ["200.6.231.237:7300", "200.6.231.237"];
+        const oldUrls = ["23.20.116.61:3000", "200.6.231.237:7300", "200.6.231.237"];
         if (oldUrls.some((oldUrl) => savedUrl.includes(oldUrl))) {
           console.log("🔧 backend-config: URL vieja detectada, limpiando...");
           await AsyncStorage.removeItem("backend_custom_url");
-          const defaultUrl = "http://23.20.116.61:3000";
+          const defaultUrl = "http://23.20.116.61";
           setBackendUrl(defaultUrl);
           setCurrentUrl(defaultUrl);
         } else {
@@ -68,7 +68,7 @@ const BackendConfigScreen = () => {
         }
       } else {
         // Cargar URL por defecto desde configuración
-        const defaultUrl = "http://23.20.116.61:3000";
+        const defaultUrl = "http://23.20.116.61";
         setBackendUrl(defaultUrl);
         setCurrentUrl(defaultUrl);
       }
@@ -342,7 +342,7 @@ const BackendConfigScreen = () => {
               await AsyncStorage.removeItem("backend_url_cache");
 
               // Cargar URL por defecto
-              const defaultUrl = "http://23.20.116.61:3000";
+              const defaultUrl = "http://23.20.116.61";
               setBackendUrl(defaultUrl);
               setCurrentUrl(defaultUrl);
               setTestResult(null);
@@ -368,7 +368,7 @@ const BackendConfigScreen = () => {
       local: "http://localhost:3000",
       "local-android": "http://10.0.2.2:3000",
       "local-ios": "http://localhost:3000",
-      production: "http://23.20.116.61:3000",
+      production: "http://23.20.116.61",
     };
 
     const url = presets[presetName];

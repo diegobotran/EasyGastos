@@ -1,13 +1,15 @@
 import { Category } from '../../models/Category';
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
-import React, { useEffect, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, FlatList, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useCategoryViewModel } from '../../hooks/useCategoryViewModel';
 import * as AuthService from '../../services/AuthService';
 import { BackendSyncService } from '../../services/BackendSyncService';
 import * as SecureStore from 'expo-secure-store';
-import { CENTRO_OPTIONS, CUENTA_OPTIONS, ORDENCO_OPTIONS, SOCIEDAD_OPTIONS } from '../../constants/AccountingCatalogs';
+import { AccountingCatalogOption } from '../../models/AccountingCatalog';
+import * as AccountingCatalogService from '../../services/AccountingCatalogService';
 
 export default function CategoryScreen() {
   const { categories, isLoading, addCategory, removeCategory, updateCategory, countDraftExpensesUsingCategory, getDraftExpensesUsingCategory } = useCategoryViewModel();
@@ -19,6 +21,65 @@ export default function CategoryScreen() {
   const [ordenco, setOrdenco] = useState('');
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [sociedadOptions, setSociedadOptions] = useState<AccountingCatalogOption[]>([]);
+  const [centroOptions, setCentroOptions] = useState<AccountingCatalogOption[]>([]);
+  const [cuentaOptions, setCuentaOptions] = useState<AccountingCatalogOption[]>([]);
+  const [ordenCOOptions, setOrdenCOOptions] = useState<AccountingCatalogOption[]>([]);
+  const [catalogsSyncing, setCatalogsSyncing] = useState(false);
+  const [catalogsLastSyncAt, setCatalogsLastSyncAt] = useState<number | null>(null);
+  const [catalogsMessage, setCatalogsMessage] = useState('');
+
+  const loadCachedCatalogs = useCallback(async () => {
+    const [sociedades, centros, cuentas, ordenes, metadata] = await Promise.all([
+      AccountingCatalogService.getActiveSociedades(),
+      AccountingCatalogService.getActiveCentros(),
+      AccountingCatalogService.getActiveCuentas(),
+      AccountingCatalogService.getActiveOrdenesCO(),
+      AccountingCatalogService.getCatalogMetadata(),
+    ]);
+    setSociedadOptions(sociedades);
+    setCentroOptions(centros);
+    setCuentaOptions(cuentas);
+    setOrdenCOOptions(ordenes);
+    setCatalogsLastSyncAt(metadata.lastSyncAt);
+  }, []);
+
+  const obtainCatalogToken = useCallback(async () => {
+    const existing = await AuthService.getToken();
+    if (existing) return existing;
+    const user = await AuthService.getLastLoggedInUser();
+    const pin = await AuthService.getPIN();
+    if (!user || !pin) return null;
+    const login = await BackendSyncService.loginAndGetToken(user.email, pin);
+    return login.success ? login.token || null : null;
+  }, []);
+
+  const refreshCatalogs = useCallback(async (force = false, notify = false) => {
+    setCatalogsSyncing(true);
+    try {
+      await loadCachedCatalogs();
+      const token = await obtainCatalogToken();
+      if (!token) {
+        setCatalogsMessage('Sin conexión o sesión remota. Se muestran los catálogos guardados en el dispositivo.');
+        return;
+      }
+      const result = await BackendSyncService.syncAccountingCatalogs(token, force);
+      await loadCachedCatalogs();
+      if (result.success) {
+        setCatalogsMessage(result.changed ? 'Catálogos actualizados.' : 'Los catálogos ya están al día.');
+        if (notify) Alert.alert('Catálogos', result.changed ? 'Catálogos actualizados correctamente.' : 'Los catálogos ya están al día.');
+      } else {
+        setCatalogsMessage('No se pudo actualizar. Se mantienen disponibles los datos guardados localmente.');
+        if (notify) Alert.alert('Modo sin conexión', 'No fue posible actualizar. Puedes continuar con los catálogos guardados localmente.');
+      }
+    } finally {
+      setCatalogsSyncing(false);
+    }
+  }, [loadCachedCatalogs, obtainCatalogToken]);
+
+  useFocusEffect(useCallback(() => {
+    void refreshCatalogs(false, false);
+  }, [refreshCatalogs]));
 
   const resetForm = () => {
     setName('');
@@ -37,7 +98,7 @@ export default function CategoryScreen() {
   useEffect(() => {
     const loadUserSociedad = async () => {
       const user = await AuthService.getLastLoggedInUser();
-      const defaultSociedad = user?.sociedad && SOCIEDAD_OPTIONS.includes(user.sociedad as typeof SOCIEDAD_OPTIONS[number])
+      const defaultSociedad = user?.sociedad && sociedadOptions.some(item => item.codigo === user.sociedad && item.active)
         ? user.sociedad
         : '';
       setDefaultSociedad(defaultSociedad);
@@ -45,7 +106,18 @@ export default function CategoryScreen() {
     };
 
     loadUserSociedad();
-  }, []);
+  }, [sociedadOptions]);
+
+  const validateActiveSelection = async () => {
+    const result = await AccountingCatalogService.areActiveReferences({ sociedad, centro, cuenta, ordenco });
+    if (!result.valid) {
+      Alert.alert(
+        'Catálogo desactualizado o inactivo',
+        `Corrige las siguientes referencias antes de continuar:\n\n${result.inactive.join('\n')}`,
+      );
+    }
+    return result.valid;
+  };
 
   const handleAddCategory = async () => {
     if (!name) {
@@ -169,6 +241,7 @@ export default function CategoryScreen() {
       );
       return;
     }
+    if (!(await validateActiveSelection())) return;
 
     const message = '¿Estás seguro de que deseas eliminar esta categoría? Esta acción no se puede deshacer.';
     const title = 'Confirmar Eliminación';
@@ -214,6 +287,7 @@ export default function CategoryScreen() {
       alert('La categoría ya existe.');
       return;
     }
+    if (!(await validateActiveSelection())) return;
     const updatedCategory = {
       ...editingCategory,
       name,
@@ -265,9 +339,39 @@ export default function CategoryScreen() {
     return <Text>Cargando categorías...</Text>;
   }
 
+  const optionsForPicker = (options: AccountingCatalogOption[], selected: string) => {
+    if (!selected || options.some(option => option.codigo === selected)) return options;
+    return [...options, { codigo: selected, label: `${selected} (inactivo)`, active: false, historical: true }];
+  };
+
+  const isCategoryCatalogActive = (category: Category) =>
+    sociedadOptions.some(item => item.codigo === category.sociedad) &&
+    centroOptions.some(item => item.codigo === category.centro) &&
+    cuentaOptions.some(item => item.codigo === category.cuenta) &&
+    ordenCOOptions.some(item => item.codigo === category.ordenco);
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Categorías</Text>
+      <View style={styles.catalogStatus}>
+        <View style={styles.catalogStatusText}>
+          <Text style={styles.catalogStatusTitle}>Catálogos contables</Text>
+          <Text style={styles.catalogStatusDetail}>
+            {catalogsLastSyncAt
+              ? `Última actualización: ${new Date(catalogsLastSyncAt).toLocaleString()}`
+              : 'Pendiente de primera sincronización'}
+          </Text>
+          {!!catalogsMessage && <Text style={styles.catalogStatusDetail}>{catalogsMessage}</Text>}
+        </View>
+        <TouchableOpacity
+          style={[styles.refreshButton, catalogsSyncing && styles.disabledButton]}
+          disabled={catalogsSyncing}
+          onPress={() => { void refreshCatalogs(true, true); }}
+        >
+          <Ionicons name="refresh" size={18} color="white" />
+          <Text style={styles.refreshButtonText}>{catalogsSyncing ? 'Actualizando' : 'Actualizar'}</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Form to Add Category */}
       <View style={styles.form}>
@@ -285,32 +389,32 @@ export default function CategoryScreen() {
             style={styles.pickerField}
           >
             <Picker.Item label="Seleccionar sociedad *" value="" />
-            {SOCIEDAD_OPTIONS.map((item) => (
-              <Picker.Item key={item} label={item} value={item} />
+            {sociedadOptions.map((item) => (
+              <Picker.Item key={item.codigo} label={item.label} value={item.codigo} enabled={item.active} />
             ))}
           </Picker>
         </View>
         <View style={styles.pickerContainerField}>
           <Picker selectedValue={centro} onValueChange={(value) => setCentro(value)} style={styles.pickerField}>
             <Picker.Item label="Seleccionar centro *" value="" />
-            {CENTRO_OPTIONS.map((item) => (
-              <Picker.Item key={item} label={item} value={item} />
+            {centroOptions.map((item) => (
+              <Picker.Item key={item.codigo} label={item.label} value={item.codigo} enabled={item.active} />
             ))}
           </Picker>
         </View>
         <View style={styles.pickerContainerField}>
           <Picker selectedValue={cuenta} onValueChange={(value) => setCuenta(value)} style={styles.pickerField}>
             <Picker.Item label="Seleccionar cuenta *" value="" />
-            {CUENTA_OPTIONS.map((item) => (
-              <Picker.Item key={item} label={item} value={item} />
+            {cuentaOptions.map((item) => (
+              <Picker.Item key={item.codigo} label={item.label} value={item.codigo} enabled={item.active} />
             ))}
           </Picker>
         </View>
         <View style={styles.pickerContainerField}>
           <Picker selectedValue={ordenco} onValueChange={(value) => setOrdenco(value)} style={styles.pickerField}>
             <Picker.Item label="Seleccionar orden CO *" value="" />
-            {ORDENCO_OPTIONS.map((item) => (
-              <Picker.Item key={item} label={item} value={item} />
+            {ordenCOOptions.map((item) => (
+              <Picker.Item key={item.codigo} label={item.label} value={item.codigo} enabled={item.active} />
             ))}
           </Picker>
         </View>
@@ -333,6 +437,9 @@ export default function CategoryScreen() {
             <Text style={styles.categoryDetail}>Centro: {item.centro || 'N/A'}</Text>
             <Text style={styles.categoryDetail}>Cuenta: {item.cuenta || 'N/A'}</Text>
             <Text style={styles.categoryDetail}>Orden CO: {item.ordenco || 'N/A'}</Text>
+            {!isCategoryCatalogActive(item) && (
+              <Text style={styles.inactiveWarning}>Debe corregirse: contiene una referencia inactiva.</Text>
+            )}
           </View>
 
           {/* 2. A new container for the action buttons */}
@@ -368,32 +475,32 @@ export default function CategoryScreen() {
           <View style={styles.pickerContainerField}>
             <Picker selectedValue={sociedad} onValueChange={(value) => setSociedad(value)} style={styles.pickerField}>
               <Picker.Item label="Seleccionar sociedad *" value="" />
-              {SOCIEDAD_OPTIONS.map((item) => (
-                <Picker.Item key={item} label={item} value={item} />
+              {optionsForPicker(sociedadOptions, sociedad).map((item) => (
+                <Picker.Item key={item.codigo} label={item.label} value={item.codigo} enabled={item.active} />
               ))}
             </Picker>
           </View>
           <View style={styles.pickerContainerField}>
             <Picker selectedValue={centro} onValueChange={(value) => setCentro(value)} style={styles.pickerField}>
               <Picker.Item label="Seleccionar centro *" value="" />
-              {CENTRO_OPTIONS.map((item) => (
-                <Picker.Item key={item} label={item} value={item} />
+              {optionsForPicker(centroOptions, centro).map((item) => (
+                <Picker.Item key={item.codigo} label={item.label} value={item.codigo} enabled={item.active} />
               ))}
             </Picker>
           </View>
           <View style={styles.pickerContainerField}>
             <Picker selectedValue={cuenta} onValueChange={(value) => setCuenta(value)} style={styles.pickerField}>
               <Picker.Item label="Seleccionar cuenta *" value="" />
-              {CUENTA_OPTIONS.map((item) => (
-                <Picker.Item key={item} label={item} value={item} />
+              {optionsForPicker(cuentaOptions, cuenta).map((item) => (
+                <Picker.Item key={item.codigo} label={item.label} value={item.codigo} enabled={item.active} />
               ))}
             </Picker>
           </View>
           <View style={styles.pickerContainerField}>
             <Picker selectedValue={ordenco} onValueChange={(value) => setOrdenco(value)} style={styles.pickerField}>
               <Picker.Item label="Seleccionar orden CO *" value="" />
-              {ORDENCO_OPTIONS.map((item) => (
-                <Picker.Item key={item} label={item} value={item} />
+              {optionsForPicker(ordenCOOptions, ordenco).map((item) => (
+                <Picker.Item key={item.codigo} label={item.label} value={item.codigo} enabled={item.active} />
               ))}
             </Picker>
           </View>
@@ -413,6 +520,13 @@ export default function CategoryScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: 'white' },
   title: { fontSize: 28, fontWeight: 'bold', marginBottom: 20, color: '#1e293b' },
+  catalogStatus: { flexDirection: 'row', alignItems: 'center', padding: 12, marginBottom: 16, borderRadius: 8, backgroundColor: '#eff6ff' },
+  catalogStatusText: { flex: 1, marginRight: 10 },
+  catalogStatusTitle: { color: '#1e3a8a', fontWeight: 'bold' },
+  catalogStatusDetail: { color: '#475569', fontSize: 12, marginTop: 2 },
+  refreshButton: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#2563eb', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8 },
+  refreshButtonText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
+  disabledButton: { opacity: 0.6 },
   form: { marginBottom: 20 },
   input: { borderWidth: 1, borderColor: '#ddd', padding: 10, borderRadius: 8, marginBottom: 10, color: '#1e293b' },
   readOnlyInput: { backgroundColor: '#f8fafc', color: '#64748b' },
@@ -430,6 +544,7 @@ const styles = StyleSheet.create({
   fontSize: 14,
   color: '#64748b',
 },
+  inactiveWarning: { color: '#b45309', fontSize: 13, fontWeight: '600', marginTop: 4 },
 categoryActionsContainer: {
   flexDirection: 'row', // Puts buttons side-by-side
 },
