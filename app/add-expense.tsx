@@ -11,6 +11,7 @@ import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Category } from '../models/Category';
 import { Expense, STATUSES } from '../models/Expense';
+import type { SatInvoiceSnapshot, SatValidationCause } from '../models/FiscalValidation';
 import { getExpenseAmountErrorMessage, isExpenseAmountValid } from '../models/Settings';
 import * as AuthService from '../services/AuthService';
 import { BackendSyncService } from '../services/BackendSyncService';
@@ -21,7 +22,8 @@ import { extractWithAI, extractWithGoogleVisionOCR, cleanAmount, parseInvoiceDat
 import { preprocessImageForOCR, extractFullText, extractCleanLines, extractWordsWithCoordinates, type Word } from '../utils/OCRUtils';
 import { validateInvoiceWithSAT, formatNIT, formatDateForSAT, canValidateWithSAT, openSATValidationInBrowser, formatSATDataForCopy } from '../services/SATValidationService';
 import { buildSatValidationFingerprint } from '../services/ExpenseService';
-import { buscarFacturaPorNumero, SATValidationError, validarFacturaInternaSAT } from '../services/SATFacturaService';
+import { SATValidationError, validarFacturaInternaSAT } from '../services/SATFacturaService';
+import { ExpenseFiscalValidationError, validateExpenseFiscal } from '../services/ExpenseFiscalValidationService';
 
 interface CustomAsset {
   uri: string;
@@ -56,6 +58,9 @@ export default function AddExpenseScreen() {
   const [validationMessage, setValidationMessage] = useState('');
   const [satValidatedAt, setSatValidatedAt] = useState<string | undefined>(undefined);
   const [satValidationFingerprint, setSatValidationFingerprint] = useState<string | undefined>(undefined);
+  const [satValidationCause, setSatValidationCause] = useState<SatValidationCause>('NINGUNA');
+  const [satFacturaId, setSatFacturaId] = useState<string | undefined>(undefined);
+  const [satInvoiceSnapshot, setSatInvoiceSnapshot] = useState<SatInvoiceSnapshot | undefined>(undefined);
   const [showMoreDetails, setShowMoreDetails] = useState(false);
   const [hasRedirectedForCategories, setHasRedirectedForCategories] = useState(false);
   const departments = ['Tecnologia', 'Ventas', 'Marketing', 'Finanzas', 'Recursos humanos'];
@@ -182,86 +187,6 @@ export default function AddExpenseScreen() {
       loadCustomCategories();
     }, [hasRedirectedForCategories]);
 
-    // Búsqueda automática en SAT cuando se ingresa MANUALMENTE serie y número de factura
-    useEffect(() => {
-      const buscarEnSATAutomaticamente = async () => {
-        // Solo buscar si hay serie Y número de factura ingresados
-        if (!serie || !noinvoice || serie.trim() === '' || noinvoice.trim() === '') {
-          return;
-        }
-
-        // No buscar si ya hay datos completos (NIT, proveedor, monto, UUID)
-        // Esto evita búsquedas cuando los datos ya fueron verificados por OCR
-        if (vat_number && supplier && amount && uuid) {
-          console.log('ℹ️  Ya hay datos completos verificados, omitiendo búsqueda automática');
-          return;
-        }
-
-        try {
-          console.log(`🔍 Búsqueda automática SAT (ingreso manual): Serie=${serie}, Número=${noinvoice}`);
-          
-          const factura = await buscarFacturaPorNumero(serie, noinvoice);
-          
-          if (factura) {
-            console.log('✅ ¡Factura encontrada automáticamente en SAT!');
-            console.log(`   📋 Autorización: ${factura.numeroAutorizacion}`);
-            console.log(`   🏢 Proveedor: ${factura.nombreEmisor}`);
-            console.log(`   💰 Total: ${factura.moneda} ${factura.granTotal}`);
-            
-            // Autocompletar datos desde SAT
-            setVatNumber(factura.nitEmisor);
-            setSupplier(factura.nombreEmisor);
-            setUuid(factura.numeroAutorizacion);
-            
-            // Monto total y recalcular IVA
-            const montoStr = factura.granTotal.toString();
-            handleAmountChange(montoStr);
-            
-            // Fecha de emisión
-            const fechaEmision = new Date(factura.fechaEmision);
-            setDate(fechaEmision);
-            
-            // Moneda
-            if (factura.moneda) {
-              const monedaSAT = factura.moneda.toUpperCase();
-              if (currencies.includes(monedaSAT)) {
-                setCurrency(monedaSAT);
-              }
-            }
-            
-            // Notas con nombre del establecimiento desde SAT
-            if (factura.nombreEstablecimiento) {
-              setNotes(`${factura.nombreEmisor} - ${factura.nombreEstablecimiento}`);
-            } else {
-              setNotes(factura.nombreEmisor);
-            }
-            
-            // Mostrar mensaje de éxito
-            Alert.alert(
-              '✅ Factura Verificada',
-              `Datos autocompletados desde SAT:\n\n` +
-              `Proveedor: ${factura.nombreEmisor}\n` +
-              `NIT: ${factura.nitEmisor}\n` +
-              `Total: ${factura.moneda} ${factura.granTotal}\n` +
-              `Estado: ${factura.estado || 'Vigente'}\n\n` +
-              `Autorización: ${factura.numeroAutorizacion}`,
-              [{ text: 'Entendido', style: 'default' }]
-            );
-          } else {
-            console.log('ℹ️  Factura no encontrada en SAT, continuar ingreso manual');
-          }
-        } catch (error) {
-          console.error('❌ Error en búsqueda automática SAT:', error);
-          // No mostrar error al usuario, simplemente continuar con ingreso manual
-        }
-      };
-
-      // Ejecutar búsqueda con un pequeño delay para evitar múltiples llamadas
-      const timeoutId = setTimeout(buscarEnSATAutomaticamente, 800);
-      
-      return () => clearTimeout(timeoutId);
-    }, [serie, noinvoice]); // Ejecutar cuando cambien serie o número de factura
-
       // On category change
       const handleCategoryChange = (value: string) => {
         setCategory(value);
@@ -311,6 +236,10 @@ export default function AddExpenseScreen() {
       date: formatDate(date),
       amount: amount ? parseFloat(amount) : 0,
       uuid,
+      currency,
+      sociedad: expenseSociedad,
+      category,
+      imageuri: file?.uri || '',
     });
 
     if (satValidationFingerprint && currentFingerprint !== satValidationFingerprint) {
@@ -318,8 +247,11 @@ export default function AddExpenseScreen() {
       setValidationMessage('');
       setSatValidatedAt(undefined);
       setSatValidationFingerprint(undefined);
+      setSatFacturaId(undefined);
+      setSatInvoiceSnapshot(undefined);
+      setSatValidationCause('DATOS_FISCALES_MODIFICADOS');
     }
-  }, [serie, noinvoice, vat_number, supplier, date, amount, uuid, validationStatus, satValidationFingerprint]);
+  }, [serie, noinvoice, vat_number, supplier, date, amount, uuid, currency, expenseSociedad, category, file?.uri, validationStatus, satValidationFingerprint]);
 
   // Función helper para sincronizar en segundo plano
   const syncExpenseInBackground = async (userEmail: string, userData: any) => {
@@ -484,6 +416,9 @@ export default function AddExpenseScreen() {
             setValidationMessage('');
             setSatValidatedAt(undefined);
             setSatValidationFingerprint(undefined);
+            setSatValidationCause('NINGUNA');
+            setSatFacturaId(undefined);
+            setSatInvoiceSnapshot(undefined);
             console.log('🧹 Formulario limpiado - listo para nuevo escaneo');
             Alert.alert('✓ Limpiado', 'Formulario limpiado. Puede escanear una nueva factura.');
           }
@@ -524,6 +459,9 @@ export default function AddExpenseScreen() {
 
       if (!result.encontrada || !result.validada || !result.campos) {
         setValidationStatus('invalid');
+        setSatValidationCause('NO_ENCONTRADO_D_PLUS_1');
+        setSatFacturaId(undefined);
+        setSatInvoiceSnapshot(undefined);
         setValidationMessage(result.mensaje || 'No existen datos para esa factura.');
         Alert.alert(
           'Factura no encontrada',
@@ -532,36 +470,63 @@ export default function AddExpenseScreen() {
         return;
       }
 
-      if (result.campos.vat_number) setVatNumber(String(result.campos.vat_number));
-      if (result.campos.supplier) setSupplier(String(result.campos.supplier));
-      if (result.campos.uuid) setUuid(String(result.campos.uuid));
-      if (result.campos.amount !== undefined) handleAmountChange(String(result.campos.amount));
-      if (result.campos.date) setDate(new Date(`${result.campos.date}T00:00:00`));
-      if (result.campos.currency) setCurrency(String(result.campos.currency));
-      if (result.campos.totiva !== undefined) setTotiva(String(result.campos.totiva));
-
-      const validatedFingerprint = buildSatValidationFingerprint({
-        serie: result.campos.serie || serie,
-        noinvoice: result.campos.noinvoice || noinvoice,
-        vat_number: result.campos.vat_number || vat_number,
-        supplier: result.campos.supplier || supplier,
-        date: result.campos.date || formatDate(date),
-        amount: result.campos.amount ?? (amount ? parseFloat(amount) : 0),
-        uuid: result.campos.uuid || uuid,
-      });
-
-      setSatValidatedAt(new Date().toISOString());
-      setSatValidationFingerprint(validatedFingerprint);
-      setValidationStatus('valid');
-      setValidationMessage(result.mensaje || 'Factura validada por SAT');
-
       const complementados = (result.complementados || []).map(item => item.label).join(', ');
       const corregidos = (result.corregidos || []).map(item => item.label).join(', ');
-      const sections = [];
+      const sections: string[] = [];
+      if (complementados) sections.push(`Se complementarán estos campos: ${complementados}.`);
+      if (corregidos) sections.push(`Se modificarán estos campos: ${corregidos}.`);
+      if (sections.length === 0) sections.push('Los datos ya coinciden con SAT.');
 
-      if (complementados) sections.push(`Se complementaron estos campos: ${complementados}.`);
-      if (corregidos) sections.push(`Se corrigieron estos campos: ${corregidos}.`);
-      if (sections.length === 0) sections.push('Los datos ya coincidían con SAT.');
+      const requiresAcceptance = (result.complementados?.length || 0) > 0 || (result.corregidos?.length || 0) > 0;
+      const accepted = !requiresAcceptance || await new Promise<boolean>(resolve => {
+        Alert.alert(
+          'Cambios encontrados en SAT',
+          `${sections.join('\n\n')}\n\n¿Deseas aplicar esta información y finalizar la validación?`,
+          [
+            { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Aplicar y validar', onPress: () => resolve(true) },
+          ],
+          { cancelable: false },
+        );
+      });
+      if (!accepted) {
+        setValidationStatus('idle');
+        setValidationMessage('Validación cancelada; no se modificaron los datos.');
+        return;
+      }
+
+      const corrected = {
+        serie: String(result.campos.serie || serie),
+        noinvoice: String(result.campos.noinvoice || noinvoice),
+        vat_number: String(result.campos.vat_number || vat_number),
+        supplier: String(result.campos.supplier || supplier),
+        date: String(result.campos.date || formatDate(date)),
+        amount: result.campos.amount ?? (amount ? parseFloat(amount) : 0),
+        uuid: String(result.campos.uuid || uuid),
+        currency: String(result.campos.currency || currency),
+        imageuri: file?.uri || '',
+        sociedad: expenseSociedad,
+        category,
+      };
+      setSerie(corrected.serie);
+      setNoinvoice(corrected.noinvoice);
+      setVatNumber(corrected.vat_number);
+      setSupplier(corrected.supplier);
+      setUuid(corrected.uuid);
+      handleAmountChange(String(corrected.amount));
+      setDate(new Date(`${corrected.date}T00:00:00`));
+      setCurrency(corrected.currency);
+      if (result.campos.totiva !== undefined) setTotiva(String(result.campos.totiva));
+
+      const validatedFingerprint = buildSatValidationFingerprint(corrected);
+
+      setSatValidatedAt(result.validatedAt || new Date().toISOString());
+      setSatValidationFingerprint(validatedFingerprint);
+      setSatValidationCause('NINGUNA');
+      setSatFacturaId(result.facturaId);
+      setSatInvoiceSnapshot(result.snapshot);
+      setValidationStatus('valid');
+      setValidationMessage(result.mensaje || 'Factura validada por SAT');
 
       Alert.alert('Validación SAT completada', sections.join('\n\n'));
       return;
@@ -669,8 +634,10 @@ export default function AddExpenseScreen() {
         userMessage: presentation.userMessage,
         technicalMessage: presentation.technicalMessage,
       });
-      setValidationStatus('idle');
-      setValidationMessage('');
+      if (validationStatus !== 'valid') {
+        setValidationStatus('idle');
+        setValidationMessage('');
+      }
       
       Alert.alert(
         presentation.title,
@@ -824,7 +791,7 @@ export default function AddExpenseScreen() {
       }
 
       // CREAR OBJETO DEL GASTO
-      const newExpense: Expense = {
+      let newExpense: Expense = {
         id: Date.now().toString(),
         description: finalDescription,
         amount: parsedAmount || 0,
@@ -834,10 +801,12 @@ export default function AddExpenseScreen() {
         status,
         expenseStatus: 'draft', // Estado inicial en el flujo de liquidación
         satStatus: validationStatus === 'valid' ? 'VALIDADO_SAT' : 'PENDIENTE_VALIDACION_SAT',
+        satValidationCause: validationStatus === 'valid' ? 'NINGUNA' : satValidationCause,
+        fiscalStatus: 'PENDIENTE',
         satValidatedAt: validationStatus === 'valid' ? satValidatedAt : undefined,
         satValidationSource: validationStatus === 'valid' ? 'SAT_INTERNO' : undefined,
         satValidationFingerprint: validationStatus === 'valid'
-          ? (satValidationFingerprint || buildSatValidationFingerprint({
+          ? buildSatValidationFingerprint({
               serie: serie || '',
               noinvoice: noinvoice || '',
               vat_number: vat_number || '',
@@ -845,8 +814,15 @@ export default function AddExpenseScreen() {
               date: formatDate(date),
               amount: parsedAmount || 0,
               uuid: uuid || '',
-            }))
+              currency: currency || 'GTQ',
+              sociedad: expenseSociedad,
+              category,
+              imageuri: file?.uri || '',
+              imageValidationFingerprint: file?.uri || '',
+            })
           : undefined,
+        satFacturaId: validationStatus === 'valid' ? satFacturaId : undefined,
+        satInvoiceSnapshot: validationStatus === 'valid' ? satInvoiceSnapshot : undefined,
         supplier: supplier || 'Proveedor Desconocido',
         vat_number: vat_number || '',
         department,
@@ -860,12 +836,16 @@ export default function AddExpenseScreen() {
         updatedAt: Date.now(),
         ordenco: ordenco || '',
         imageuri: file?.uri || '',
+        imageValidationFingerprint: validationStatus === 'valid' ? file?.uri || '' : undefined,
         totiva: parseFloat(totiva) || 0,
         currency: currency || 'GTQ',
         email: user.email
       };
 
       console.log('📋 AddExpense: Objeto del gasto creado');
+
+      // Hard Stop fiscal: el backend verifica evidencia SAT, Sociedad–NIT y vigencia antes de persistir localmente.
+      newExpense = await validateExpenseFiscal(newExpense);
 
       // PASO 1: GUARDAR LOCALMENTE (RÁPIDO - OFFLINE FIRST)
       console.log('📱 AddExpense: Guardando gasto localmente...');
@@ -892,7 +872,9 @@ export default function AddExpenseScreen() {
     } catch (error: unknown) {
       console.error('❌ AddExpense: Error en handleSave:', error);
       const err = error as any;
-      if (err?.name === 'QuotaExceededError') {
+      if (error instanceof ExpenseFiscalValidationError) {
+        Alert.alert('No se puede guardar el gasto', `${error.message}\n\nCódigo: ${error.code}`);
+      } else if (err?.name === 'QuotaExceededError') {
         alert('Error: Almacenamiento local lleno. Limpie datos del navegador o elimine gastos antiguos.');
       } else {
         alert('Error al guardar el gasto: ' + (err?.message || 'Error desconocido'));

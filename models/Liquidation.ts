@@ -29,6 +29,9 @@ export interface Liquidation {
   sapReferenceId?: string;       // Identificador devuelto por SAP
   sapResponseMessage?: string;   // Mensaje devuelto por SAP
   sapSyncedAt?: string;          // Fecha/hora de sincronización SAP
+  fiscalBlockedAt?: string;      // Fecha/hora del bloqueo previo a SAP
+  fiscalBlockReason?: string;    // Código funcional del bloqueo
+  fiscalBlockedExpenses?: FiscalBlockedExpense[]; // Gastos que causaron el bloqueo
   approverName?: string;         // Nombre del aprobador (opcional)
   comments?: string;             // Comentarios adicionales (opcional)
   createdAt?: number;            // Timestamp de creación de la liquidación
@@ -54,6 +57,16 @@ export interface CreateLiquidationDTO {
   sociedad: string;
   currency: string;
   expenseIds: string[];
+}
+
+export interface FiscalBlockedExpense {
+  id: string;
+  description?: string;
+  serie?: string;
+  noinvoice?: string;
+  issueDate?: string;
+  elapsedDays?: number;
+  allowedDays?: number;
 }
 
 /**

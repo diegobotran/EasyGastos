@@ -69,6 +69,7 @@ interface SATFacturaResponse {
 }
 
 export interface SATInternalValidationResult {
+  code?: 'SAT_INVOICE_FOUND' | 'SAT_NOT_FOUND_D_PLUS_1';
   encontrada: boolean;
   validada?: boolean;
   factura?: SATFactura;
@@ -87,6 +88,21 @@ export interface SATInternalValidationResult {
   corregidos?: Array<{ field: string; label: string; previousValue: string | number; newValue: string | number }>;
   mensaje?: string;
   disclaimer?: string;
+  facturaId?: string;
+  snapshot?: {
+    numeroAutorizacion?: string;
+    serie: string;
+    numeroDTE: string;
+    nitEmisor: string;
+    nombreEmisor?: string;
+    idReceptor: string;
+    nombreReceptor?: string;
+    fechaEmision: string;
+    granTotal: number;
+    moneda?: string;
+    iva?: number;
+  };
+  validatedAt?: string;
 }
 
 const toTechnicalMessage = (error: unknown): string => {
@@ -393,23 +409,7 @@ export const validarFacturaInternaSAT = async (payload: {
   totiva?: number;
 }): Promise<SATInternalValidationResult> => {
   try {
-    const data = await executeSATPost<SATFacturaResponse>('/api/sat/buscar-por-numero', {
-      serie: payload.serie,
-      numeroDTE: payload.noinvoice,
-    });
-
-    if (!data.encontrada || !data.factura) {
-      return {
-        encontrada: false,
-        validada: false,
-        mensaje: data.mensaje || 'No existen datos para esa factura.',
-        disclaimer:
-          data.disclaimer ||
-          'Las facturas solo están disponibles para consulta 24 horas después de haber sido emitidas por el emisor.',
-      };
-    }
-
-    return buildValidationResultFromFactura(payload, data.factura);
+    return await executeSATPost<SATInternalValidationResult>('/api/sat/validar-interno', payload);
   } catch (error) {
     const normalizedError = normalizeSATError(error, 'Error inesperado al validar SAT');
     console.error('Verificador SAT interno: Error validando factura:', {

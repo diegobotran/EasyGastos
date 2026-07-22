@@ -20,7 +20,7 @@ export type DraftExpenseCategoryLink = {
 type SatFingerprintExpense = Pick<
   Expense,
   'serie' | 'noinvoice' | 'vat_number' | 'supplier' | 'date' | 'amount' | 'uuid'
->;
+> & Partial<Pick<Expense, 'currency' | 'sociedad' | 'category' | 'imageuri' | 'imageValidationFingerprint'>>;
 
 const normalizeSatValue = (value: unknown): string => {
   if (value === null || value === undefined) {
@@ -38,11 +38,15 @@ export const buildSatValidationFingerprint = (expense: SatFingerprintExpense): s
   return [
     normalizeSatValue(expense.serie),
     normalizeSatValue(expense.noinvoice),
+    normalizeSatValue(expense.uuid),
     normalizeSatValue(expense.vat_number),
     normalizeSatValue(expense.supplier),
     normalizeSatValue(expense.date),
     normalizeSatValue(expense.amount),
-    normalizeSatValue(expense.uuid),
+    normalizeSatValue(expense.currency),
+    normalizeSatValue(expense.sociedad),
+    normalizeSatValue(expense.category),
+    normalizeSatValue(expense.imageValidationFingerprint || expense.imageuri),
   ].join('|');
 };
 
@@ -53,6 +57,7 @@ const normalizeSatValidationState = (expense: Expense): Expense => {
     expense.satValidationSource === 'SAT_INTERNO' &&
     expense.satValidationFingerprint
   );
+  const hadSuccessfulValidation = expense.satStatus === 'VALIDADO_SAT' || hasMetadata;
 
   if (expense.satStatus === 'VALIDADO_SAT' && hasMetadata && expense.satValidationFingerprint === fingerprint) {
     return {
@@ -66,7 +71,9 @@ const normalizeSatValidationState = (expense: Expense): Expense => {
   return {
     ...expense,
     satStatus: 'PENDIENTE_VALIDACION_SAT',
-    satValidationCause: expense.satValidationCause || 'NINGUNA',
+    satValidationCause: hadSuccessfulValidation
+      ? 'DATOS_FISCALES_MODIFICADOS'
+      : (expense.satValidationCause || 'NINGUNA'),
     fiscalStatus: 'PENDIENTE',
     satValidatedAt: undefined,
     satValidationSource: undefined,
@@ -75,6 +82,7 @@ const normalizeSatValidationState = (expense: Expense): Expense => {
     satInvoiceSnapshot: undefined,
     fiscalValidatedAt: undefined,
     fiscalValidityDaysApplied: undefined,
+    imageValidationFingerprint: undefined,
   };
 };
 
@@ -93,6 +101,22 @@ const parseSatInvoiceSnapshot = (value: unknown): Expense['satInvoiceSnapshot'] 
   } catch {
     return undefined;
   }
+};
+
+const getGuatemalaDate = (value: Date = new Date()): string => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Guatemala', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(value);
+  const part = (type: string) => parts.find(item => item.type === type)?.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+};
+
+const calendarDaysBetween = (start: string, end: string): number => {
+  const toDay = (value: string) => {
+    const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+    return Math.floor(Date.UTC(year, month - 1, day) / 86400000);
+  };
+  return toDay(end) - toDay(start);
 };
 
 const mapFiscalFieldsFromRow = <T extends Record<string, any>>(row: T): T & Partial<Expense> => ({
@@ -1221,6 +1245,24 @@ export const validateExpenseForLiquidation = async (
         valid: false,
         error: 'Este gasto debe validarse por SAT antes de incluirse en una liquidación.'
       };
+    }
+
+    if (expense.fiscalStatus !== 'APTO_PARA_LIQUIDAR') {
+      return {
+        valid: false,
+        error: 'Este gasto no está apto fiscalmente para incluirse en una liquidación.'
+      };
+    }
+
+    if (typeof expense.fiscalValidityDaysApplied === 'number') {
+      const issueDate = expense.satInvoiceSnapshot?.fechaEmision || expense.date;
+      const elapsedDays = calendarDaysBetween(issueDate, getGuatemalaDate());
+      if (elapsedDays > expense.fiscalValidityDaysApplied) {
+        return {
+          valid: false,
+          error: `Este gasto tiene ${elapsedDays} días y supera la vigencia de ${expense.fiscalValidityDaysApplied} días.`
+        };
+      }
     }
     
     // Si ya tiene liquidationId y no es la liquidación objetivo

@@ -176,7 +176,10 @@ const liquidationSchema = new mongoose.Schema({
   sapSyncStatus: { type: String, default: null },
   sapReferenceId: { type: String, default: null },
   sapResponseMessage: { type: String, default: null },
-  sapSyncedAt: { type: String, default: null }
+  sapSyncedAt: { type: String, default: null },
+  fiscalBlockedAt: { type: String, default: null },
+  fiscalBlockReason: { type: String, default: null },
+  fiscalBlockedExpenses: { type: [mongoose.Schema.Types.Mixed], default: [] }
 }, {
   timestamps: true, // createdAt y updatedAt
   collection: 'liquidations'

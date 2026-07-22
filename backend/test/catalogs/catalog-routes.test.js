@@ -82,7 +82,7 @@ test('el backend rechaza referencias contables inexistentes o inactivas', async 
         cuenta: '999999',
         ordenco: '2000001667'
       }),
-      error => error.code === 'INACTIVE_CATALOG_REFERENCE' &&
+      error => error.code === 'CATALOG_ENTRY_INACTIVE' &&
         error.status === 422 &&
         error.details.invalid.some(item => item.catalog === 'cuentas' && item.codigo === '999999')
     );

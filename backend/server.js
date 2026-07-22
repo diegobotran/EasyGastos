@@ -136,6 +136,7 @@ app.get('/', (req, res) => {
         submit: 'PUT /api/liquidations/:id/submit',
         approve: 'PUT /api/liquidations/:id/approve',
         reject: 'PUT /api/liquidations/:id/reject',
+        returnToDraft: 'PUT /api/liquidations/:id/return-to-draft',
         delete: 'DELETE /api/liquidations/:id',
         csv: 'GET /api/liquidations/:id/csv',
         update: 'PUT /api/liquidations/:id'

@@ -70,6 +70,9 @@ export const initLiquidationsTable = async (): Promise<void> => {
           sapReferenceId TEXT,
           sapResponseMessage TEXT,
           sapSyncedAt TEXT,
+          fiscalBlockedAt TEXT,
+          fiscalBlockReason TEXT,
+          fiscalBlockedExpenses TEXT,
           synced INTEGER DEFAULT 0
         )
       `);
@@ -85,7 +88,10 @@ export const initLiquidationsTable = async (): Promise<void> => {
         ['sapSyncStatus', 'TEXT'],
         ['sapReferenceId', 'TEXT'],
         ['sapResponseMessage', 'TEXT'],
-        ['sapSyncedAt', 'TEXT']
+        ['sapSyncedAt', 'TEXT'],
+        ['fiscalBlockedAt', 'TEXT'],
+        ['fiscalBlockReason', 'TEXT'],
+        ['fiscalBlockedExpenses', 'TEXT']
       ];
 
       for (const [columnName, columnType] of liquidationColumns) {
@@ -140,6 +146,7 @@ export const createLiquidation = async (
 
     // Calcular el monto total sumando los gastos
     let totalAmount = 0;
+    let liquidationCenter: string | null = null;
     for (const expenseId of dto.expenseIds) {
       const validation = await validateExpenseForLiquidation(expenseId, dto.userId);
       if (!validation.valid) {
@@ -153,6 +160,14 @@ export const createLiquidation = async (
         }
         if (String(expense.currency || '').trim() !== dto.currency.trim()) {
           throw new Error(`Todos los gastos de una liquidación deben pertenecer a la moneda ${dto.currency}.`);
+        }
+        const expenseCenter = String(expense.centro || '').trim();
+        if (!expenseCenter) {
+          throw new Error('Todos los gastos deben tener un centro contable activo.');
+        }
+        if (liquidationCenter === null) liquidationCenter = expenseCenter;
+        if (expenseCenter !== liquidationCenter) {
+          throw new Error(`Todos los gastos de una liquidación deben pertenecer al centro ${liquidationCenter}.`);
         }
         totalAmount += expense.amount;
       }
@@ -250,6 +265,9 @@ export const getLiquidations = async (userId: string): Promise<Liquidation[]> =>
       sapReferenceId: row.sapReferenceId,
       sapResponseMessage: row.sapResponseMessage,
       sapSyncedAt: row.sapSyncedAt,
+      fiscalBlockedAt: row.fiscalBlockedAt,
+      fiscalBlockReason: row.fiscalBlockReason,
+      fiscalBlockedExpenses: row.fiscalBlockedExpenses ? JSON.parse(row.fiscalBlockedExpenses) : [],
       managerComments: row.managerComments,
       submittedDate: row.submittedDate,
       approvedDate: row.approvedDate,
@@ -302,6 +320,9 @@ export const getLiquidationById = async (id: string, userId: string): Promise<Li
       sapReferenceId: result.sapReferenceId,
       sapResponseMessage: result.sapResponseMessage,
       sapSyncedAt: result.sapSyncedAt,
+      fiscalBlockedAt: result.fiscalBlockedAt,
+      fiscalBlockReason: result.fiscalBlockReason,
+      fiscalBlockedExpenses: result.fiscalBlockedExpenses ? JSON.parse(result.fiscalBlockedExpenses) : [],
       managerComments: result.managerComments,
       submittedDate: result.submittedDate,
       approvedDate: result.approvedDate,
@@ -354,6 +375,12 @@ export const addExpenseToLiquidation = async (
 
     if (String(expense.currency || '').trim() !== String(liquidation.currency || '').trim()) {
       throw new Error(`Solo puede agregar gastos de la moneda ${liquidation.currency} a esta liquidación.`);
+    }
+
+    const currentExpenses = await Promise.all(liquidation.expenseIds.map(id => getExpenseById(id, liquidation.userId)));
+    const currentCenter = String(currentExpenses.find(Boolean)?.centro || '').trim();
+    if (!currentCenter || String(expense.centro || '').trim() !== currentCenter) {
+      throw new Error(`Solo puede agregar gastos del centro ${currentCenter || 'definido en la liquidación'}.`);
     }
 
     const validation = await validateExpenseForLiquidation(expenseId, liquidation.userId, liquidationId);
@@ -542,6 +569,9 @@ export const updateLiquidationStatus = async (
       sapReferenceId: result.sapReferenceId,
       sapResponseMessage: result.sapResponseMessage,
       sapSyncedAt: result.sapSyncedAt,
+      fiscalBlockedAt: result.fiscalBlockedAt,
+      fiscalBlockReason: result.fiscalBlockReason,
+      fiscalBlockedExpenses: result.fiscalBlockedExpenses ? JSON.parse(result.fiscalBlockedExpenses) : [],
       managerComments: result.managerComments,
       submittedDate: result.submittedDate,
       approvedDate: result.approvedDate,
@@ -719,6 +749,9 @@ export const getLiquidationsNeedingSync = async (userId: string): Promise<Liquid
           sapReferenceId: row.sapReferenceId,
           sapResponseMessage: row.sapResponseMessage,
           sapSyncedAt: row.sapSyncedAt,
+          fiscalBlockedAt: row.fiscalBlockedAt,
+          fiscalBlockReason: row.fiscalBlockReason,
+          fiscalBlockedExpenses: row.fiscalBlockedExpenses ? JSON.parse(row.fiscalBlockedExpenses) : [],
           managerComments: row.managerComments,
           submittedDate: row.submittedDate,
           approvedDate: row.approvedDate,
@@ -853,8 +886,9 @@ export const insertLiquidationFromBackend = async (liquidation: any): Promise<vo
         sociedad, currency, totalAmount, status, managerEmail, managerComments, submittedDate,
         approvedDate, rejectedDate, approverEmail, rejectedBy,
         csvGeneratedAt, csvGeneratedBy, sapDocNumber, sapSyncStatus,
-        sapReferenceId, sapResponseMessage, sapSyncedAt, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        sapReferenceId, sapResponseMessage, sapSyncedAt,
+        fiscalBlockedAt, fiscalBlockReason, fiscalBlockedExpenses, synced
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         liquidation.id,
         liquidation.userId,
@@ -878,7 +912,10 @@ export const insertLiquidationFromBackend = async (liquidation: any): Promise<vo
         liquidation.sapSyncStatus || null,
         liquidation.sapReferenceId || null,
         liquidation.sapResponseMessage || null,
-        liquidation.sapSyncedAt || null
+        liquidation.sapSyncedAt || null,
+        liquidation.fiscalBlockedAt || null,
+        liquidation.fiscalBlockReason || null,
+        JSON.stringify(liquidation.fiscalBlockedExpenses || [])
       ]
     );
 

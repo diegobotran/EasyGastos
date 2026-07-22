@@ -14,73 +14,10 @@ const crypto = require('crypto');
 const SatFactura = require('../models/SatFactura');
 const ArchivoSatProcesado = require('../models/ArchivoSatProcesado');
 const { authenticateToken, requireManager } = require('../middleware/auth');
+const SATInternalValidationService = require('../services/SATInternalValidationService');
 
 // Colecciones protegidas que NO deben ser afectadas
 const PROTECTED_COLLECTIONS = ['users', 'expenses', 'liquidations', 'categories', 'sync_logs', 'config', 'chat_conversations'];
-const SAT_NOT_FOUND_DISCLAIMER = 'Las facturas solo estÃ¡n disponibles para consulta 24 horas despuÃ©s de haber sido emitidas por el emisor.';
-
-const normalizeValue = (value) => {
-  if (value === null || value === undefined) {
-    return '';
-  }
-
-  if (typeof value === 'number') {
-    return value.toFixed(2);
-  }
-
-  return String(value).trim();
-};
-
-const buildFieldChanges = (factura, currentValues = {}) => {
-  const fieldMap = [
-    { key: 'serie', label: 'Serie', satValue: factura.serie },
-    { key: 'noinvoice', label: 'No. Factura', satValue: factura.numeroDTE },
-    { key: 'vat_number', label: 'NIT del Emisor', satValue: factura.nitEmisor },
-    { key: 'supplier', label: 'Proveedor', satValue: factura.nombreEmisor },
-    { key: 'date', label: 'Fecha del Documento', satValue: new Date(factura.fechaEmision).toISOString().split('T')[0] },
-    { key: 'amount', label: 'Monto', satValue: factura.granTotal },
-    { key: 'uuid', label: 'UUID', satValue: factura.numeroAutorizacion },
-    { key: 'currency', label: 'Moneda', satValue: factura.moneda || 'GTQ' },
-    { key: 'totiva', label: 'IVA', satValue: factura.iva || 0 },
-  ];
-
-  const complementados = [];
-  const corregidos = [];
-  const normalizedFields = {};
-
-  for (const field of fieldMap) {
-    const incomingValue = field.satValue;
-    normalizedFields[field.key] = incomingValue;
-
-    const currentValue = currentValues[field.key];
-    const currentNormalized = normalizeValue(currentValue);
-    const incomingNormalized = normalizeValue(incomingValue);
-
-    if (!incomingNormalized) {
-      continue;
-    }
-
-    if (!currentNormalized) {
-      complementados.push({
-        field: field.key,
-        label: field.label,
-        newValue: incomingValue,
-      });
-      continue;
-    }
-
-    if (currentNormalized !== incomingNormalized) {
-      corregidos.push({
-        field: field.key,
-        label: field.label,
-        previousValue: currentValue,
-        newValue: incomingValue,
-      });
-    }
-  }
-
-  return { normalizedFields, complementados, corregidos };
-};
 
 /**
  * POST /api/sat/import
@@ -484,58 +421,12 @@ router.post('/buscar-por-numero', authenticateToken, async (req, res) => {
 
 router.post('/validar-interno', authenticateToken, async (req, res) => {
   try {
-    const { serie, noinvoice, nitEmisor } = req.body;
-
-    if (!serie || !noinvoice || !nitEmisor) {
-      return res.status(400).json({
-        error: 'Se requiere serie, noinvoice y nitEmisor'
-      });
-    }
-
-    const serieNormalizada = serie.toString().trim();
-    const numeroNormalizado = noinvoice.toString().trim();
-    const nitEmisorNormalizado = nitEmisor.toString().replace(/[-\s]/g, '').trim();
-    const nitReceptorNormalizado = req.user.nitEmpresa
-      ? req.user.nitEmpresa.toString().replace(/[-\s]/g, '').trim()
-      : null;
-
-    const criterio = {
-      serie: serieNormalizada,
-      numeroDTE: numeroNormalizado,
-      nitEmisor: nitEmisorNormalizado,
-    };
-
-    if (nitReceptorNormalizado) {
-      criterio.idReceptor = nitReceptorNormalizado;
-    }
-
-    const factura = await SatFactura.findOne(criterio)
-      .select('-__v -createdAt -updatedAt')
-      .sort({ fechaEmision: -1 });
-
-    if (!factura) {
-      return res.json({
-        encontrada: false,
-        mensaje: 'No existen datos para esa factura.',
-        disclaimer: SAT_NOT_FOUND_DISCLAIMER,
-      });
-    }
-
-    const { normalizedFields, complementados, corregidos } = buildFieldChanges(factura, req.body);
-
-    return res.json({
-      encontrada: true,
-      validada: true,
-      factura,
-      campos: normalizedFields,
-      complementados,
-      corregidos,
-      mensaje: 'Factura validada por servicio interno SAT'
-    });
+    return res.json(await SATInternalValidationService.validate(req.body));
   } catch (error) {
     console.error('❌ Error validando factura SAT interna:', error);
-    return res.status(500).json({
-      error: 'Error validando factura',
+    return res.status(error.status || 503).json({
+      code: error.code || 'SAT_INTERNAL_SERVICE_ERROR',
+      error: error.status ? error.message : 'No fue posible consultar la réplica SAT interna.',
       detalle: error.message
     });
   }

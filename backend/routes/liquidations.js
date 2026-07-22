@@ -5,11 +5,18 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireManager, canAccessUserData } = require('../middleware/auth');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 const { buildLiquidationSAPPayloadPreview } = require('../services/SAPPayloadService');
+const LiquidationFiscalValidationService = require('../services/LiquidationFiscalValidationService');
 
 const { Liquidation, Expense, User } = models;
 const SAP_EA_DOCUMENT_URL = process.env.SAP_EA_DOCUMENT_URL || 'https://api-integration-plataform-qa-wozvko.0uij1w.usa-e2.cloudhub.io/api/ea-document';
 const SAP_EA_DOCUMENT_USER = process.env.SAP_EA_DOCUMENT_USER || 'easyapp';
 const SAP_EA_DOCUMENT_PASSWORD = process.env.SAP_EA_DOCUMENT_PASSWORD || '';
+
+const sendFunctionalError = (res, error) => res.status(error.status || 422).json({
+  error: error.message,
+  code: error.code,
+  ...(error.details ? { details: error.details } : {})
+});
 
 const getSAPReturnMessages = (payload) => {
   if (Array.isArray(payload?.retunr)) {
@@ -265,6 +272,12 @@ router.post('/',
         });
       }
 
+      await LiquidationFiscalValidationService.assertFormation({
+        expenses: expensesToInclude,
+        sociedad,
+        currency: normalizedCurrency
+      });
+
       // Obtener el jefe directo del empleado
       console.log('👔 Buscando jefe directo para:', userId);
       const manager = await ManagerEmployeeLink.getDirectManager(userId);
@@ -282,7 +295,8 @@ router.post('/',
         createdDate: createdDate || new Date().toISOString().split('T')[0],
         expenseIds,
         totalAmount,
-        status: status || 'draft',
+        // La creación nunca acepta una transición de estado enviada por el cliente.
+        status: 'draft',
         managerEmail,
         sapDocNumber: sapDocNumber || null,
         sapSyncStatus: sapSyncStatus || null,
@@ -314,6 +328,7 @@ router.post('/',
     } catch (error) {
       console.error('❌ ERROR creando liquidación:', error);
       console.error('❌ Stack trace:', error.stack);
+      if (error.status && error.code) return sendFunctionalError(res, error);
       res.status(500).json({ error: 'Error del servidor' });
     }
   }
@@ -455,6 +470,15 @@ router.put('/:id/submit', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'La liquidación debe tener al menos un gasto' });
     }
 
+    const expenses = await Expense.find({ id: { $in: liquidation.expenseIds } });
+    if (expenses.length !== liquidation.expenseIds.length) {
+      return res.status(422).json({
+        error: 'No se encontraron todos los gastos de la liquidación.',
+        code: 'LIQUIDATION_EXPENSES_NOT_FOUND'
+      });
+    }
+    await LiquidationFiscalValidationService.assertSubmit(expenses);
+
     liquidation.status = 'submitted';
     liquidation.submittedDate = new Date().toISOString().split('T')[0];
     
@@ -471,6 +495,7 @@ router.put('/:id/submit', authenticateToken, async (req, res) => {
     res.json(liquidation);
   } catch (error) {
     console.error('Error enviando liquidación:', error);
+    if (error.status && error.code) return sendFunctionalError(res, error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -605,6 +630,58 @@ router.put('/:id/reject',
     }
   }
 );
+
+/**
+ * @route   PUT /api/liquidations/:id/return-to-draft
+ * @desc    Regresar una liquidación bloqueada fiscalmente a borrador
+ * @access  Private (propietario, manager o administrador)
+ */
+router.put('/:id/return-to-draft', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const liquidation = await Liquidation.findOne({ id });
+    if (!liquidation) return res.status(404).json({ error: 'Liquidación no encontrada' });
+
+    const canReturn = req.user.email === liquidation.userId || req.user.isManager || req.user.isAdmin;
+    if (!canReturn) {
+      return res.status(403).json({ error: 'No tienes permisos para devolver esta liquidación a borrador' });
+    }
+    if (liquidation.status !== 'fiscal_blocked') {
+      return res.status(409).json({
+        error: 'Solo una liquidación bloqueada fiscalmente puede volver a borrador por esta operación.',
+        code: 'LIQUIDATION_NOT_FISCALLY_BLOCKED'
+      });
+    }
+
+    liquidation.status = 'draft';
+    liquidation.submittedDate = null;
+    liquidation.approvedDate = null;
+    liquidation.rejectedDate = null;
+    liquidation.approverEmail = null;
+    liquidation.approverName = null;
+    liquidation.rejectedBy = null;
+    liquidation.managerComments = null;
+    liquidation.fiscalBlockedAt = null;
+    liquidation.fiscalBlockReason = null;
+    liquidation.fiscalBlockedExpenses = [];
+    liquidation.sapDocNumber = null;
+    liquidation.sapSyncStatus = null;
+    liquidation.sapReferenceId = null;
+    liquidation.sapResponseMessage = null;
+    liquidation.sapSyncedAt = null;
+    await liquidation.save();
+
+    await Expense.updateMany(
+      { id: { $in: liquidation.expenseIds } },
+      { $set: { expenseStatus: 'in_liquidation', liquidationId: liquidation.id } }
+    );
+
+    return res.json(liquidation);
+  } catch (error) {
+    console.error('Error devolviendo liquidación a borrador:', error);
+    return res.status(500).json({ error: 'Error del servidor' });
+  }
+});
 
 /**
  * @route   DELETE /api/liquidations/:id
@@ -750,6 +827,35 @@ router.post('/:id/send-to-sap', authenticateToken, async (req, res) => {
 
     if (liquidation.status !== 'approved') {
       return res.status(400).json({ error: 'Solo se pueden enviar a SAP liquidaciones aprobadas' });
+    }
+
+    // Hard Stop fiscal: se recuperan los gastos inmediatamente antes del envío y
+    // solo se recalcula antigüedad. No se consulta SAT ni se revalidan catálogos.
+    const expensesBeforeSAP = await Expense.find({ id: { $in: liquidation.expenseIds } });
+    if (expensesBeforeSAP.length !== liquidation.expenseIds.length) {
+      return res.status(422).json({
+        error: 'No se encontraron todos los gastos de la liquidación.',
+        code: 'LIQUIDATION_EXPENSES_NOT_FOUND'
+      });
+    }
+    const expiredExpenses = await LiquidationFiscalValidationService.findExpiredExpenses(expensesBeforeSAP);
+    if (expiredExpenses.length) {
+      liquidation.status = 'fiscal_blocked';
+      liquidation.fiscalBlockedAt = syncedAt;
+      liquidation.fiscalBlockReason = 'LIQUIDATION_HAS_EXPIRED_EXPENSES';
+      liquidation.fiscalBlockedExpenses = expiredExpenses;
+      liquidation.sapSyncStatus = null;
+      liquidation.sapResponseMessage = null;
+      liquidation.sapSyncedAt = null;
+      await liquidation.save();
+
+      return res.status(422).json({
+        error: 'No se envió a SAP porque uno o más gastos vencieron.',
+        code: 'LIQUIDATION_FISCAL_BLOCKED',
+        cause: 'LIQUIDATION_HAS_EXPIRED_EXPENSES',
+        details: { expenses: expiredExpenses },
+        liquidation
+      });
     }
 
     if (!SAP_EA_DOCUMENT_PASSWORD) {
@@ -994,19 +1100,23 @@ router.put('/:id', authenticateToken, async (req, res) => {
     const liquidation = await Liquidation.findOne({ id });
     
     if (!liquidation) {
-      // Si no existe, crearla (caso de sync desde app)
-      const newLiquidation = new Liquidation({
-        id,
-        ...updateData
+      return res.status(404).json({ error: 'Liquidación no encontrada' });
+    }
+
+    if (req.user.email !== liquidation.userId && !req.user.isAdmin) {
+      return res.status(403).json({ error: 'No tienes permisos para modificar esta liquidación' });
+    }
+
+    if (!['draft', 'rejected'].includes(liquidation.status)) {
+      return res.status(409).json({
+        error: 'La liquidación debe volver a borrador antes de modificar sus gastos.',
+        code: 'LIQUIDATION_NOT_EDITABLE'
       });
-      await newLiquidation.save();
-      return res.status(201).json(newLiquidation);
     }
 
     // Actualizar campos permitidos
     const allowedFields = [
-      'employeeName', 'sociedad', 'expenseIds', 'totalAmount', 'status',
-      'managerComments', 'submittedDate', 'approvedDate', 'rejectedDate'
+      'employeeName', 'sociedad', 'currency', 'expenseIds', 'totalAmount', 'comments'
     ];
 
     allowedFields.forEach(field => {
@@ -1015,10 +1125,27 @@ router.put('/:id', authenticateToken, async (req, res) => {
       }
     });
 
+    if (!liquidation.expenseIds?.length) {
+      return res.status(422).json({ error: 'La liquidación debe tener al menos un gasto' });
+    }
+    const expenses = await Expense.find({ id: { $in: liquidation.expenseIds } });
+    if (expenses.length !== liquidation.expenseIds.length) {
+      return res.status(422).json({
+        error: 'No se encontraron todos los gastos de la liquidación.',
+        code: 'LIQUIDATION_EXPENSES_NOT_FOUND'
+      });
+    }
+    await LiquidationFiscalValidationService.assertFormation({
+      expenses,
+      sociedad: liquidation.sociedad,
+      currency: liquidation.currency
+    });
+
     await liquidation.save();
     res.json(liquidation);
   } catch (error) {
     console.error('Error actualizando liquidación:', error);
+    if (error.status && error.code) return sendFunctionalError(res, error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

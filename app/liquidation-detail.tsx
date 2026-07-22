@@ -278,6 +278,16 @@ export default function LiquidationDetailScreen() {
       }
 
       if (response.status === 422) {
+        if (parsed?.code === 'LIQUIDATION_FISCAL_BLOCKED') {
+          await loadLiquidationData();
+          const expired = Array.isArray(parsed?.details?.expenses) ? parsed.details.expenses : [];
+          const expenseLines = expired.map((expense: any) =>
+            `• ${expense.description || expense.id} (${expense.elapsedDays} de ${expense.allowedDays} días)`
+          );
+          throw new Error(
+            `La liquidación fue bloqueada antes de contactar SAP. Gastos vencidos:\n${expenseLines.join('\n')}`
+          );
+        }
         await updateExpenseStatusesFromServer(liquidation.expenseIds, 'ERROR_SAP');
         await loadLiquidationData();
         throw new Error(parsed?.sapResult?.sapResponseMessage || parsed?.error || 'SAP devolvi? errores al contabilizar la liquidaci?n');
@@ -290,6 +300,37 @@ export default function LiquidationDetailScreen() {
     } finally {
       setIsSendingToSAP(false);
     }
+  };
+
+  const handleReturnToDraft = async () => {
+    if (!liquidation) return;
+    Alert.alert(
+      'Volver a borrador',
+      'Se eliminará la aprobación anterior. Podrá retirar los gastos vencidos y deberá enviar la liquidación a aprobación nuevamente.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Volver a borrador',
+          onPress: async () => {
+            try {
+              const token = await resolveBackendToken();
+              const { url: backendUrl } = await BackendSyncService.getBackendConfig();
+              const response = await fetch(`${backendUrl}/api/liquidations/${liquidation.id}/return-to-draft`, {
+                method: 'PUT',
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              const responseText = await response.text();
+              const parsed = responseText ? JSON.parse(responseText) : null;
+              if (!response.ok) throw new Error(parsed?.error || 'No se pudo volver a borrador');
+              await insertLiquidationFromBackend(parsed);
+              await loadLiquidationData();
+            } catch (error) {
+              Alert.alert('Error', (error as Error).message);
+            }
+          }
+        }
+      ]
+    );
   };
 
   const handleSendToSAP = async () => {
@@ -394,7 +435,11 @@ Gastos: ${expenses.length}`;
               const parsed = responseText ? JSON.parse(responseText) : null;
 
               if (!response.ok) {
-                throw new Error(parsed?.error || 'No se pudo enviar la liquidación al jefe');
+                const affected = Array.isArray(parsed?.details?.expenses) ? parsed.details.expenses : [];
+                const detail = affected.length
+                  ? `\n\nGastos que requieren atención:\n${affected.map((expense: any) => `• ${expense.description || expense.id}${typeof expense.elapsedDays === 'number' ? ` (${expense.elapsedDays} de ${expense.allowedDays} días)` : ''}`).join('\n')}`
+                  : '';
+                throw new Error((parsed?.error || 'No se pudo enviar la liquidación al jefe') + detail);
               }
 
               await insertLiquidationFromBackend(parsed);
@@ -867,6 +912,23 @@ Gastos: ${expenses.length}`;
           </View>
         )}
 
+        {liquidation.status === 'fiscal_blocked' && (
+          <View style={styles.rejectedBanner}>
+            <View style={styles.rejectedHeader}>
+              <Ionicons name="alert-circle" size={24} color="#b91c1c" />
+              <Text style={styles.rejectedTitle}>Bloqueada por vigencia fiscal</Text>
+            </View>
+            <Text style={styles.rejectedText}>
+              No se contactó SAP. Retire los gastos vencidos y envíe la liquidación nuevamente a aprobación.
+            </Text>
+            {(liquidation.fiscalBlockedExpenses || []).map(expense => (
+              <Text key={expense.id} style={styles.rejectedActionText}>
+                • {expense.description || expense.id}: {expense.elapsedDays} de {expense.allowedDays} días
+              </Text>
+            ))}
+          </View>
+        )}
+
         {(liquidation.status === 'approved' || liquidation.sapSyncStatus || liquidation.sapDocNumber || liquidation.sapResponseMessage) && (
           <View style={styles.sapStatusCard}>
             <View style={styles.sapStatusHeader}>
@@ -987,6 +1049,13 @@ Gastos: ${expenses.length}`;
             >
               <Ionicons name="download-outline" size={20} color="white" />
               <Text style={styles.downloadButtonText}>Descargar CSV</Text>
+            </TouchableOpacity>
+          )}
+
+          {liquidation.status === 'fiscal_blocked' && (
+            <TouchableOpacity style={styles.submitButton} onPress={handleReturnToDraft}>
+              <Ionicons name="return-down-back" size={20} color="white" />
+              <Text style={styles.submitButtonText}>Volver a borrador</Text>
             </TouchableOpacity>
           )}
 

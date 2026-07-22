@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const { models } = require('../database/init');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 const { authenticateToken, canAccessUserData, requireManager } = require('../middleware/auth');
+const ExpenseFiscalValidationService = require('../services/ExpenseFiscalValidationService');
 const router = express.Router();
 
 const { Expense, User, SyncLog } = models;
@@ -17,61 +18,7 @@ const hasAccountingSnapshot = (expenseData = {}) => {
   );
 };
 
-const normalizeSatValue = (value) => {
-  if (value === null || value === undefined) {
-    return '';
-  }
-
-  if (typeof value === 'number') {
-    return value.toFixed(2);
-  }
-
-  return String(value).trim().toUpperCase();
-};
-
-const buildSatValidationFingerprint = (expenseData = {}) => {
-  return [
-    normalizeSatValue(expenseData.serie),
-    normalizeSatValue(expenseData.noinvoice),
-    normalizeSatValue(expenseData.vat_number),
-    normalizeSatValue(expenseData.supplier),
-    normalizeSatValue(expenseData.date),
-    normalizeSatValue(expenseData.amount),
-    normalizeSatValue(expenseData.uuid),
-  ].join('|');
-};
-
-const normalizeSatValidationState = (expenseData = {}) => {
-  const fingerprint = buildSatValidationFingerprint(expenseData);
-  const hasMetadata = Boolean(
-    expenseData.satValidatedAt &&
-    expenseData.satValidationSource === 'SAT_INTERNO' &&
-    expenseData.satValidationFingerprint
-  );
-
-  if (expenseData.satStatus === 'VALIDADO_SAT' && hasMetadata && expenseData.satValidationFingerprint === fingerprint) {
-    return {
-      ...expenseData,
-      satValidationCause: expenseData.satValidationCause || 'NINGUNA',
-      fiscalStatus: expenseData.fiscalStatus || 'PENDIENTE',
-      satValidationFingerprint: fingerprint,
-    };
-  }
-
-  return {
-    ...expenseData,
-    satStatus: 'PENDIENTE_VALIDACION_SAT',
-    satValidationCause: expenseData.satValidationCause || 'NINGUNA',
-    fiscalStatus: 'PENDIENTE',
-    satValidatedAt: null,
-    satValidationSource: null,
-    satValidationFingerprint: null,
-    satFacturaId: null,
-    satInvoiceSnapshot: null,
-    fiscalValidatedAt: null,
-    fiscalValidityDaysApplied: null,
-  };
-};
+const normalizeSatValidationState = ExpenseFiscalValidationService.validateAndNormalize;
 
 // Middleware para validar datos de gasto
 const validateExpense = [
@@ -116,6 +63,19 @@ const validateExpense = [
   body('totiva').optional().isNumeric()
 ];
 
+router.post('/validate-fiscal', authenticateToken, async (req, res) => {
+  try {
+    return res.json({ success: true, expense: await normalizeSatValidationState(req.body) });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      code: error.code || 'FISCAL_VALIDATION_ERROR',
+      error: error.status ? error.message : 'Error interno del servidor',
+      details: error.details
+    });
+  }
+});
+
 // Crear nuevo gasto (requiere autenticación)
 router.post('/', authenticateToken, validateExpense, async (req, res) => {
   try {
@@ -127,7 +87,7 @@ router.post('/', authenticateToken, validateExpense, async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const expenseData = normalizeSatValidationState(req.body);
+    const expenseData = await normalizeSatValidationState(req.body);
     console.log('✅ Validación exitosa para gasto ID:', expenseData.id);
 
     if (!hasAccountingSnapshot(expenseData)) {
@@ -256,6 +216,9 @@ router.post('/', authenticateToken, validateExpense, async (req, res) => {
       await errorLog.save().catch(() => {});
     }
     
+    if (error.status) {
+      return res.status(error.status).json({ code: error.code, error: error.message, details: error.details });
+    }
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
@@ -437,7 +400,8 @@ router.patch('/:id', authenticateToken, [
     }
 
     const { id } = req.params;
-    const updateData = normalizeSatValidationState(req.body);
+    const mergedInput = { ...(await Expense.findOne({ id: req.params.id }).lean()), ...req.body };
+    const updateData = await normalizeSatValidationState(mergedInput);
 
     console.log('📝 PATCH /api/expenses/:id - Actualizando gasto:', id);
     console.log('📝 Datos a actualizar:', JSON.stringify(updateData, null, 2));
@@ -493,8 +457,6 @@ router.patch('/:id', authenticateToken, [
       console.log('📅 Fecha normalizada:', expense.date);
     }
 
-    Object.assign(expense, normalizeSatValidationState(expense.toObject()));
-
     if (!hasAccountingSnapshot(expense)) {
       return res.status(400).json({
         error: 'El gasto debe conservar categoría, sociedad, centro, cuenta y orden CO válidos.'
@@ -522,6 +484,9 @@ router.patch('/:id', authenticateToken, [
     });
   } catch (error) {
     console.error('❌ Error actualizando gasto:', error);
+    if (error.status) {
+      return res.status(error.status).json({ code: error.code, error: error.message, details: error.details });
+    }
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });

@@ -40,6 +40,9 @@ test('Expense usa los estados fiscales MVP2 y defaults conservadores', () => {
 test('Liquidation admite fiscal_blocked', () => {
   const allowed = models.Liquidation.schema.path('status').enumValues;
   assert.ok(allowed.includes('fiscal_blocked'));
+  assert.ok(models.Liquidation.schema.path('fiscalBlockedAt'));
+  assert.ok(models.Liquidation.schema.path('fiscalBlockReason'));
+  assert.ok(models.Liquidation.schema.path('fiscalBlockedExpenses'));
 });
 
 test('los modelos maestros usan las colecciones y capacidades acordadas', () => {

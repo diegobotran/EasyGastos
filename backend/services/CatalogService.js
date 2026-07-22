@@ -258,7 +258,7 @@ const assertActiveReferences = async references => {
   if (invalid.length) {
     throw new CatalogError(
       422,
-      'INACTIVE_CATALOG_REFERENCE',
+      'CATALOG_ENTRY_INACTIVE',
       'La categoría contiene referencias contables inexistentes o inactivas.',
       { invalid: invalid.map(({ catalog, codigo, label }) => ({ catalog, codigo, label })) }
     );

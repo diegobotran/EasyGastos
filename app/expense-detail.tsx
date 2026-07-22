@@ -9,6 +9,7 @@ import * as AuthService from '../services/AuthService';
 import { BackendSyncService } from '../services/BackendSyncService';
 import { buildSatValidationFingerprint } from '../services/ExpenseService';
 import { SATValidationError, validarFacturaInternaSAT } from '../services/SATFacturaService';
+import { ExpenseFiscalValidationError, validateExpenseFiscal } from '../services/ExpenseFiscalValidationService';
 
 export default function ExpenseDetailScreen() {
   const params = useLocalSearchParams();
@@ -170,6 +171,16 @@ export default function ExpenseDetailScreen() {
       });
 
       if (!result.encontrada || !result.validada || !result.campos) {
+        const user = await AuthService.getLastLoggedInUser();
+        if (user) {
+          const pendingExpense = await validateExpenseFiscal({
+            ...expense,
+            satStatus: 'PENDIENTE_VALIDACION_SAT',
+            satValidationCause: 'NO_ENCONTRADO_D_PLUS_1',
+            fiscalStatus: 'PENDIENTE',
+          });
+          await ExpenseService.updateExpense(pendingExpense, user.email);
+        }
         Alert.alert(
           'Factura no encontrada',
           `${result.mensaje || 'No existen datos para esa factura.'}\n\n${result.disclaimer || 'Las facturas solo están disponibles para consulta 24 horas después de haber sido emitidas por el emisor.'}`
@@ -177,7 +188,27 @@ export default function ExpenseDetailScreen() {
         return;
       }
 
-      const updatedExpense: Expense = {
+      const complementados = (result.complementados || []).map(item => item.label).join(', ');
+      const corregidos = (result.corregidos || []).map(item => item.label).join(', ');
+      const sections: string[] = [];
+      if (complementados) sections.push(`Se complementarán estos campos: ${complementados}.`);
+      if (corregidos) sections.push(`Se modificarán estos campos: ${corregidos}.`);
+      if (sections.length === 0) sections.push('Los datos ya coinciden con SAT.');
+      const requiresAcceptance = (result.complementados?.length || 0) > 0 || (result.corregidos?.length || 0) > 0;
+      const accepted = !requiresAcceptance || await new Promise<boolean>(resolve => {
+        Alert.alert(
+          'Cambios encontrados en SAT',
+          `${sections.join('\n\n')}\n\n¿Deseas aplicar esta información?`,
+          [
+            { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Aplicar y validar', onPress: () => resolve(true) },
+          ],
+          { cancelable: false },
+        );
+      });
+      if (!accepted) return;
+
+      let updatedExpense: Expense = {
         ...expense,
         serie: String(result.campos.serie || expense.serie || ''),
         noinvoice: String(result.campos.noinvoice || expense.noinvoice || ''),
@@ -189,8 +220,13 @@ export default function ExpenseDetailScreen() {
         currency: String(result.campos.currency || expense.currency || 'GTQ'),
         totiva: result.campos.totiva ?? expense.totiva,
         satStatus: 'VALIDADO_SAT',
-        satValidatedAt: new Date().toISOString(),
+        satValidationCause: 'NINGUNA',
+        fiscalStatus: 'PENDIENTE',
+        satValidatedAt: result.validatedAt || new Date().toISOString(),
         satValidationSource: 'SAT_INTERNO',
+        satFacturaId: result.facturaId,
+        satInvoiceSnapshot: result.snapshot,
+        imageValidationFingerprint: expense.imageValidationFingerprint || expense.imageuri,
         satValidationFingerprint: buildSatValidationFingerprint({
           serie: String(result.campos.serie || expense.serie || ''),
           noinvoice: String(result.campos.noinvoice || expense.noinvoice || ''),
@@ -199,6 +235,11 @@ export default function ExpenseDetailScreen() {
           date: String(result.campos.date || expense.date),
           amount: result.campos.amount ?? expense.amount,
           uuid: String(result.campos.uuid || expense.uuid || ''),
+          currency: String(result.campos.currency || expense.currency || 'GTQ'),
+          sociedad: expense.sociedad,
+          category: expense.category,
+          imageuri: expense.imageuri,
+          imageValidationFingerprint: expense.imageValidationFingerprint || expense.imageuri,
         }),
       };
 
@@ -207,19 +248,17 @@ export default function ExpenseDetailScreen() {
         throw new Error('No se encontró usuario activo');
       }
 
+      updatedExpense = await validateExpenseFiscal(updatedExpense);
       await ExpenseService.updateExpense(updatedExpense, user.email);
-
-      const complementados = (result.complementados || []).map(item => item.label).join(', ');
-      const corregidos = (result.corregidos || []).map(item => item.label).join(', ');
-      const sections = [];
-      if (complementados) sections.push(`Se complementaron estos campos: ${complementados}.`);
-      if (corregidos) sections.push(`Se corrigieron estos campos: ${corregidos}.`);
-      if (sections.length === 0) sections.push('Los datos ya coincidían con SAT.');
 
       Alert.alert('Validación SAT completada', sections.join('\n\n'), [
         { text: 'OK', onPress: () => router.back() }
       ]);
     } catch (error) {
+      if (error instanceof ExpenseFiscalValidationError) {
+        Alert.alert('No se puede validar el gasto', `${error.message}\n\nCódigo: ${error.code}`);
+        return;
+      }
       const presentation = getSATErrorPresentation(error);
       console.error('Error al validar SAT en detalle de gasto:', {
         title: presentation.title,
@@ -233,6 +272,17 @@ export default function ExpenseDetailScreen() {
   };
 
   const showCanVoid = canVoidExpense(expense);
+  const satCauseText = {
+    NO_ENCONTRADO_D_PLUS_1: 'Pendiente por réplica SAT D+1',
+    DATOS_FISCALES_MODIFICADOS: 'Datos fiscales modificados',
+    NINGUNA: 'Sin causal fiscal',
+  }[expense.satValidationCause || 'NINGUNA'];
+  const fiscalStatusText = {
+    PENDIENTE: 'Evaluación fiscal pendiente',
+    APTO_PARA_LIQUIDAR: 'Apto para liquidar',
+    BLOQUEADO_NIT_SOCIEDAD: 'Bloqueado por Sociedad–NIT',
+    BLOQUEADO_ANTIGUEDAD: 'Bloqueado por antigüedad',
+  }[expense.fiscalStatus || 'PENDIENTE'];
 
   const getSATErrorPresentation = (error: unknown): { title: string; userMessage: string; technicalMessage: string } => {
     if (error instanceof SATValidationError) {
@@ -352,6 +402,17 @@ export default function ExpenseDetailScreen() {
                 <Text style={[styles.statusText, styles.satValidatedText]}>Validado por servicio interno de la SAT</Text>
               </View>
             )}
+            {expense.satStatus !== 'VALIDADO_SAT' && (
+              <View style={[styles.statusBadge, { backgroundColor: '#fef3c7' }]}>
+                <Text style={[styles.statusText, { color: '#b45309' }]}>Pendiente de validación SAT</Text>
+              </View>
+            )}
+            <View style={[styles.statusBadge, { backgroundColor: '#f1f5f9' }]}>
+              <Text style={[styles.statusText, { color: '#475569' }]}>{satCauseText}</Text>
+            </View>
+            <View style={[styles.statusBadge, { backgroundColor: expense.fiscalStatus === 'APTO_PARA_LIQUIDAR' ? '#dcfce7' : '#f1f5f9' }]}>
+              <Text style={[styles.statusText, { color: expense.fiscalStatus === 'APTO_PARA_LIQUIDAR' ? '#15803d' : '#475569' }]}>{fiscalStatusText}</Text>
+            </View>
             {expense.expenseStatus !== 'draft' && (
               <View style={[styles.statusBadge, { backgroundColor: expense.expenseStatus === 'voided' ? '#fee2e2' : '#dbeafe' }]}>
                 <Text style={[styles.statusText, { color: expense.expenseStatus === 'voided' ? '#dc2626' : '#2563eb' }]}>

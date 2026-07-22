@@ -4,6 +4,7 @@ const { models } = require('../database/init');
 const { authenticateToken, canAccessUserData } = require('../middleware/auth');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 const CatalogService = require('../services/CatalogService');
+const ExpenseFiscalValidationService = require('../services/ExpenseFiscalValidationService');
 const router = express.Router();
 
 const { User, Category, Expense, SyncLog } = models;
@@ -18,55 +19,7 @@ const hasAccountingSnapshot = (expenseData = {}) => {
   );
 };
 
-const normalizeSatValue = (value) => {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'number') return value.toFixed(2);
-  return String(value).trim().toUpperCase();
-};
-
-const buildSatValidationFingerprint = (expenseData = {}) => {
-  return [
-    normalizeSatValue(expenseData.serie),
-    normalizeSatValue(expenseData.noinvoice),
-    normalizeSatValue(expenseData.vat_number),
-    normalizeSatValue(expenseData.supplier),
-    normalizeSatValue(expenseData.date),
-    normalizeSatValue(expenseData.amount),
-    normalizeSatValue(expenseData.uuid),
-  ].join('|');
-};
-
-const normalizeSatValidationState = (expenseData = {}) => {
-  const fingerprint = buildSatValidationFingerprint(expenseData);
-  const hasMetadata = Boolean(
-    expenseData.satValidatedAt &&
-    expenseData.satValidationSource === 'SAT_INTERNO' &&
-    expenseData.satValidationFingerprint
-  );
-
-  if (expenseData.satStatus === 'VALIDADO_SAT' && hasMetadata && expenseData.satValidationFingerprint === fingerprint) {
-    return {
-      ...expenseData,
-      satValidationCause: expenseData.satValidationCause || 'NINGUNA',
-      fiscalStatus: expenseData.fiscalStatus || 'PENDIENTE',
-      satValidationFingerprint: fingerprint,
-    };
-  }
-
-  return {
-    ...expenseData,
-    satStatus: 'PENDIENTE_VALIDACION_SAT',
-    satValidationCause: expenseData.satValidationCause || 'NINGUNA',
-    fiscalStatus: 'PENDIENTE',
-    satValidatedAt: null,
-    satValidationSource: null,
-    satValidationFingerprint: null,
-    satFacturaId: null,
-    satInvoiceSnapshot: null,
-    fiscalValidatedAt: null,
-    fiscalValidityDaysApplied: null,
-  };
-};
+const normalizeSatValidationState = ExpenseFiscalValidationService.validateAndNormalize;
 
 // Endpoint para sincronización completa de un usuario (requiere autenticación)
 router.post('/full-sync', authenticateToken, [
@@ -327,7 +280,7 @@ router.post('/upload', authenticateToken, [
           }
         }
 
-        const normalizedExpenseData = normalizeSatValidationState(expenseData);
+        const normalizedExpenseData = await normalizeSatValidationState(expenseData);
 
         await Expense.findOneAndUpdate(
           { id: expenseData.id },
