@@ -18,21 +18,25 @@ const hasAccountingSnapshot = (expenseData = {}) => {
   );
 };
 
+const isDraft = expenseData => expenseData.status === 'BORRADOR';
+const hasAttachment = expenseData => Boolean(String(expenseData.imageuri || '').trim());
+
 const normalizeSatValidationState = ExpenseFiscalValidationService.validateAndNormalize;
 
 // Middleware para validar datos de gasto
 const validateExpense = [
   body('id').trim().isLength({ min: 1 }),
   body('userEmail').isEmail().normalizeEmail(),
-  body('description').trim().isLength({ min: 1 }),
-  body('amount').isNumeric().custom(value => {
-    if (value <= 0) throw new Error('El monto debe ser mayor a 0');
+  body('description').optional({ nullable: true }).trim(),
+  body('amount').optional({ nullable: true }).isNumeric().custom((value, { req }) => {
+    if (!isDraft(req.body) && value <= 0) throw new Error('El monto debe ser mayor a 0');
+    if (value < 0) throw new Error('El monto no puede ser negativo');
     if (value > 3500) throw new Error('El monto no puede exceder Q3,500');
     return true;
   }),
-  body('date').isISO8601(), // Mantener como string ISO, no convertir a Date
-  body('category').trim().isLength({ min: 1 }),
-  body('sociedad').trim().isLength({ min: 1 }),
+  body('date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+  body('category').optional({ nullable: true }).trim(),
+  body('sociedad').optional({ nullable: true }).trim(),
   body('status').isIn(['BORRADOR', 'ENVIADO_JEFE', 'APROBADO_JEFE', 'RECHAZADO_JEFE', 'APROBADO_FINANZAS', 'RECHAZADO_FINANZAS', 'CONTABILIZADO', 'ERROR_SAP']),
   body('expenseStatus').optional().isIn(['draft', 'in_liquidation', 'approved', 'voided']),
   body('satStatus').optional().isIn(['VALIDADO_SAT', 'PENDIENTE_VALIDACION_SAT']),
@@ -53,14 +57,21 @@ const validateExpense = [
   body('noinvoice').optional().trim(),
   body('serie').optional().trim(),
   body('uuid').optional().trim(), // UUID de factura FEL
-  body('centro').trim().isLength({ min: 1 }),
-  body('cuenta').trim().isLength({ min: 1 }),
-  body('ordenco').trim().isLength({ min: 1 }),
+  body('centro').optional({ nullable: true }).trim(),
+  body('cuenta').optional({ nullable: true }).trim(),
+  body('ordenco').optional({ nullable: true }).trim(),
   body('managerEmail').optional({ nullable: true, checkFalsy: true }).isEmail(),
   body('liquidationId').optional().trim(),
   body('imageuri').optional().trim(),
   body('currency').optional().isIn(['GTQ', 'EUR', 'USD', 'GBP']),
-  body('totiva').optional().isNumeric()
+  body('totiva').optional().isNumeric(),
+  body().custom(value => {
+    if (!hasAttachment(value)) throw new Error('Debe adjuntar un documento o imagen.');
+    if (!isDraft(value) && !hasAccountingSnapshot(value)) {
+      throw new Error('El gasto debe incluir categoría, sociedad, centro, cuenta y orden CO.');
+    }
+    return true;
+  })
 ];
 
 router.post('/validate-fiscal', authenticateToken, async (req, res) => {
@@ -90,7 +101,7 @@ router.post('/', authenticateToken, validateExpense, async (req, res) => {
     const expenseData = await normalizeSatValidationState(req.body);
     console.log('✅ Validación exitosa para gasto ID:', expenseData.id);
 
-    if (!hasAccountingSnapshot(expenseData)) {
+    if (!isDraft(expenseData) && !hasAccountingSnapshot(expenseData)) {
       return res.status(400).json({
         error: 'El gasto debe incluir categoría, sociedad, centro, cuenta y orden CO.'
       });
@@ -280,6 +291,7 @@ router.get('/', authenticateToken, async (req, res) => {
       notes: expense.notes,
       noinvoice: expense.noinvoice,
       serie: expense.serie,
+      uuid: expense.uuid,
       centro: expense.centro,
       cuenta: expense.cuenta,
       ordenco: expense.ordenco,
@@ -379,7 +391,7 @@ router.patch('/:id', authenticateToken, [
   body('voidedReason').optional().trim(),
   body('description').optional().trim().isLength({ min: 1 }),
   body('amount').optional().isNumeric(),
-  body('date').optional().isISO8601(),
+  body('date').optional({ checkFalsy: true }).isISO8601(),
   body('category').optional().trim(),
   body('sociedad').optional().trim(),
   body('status').optional().isIn(['BORRADOR', 'ENVIADO_JEFE', 'APROBADO_JEFE', 'RECHAZADO_JEFE']),
@@ -388,6 +400,7 @@ router.patch('/:id', authenticateToken, [
   body('notes').optional().trim(),
   body('noinvoice').optional().trim(),
   body('serie').optional().trim(),
+  body('uuid').optional().trim(),
   body('centro').optional().trim(),
   body('cuenta').optional().trim(),
   body('ordenco').optional().trim()
@@ -439,7 +452,7 @@ router.patch('/:id', authenticateToken, [
       'satValidatedAt', 'satValidationSource', 'satValidationFingerprint',
       'satValidationCause', 'fiscalStatus', 'satFacturaId', 'satInvoiceSnapshot',
       'fiscalValidatedAt', 'fiscalValidityDaysApplied', 'imageValidationFingerprint',
-      'supplier', 'vat_number', 'department', 'notes', 'noinvoice', 'serie',
+      'supplier', 'vat_number', 'department', 'notes', 'noinvoice', 'serie', 'uuid',
       'centro', 'cuenta', 'ordenco', 'imageuri', 'currency', 'totiva',
       'voidedAt', 'voidedReason', 'liquidationId'
     ];
@@ -457,7 +470,7 @@ router.patch('/:id', authenticateToken, [
       console.log('📅 Fecha normalizada:', expense.date);
     }
 
-    if (!hasAccountingSnapshot(expense)) {
+    if (!isDraft(expense) && !hasAccountingSnapshot(expense)) {
       return res.status(400).json({
         error: 'El gasto debe conservar categoría, sociedad, centro, cuenta y orden CO válidos.'
       });

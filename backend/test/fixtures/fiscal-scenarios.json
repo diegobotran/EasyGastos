@@ -54,7 +54,8 @@
     },
     "expected": {
       "code": "EXPENSE_NIT_SOCIETY_MISMATCH",
-      "canSave": false
+      "canSaveDraft": true,
+      "canAdvance": false
     }
   },
   "expiredInvoice": {
@@ -65,7 +66,8 @@
     "expected": {
       "elapsedDays": 56,
       "fiscalStatus": "BLOQUEADO_ANTIGUEDAD",
-      "canSaveAtCapture": false
+      "canSaveDraft": true,
+      "canAdvance": false
     }
   },
   "approvedLiquidation": {

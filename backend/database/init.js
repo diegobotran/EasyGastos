@@ -69,10 +69,10 @@ const categorySchema = new mongoose.Schema({
 const expenseSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   userEmail: { type: String, required: true },
-  description: { type: String, required: true },
-  amount: { type: Number, required: true },
-  date: { type: String, required: true }, // Mantener como string para compatibilidad
-  category: { type: String, required: true },
+  description: { type: String, default: 'Gasto sin descripción' },
+  amount: { type: Number, default: 0 },
+  date: { type: String, default: null }, // Puede estar pendiente mientras sea borrador
+  category: { type: String, default: null },
   sociedad: { type: String, default: null },
   status: { type: String, required: true, default: 'BORRADOR' },
   expenseStatus: { 

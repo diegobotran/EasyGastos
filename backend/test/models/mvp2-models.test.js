@@ -35,6 +35,8 @@ test('Expense usa los estados fiscales MVP2 y defaults conservadores', () => {
   assert.equal(expense.fiscalStatus, 'PENDIENTE');
   assert.ok(models.Expense.schema.path('satFacturaId'));
   assert.ok(models.Expense.schema.path('imageValidationFingerprint'));
+  assert.notEqual(models.Expense.schema.path('category').isRequired, true);
+  assert.notEqual(models.Expense.schema.path('date').isRequired, true);
 });
 
 test('Liquidation admite fiscal_blocked', () => {

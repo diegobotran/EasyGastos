@@ -38,10 +38,11 @@ test('el escenario D+1 usa estado pendiente y no rechazo', () => {
   assert.equal(expected.canLiquidate, false);
 });
 
-test('el escenario NIT incorrecto descarta el guardado', () => {
+test('el escenario NIT incorrecto conserva borrador y bloquea el avance', () => {
   const expected = fixtures.nitSocietyMismatch.expected;
   assert.equal(expected.code, ERROR_CODE.EXPENSE_NIT_SOCIETY_MISMATCH);
-  assert.equal(expected.canSave, false);
+  assert.equal(expected.canSaveDraft, true);
+  assert.equal(expected.canAdvance, false);
 });
 
 test('el escenario previo a SAP bloquea sin llamar SAP', () => {

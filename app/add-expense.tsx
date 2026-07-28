@@ -6,7 +6,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Category } from '../models/Category';
@@ -52,7 +52,7 @@ export default function AddExpenseScreen() {
   const [totiva, setTotiva] = useState('');
   const [currency, setCurrency] = useState('GTQ');
   const [isLoading, setIsLoading] = useState(false);
-  const [useAIExtraction, setUseAIExtraction] = useState(true); // Verificador SAT siempre activo
+  const useAIExtraction = false; // MVP2: extracción remota desactivada; se usa exclusivamente OCR local.
   const [uuid, setUuid] = useState(''); // UUID de la factura FEL para validación SAT
   const [validationStatus, setValidationStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [validationMessage, setValidationMessage] = useState('');
@@ -61,8 +61,11 @@ export default function AddExpenseScreen() {
   const [satValidationCause, setSatValidationCause] = useState<SatValidationCause>('NINGUNA');
   const [satFacturaId, setSatFacturaId] = useState<string | undefined>(undefined);
   const [satInvoiceSnapshot, setSatInvoiceSnapshot] = useState<SatInvoiceSnapshot | undefined>(undefined);
+  const [fiscalStatus, setFiscalStatus] = useState<Expense['fiscalStatus']>('PENDIENTE');
+  const [fiscalValidatedAt, setFiscalValidatedAt] = useState<string | undefined>(undefined);
+  const [fiscalValidityDaysApplied, setFiscalValidityDaysApplied] = useState<number | undefined>(undefined);
+  const skipNextFingerprintInvalidation = useRef(false);
   const [showMoreDetails, setShowMoreDetails] = useState(false);
-  const [hasRedirectedForCategories, setHasRedirectedForCategories] = useState(false);
   const departments = ['Tecnologia', 'Ventas', 'Marketing', 'Finanzas', 'Recursos humanos'];
   const currencies = ['GTQ', 'USD', 'EUR'];
 
@@ -164,18 +167,8 @@ export default function AddExpenseScreen() {
             const data = await CategoryService.getCategories(user.email);
             console.log('📂 AddExpense: Categorías cargadas:', data.length);
             setCategories(data);
-            if (data.length === 0 && !hasRedirectedForCategories) {
-              setHasRedirectedForCategories(true);
-              Alert.alert(
-                'Categorías requeridas',
-                'Primero debes crear al menos una categoría de gasto antes de iniciar el registro del gasto.',
-                [
-                  {
-                    text: 'Ir a Categorías',
-                    onPress: () => router.replace('/(tabs)/categories')
-                  }
-                ]
-              );
+            if (data.length === 0) {
+              console.log('ℹ️ No hay categorías; el usuario aún puede guardar un borrador con documento adjunto.');
             }
           } else {
             console.log('⚠️ AddExpense: No hay usuario logueado');
@@ -185,7 +178,7 @@ export default function AddExpenseScreen() {
         }
       };
       loadCustomCategories();
-    }, [hasRedirectedForCategories]);
+    }, []);
 
       // On category change
       const handleCategoryChange = (value: string) => {
@@ -242,6 +235,14 @@ export default function AddExpenseScreen() {
       imageuri: file?.uri || '',
     });
 
+    if (skipNextFingerprintInvalidation.current) {
+      skipNextFingerprintInvalidation.current = false;
+      if (currentFingerprint !== satValidationFingerprint) {
+        setSatValidationFingerprint(currentFingerprint);
+      }
+      return;
+    }
+
     if (satValidationFingerprint && currentFingerprint !== satValidationFingerprint) {
       setValidationStatus('idle');
       setValidationMessage('');
@@ -250,6 +251,9 @@ export default function AddExpenseScreen() {
       setSatFacturaId(undefined);
       setSatInvoiceSnapshot(undefined);
       setSatValidationCause('DATOS_FISCALES_MODIFICADOS');
+      setFiscalStatus('PENDIENTE');
+      setFiscalValidatedAt(undefined);
+      setFiscalValidityDaysApplied(undefined);
     }
   }, [serie, noinvoice, vat_number, supplier, date, amount, uuid, currency, expenseSociedad, category, file?.uri, validationStatus, satValidationFingerprint]);
 
@@ -419,6 +423,9 @@ export default function AddExpenseScreen() {
             setSatValidationCause('NINGUNA');
             setSatFacturaId(undefined);
             setSatInvoiceSnapshot(undefined);
+            setFiscalStatus('PENDIENTE');
+            setFiscalValidatedAt(undefined);
+            setFiscalValidityDaysApplied(undefined);
             console.log('🧹 Formulario limpiado - listo para nuevo escaneo');
             Alert.alert('✓ Limpiado', 'Formulario limpiado. Puede escanear una nueva factura.');
           }
@@ -427,9 +434,47 @@ export default function AddExpenseScreen() {
     );
   };
 
+  const buildDraftExpenseForFiscal = async (overrides: Partial<Expense> = {}): Promise<Expense> => {
+    const user = await AuthService.getLastLoggedInUser();
+    if (!user?.email) throw new Error('No se encontró usuario activo');
+    return {
+      id: 'SAT-PREVIEW',
+      description: description.trim() || 'Gasto sin descripción',
+      amount: amount ? parseFloat(amount) || 0 : 0,
+      date: formatDate(date),
+      category,
+      sociedad: expenseSociedad || undefined,
+      status: 'BORRADOR',
+      expenseStatus: 'draft',
+      satStatus: 'PENDIENTE_VALIDACION_SAT',
+      satValidationCause,
+      fiscalStatus,
+      supplier: supplier || 'Proveedor Desconocido',
+      vat_number,
+      department,
+      notes,
+      noinvoice,
+      serie,
+      uuid,
+      centro,
+      cuenta,
+      ordenco,
+      imageuri: file?.uri || '',
+      imageValidationFingerprint: file?.uri || undefined,
+      totiva: parseFloat(totiva) || 0,
+      currency,
+      email: user.email,
+      ...overrides,
+    };
+  };
+
   // Función para validar la factura con el servicio de la SAT
   const handleValidateSAT = async () => {
     try {
+      if (!file?.uri) {
+        Alert.alert('Documento requerido', 'Adjunta primero la imagen o documento de la factura.');
+        return;
+      }
       const missingFields = [];
       if (!noinvoice.trim()) missingFields.push('No. Factura');
       if (!serie.trim()) missingFields.push('Serie');
@@ -458,14 +503,25 @@ export default function AddExpenseScreen() {
       });
 
       if (!result.encontrada || !result.validada || !result.campos) {
+        const pendingExpense = await validateExpenseFiscal(await buildDraftExpenseForFiscal({
+          satStatus: 'PENDIENTE_VALIDACION_SAT',
+          satValidationCause: 'NO_ENCONTRADO_D_PLUS_1',
+          fiscalStatus: 'PENDIENTE',
+        }), 'SAT_QUERY');
         setValidationStatus('invalid');
         setSatValidationCause('NO_ENCONTRADO_D_PLUS_1');
         setSatFacturaId(undefined);
         setSatInvoiceSnapshot(undefined);
+        setFiscalStatus(pendingExpense.fiscalStatus || 'PENDIENTE');
+        setFiscalValidatedAt(pendingExpense.fiscalValidatedAt);
+        setFiscalValidityDaysApplied(pendingExpense.fiscalValidityDaysApplied);
         setValidationMessage(result.mensaje || 'No existen datos para esa factura.');
+        const validityMessage = pendingExpense.fiscalStatus === 'BLOQUEADO_ANTIGUEDAD'
+          ? `\n\nLa fecha registrada supera la vigencia de ${pendingExpense.fiscalValidityDaysApplied} días. El borrador podrá guardarse, pero no podrá liquidarse.`
+          : '';
         Alert.alert(
           'Factura no encontrada',
-          `${result.mensaje || 'No existen datos para esa factura.'}\n\n${result.disclaimer || 'Las facturas solo están disponibles para consulta 24 horas después de haber sido emitidas por el emisor.'}`
+          `${result.mensaje || 'No existen datos para esa factura.'}\n\n${result.disclaimer || 'Las facturas solo están disponibles para consulta 24 horas después de haber sido emitidas por el emisor.'}${validityMessage}`
         );
         return;
       }
@@ -508,6 +564,7 @@ export default function AddExpenseScreen() {
         sociedad: expenseSociedad,
         category,
       };
+      skipNextFingerprintInvalidation.current = true;
       setSerie(corrected.serie);
       setNoinvoice(corrected.noinvoice);
       setVatNumber(corrected.vat_number);
@@ -518,17 +575,45 @@ export default function AddExpenseScreen() {
       setCurrency(corrected.currency);
       if (result.campos.totiva !== undefined) setTotiva(String(result.campos.totiva));
 
-      const validatedFingerprint = buildSatValidationFingerprint(corrected);
+      const validatedFingerprint = buildSatValidationFingerprint({
+        ...corrected,
+        imageValidationFingerprint: file?.uri || '',
+      });
 
-      setSatValidatedAt(result.validatedAt || new Date().toISOString());
-      setSatValidationFingerprint(validatedFingerprint);
+      const evaluatedExpense = await validateExpenseFiscal(await buildDraftExpenseForFiscal({
+        ...corrected,
+        status: 'BORRADOR',
+        satStatus: 'VALIDADO_SAT',
+        satValidationCause: 'NINGUNA',
+        fiscalStatus: 'PENDIENTE',
+        satValidatedAt: result.validatedAt || new Date().toISOString(),
+        satValidationSource: 'SAT_INTERNO',
+        satValidationFingerprint: validatedFingerprint,
+        satFacturaId: result.facturaId,
+        satInvoiceSnapshot: result.snapshot,
+        imageValidationFingerprint: file?.uri || '',
+      }), 'SAT_QUERY');
+
+      setSatValidatedAt(evaluatedExpense.satValidatedAt);
+      setSatValidationFingerprint(evaluatedExpense.satValidationFingerprint || validatedFingerprint);
       setSatValidationCause('NINGUNA');
-      setSatFacturaId(result.facturaId);
-      setSatInvoiceSnapshot(result.snapshot);
+      setSatFacturaId(evaluatedExpense.satFacturaId || result.facturaId);
+      setSatInvoiceSnapshot(evaluatedExpense.satInvoiceSnapshot || result.snapshot);
+      setFiscalStatus(evaluatedExpense.fiscalStatus || 'PENDIENTE');
+      setFiscalValidatedAt(evaluatedExpense.fiscalValidatedAt);
+      setFiscalValidityDaysApplied(evaluatedExpense.fiscalValidityDaysApplied);
       setValidationStatus('valid');
-      setValidationMessage(result.mensaje || 'Factura validada por SAT');
+      const isExpired = evaluatedExpense.fiscalStatus === 'BLOQUEADO_ANTIGUEDAD';
+      setValidationMessage(isExpired
+        ? `Factura encontrada en SAT, pero supera la vigencia de ${evaluatedExpense.fiscalValidityDaysApplied} días.`
+        : (result.mensaje || 'Factura validada por SAT'));
 
-      Alert.alert('Validación SAT completada', sections.join('\n\n'));
+      Alert.alert(
+        isExpired ? 'Factura vencida' : 'Validación SAT completada',
+        isExpired
+          ? `${sections.join('\n\n')}\n\nLa factura fue encontrada en SAT, pero supera la vigencia de ${evaluatedExpense.fiscalValidityDaysApplied} días. Puede conservarse como borrador, pero no liquidarse.`
+          : sections.join('\n\n')
+      );
       return;
 
       // Validar que tengamos todos los datos necesarios
@@ -654,7 +739,14 @@ export default function AddExpenseScreen() {
     console.log('📂 Category:', category);
     console.log('🏢 Department:', department);
 
-    if (categories.length === 0) {
+    if (!file?.uri) {
+      Alert.alert('Documento requerido', 'Para guardar el borrador debe adjuntar una imagen o documento.');
+      return;
+    }
+
+    const isDraftSave = status === 'BORRADOR';
+
+    if (!isDraftSave && categories.length === 0) {
       Alert.alert(
         'Categorías requeridas',
         'Primero debes crear al menos una categoría de gasto para poder registrar un gasto.',
@@ -669,7 +761,7 @@ export default function AddExpenseScreen() {
       return;
     }
     
-    if (!category || !department) {
+    if (!isDraftSave && (!category || !department)) {
       const missingFields = [];
       if (!category) missingFields.push('Categoría');
       if (!department) missingFields.push('Departamento');
@@ -678,7 +770,7 @@ export default function AddExpenseScreen() {
       return;
     }
 
-    if (!expenseSociedad || !centro || !cuenta || !ordenco) {
+    if (!isDraftSave && (!expenseSociedad || !centro || !cuenta || !ordenco)) {
       Alert.alert(
         'Categoría incompleta',
         'La categoría seleccionada no tiene completo el snapshot contable requerido. Edita o recrea la categoría antes de guardar el gasto.'
@@ -730,13 +822,16 @@ export default function AddExpenseScreen() {
 
       // VALIDACIÓN DE DUPLICADOS (ANTES DE CREAR EL GASTO)
       console.log('🔍 AddExpense: Verificando duplicados de factura...');
-      const duplicateCheck = await ExpenseService.checkDuplicateExpense(
-        user.email,
-        serie || '',
-        noinvoice || '',
-        formatDate(date),
-        parsedAmount || 0
-      );
+      const canCheckDuplicate = Boolean(serie && noinvoice && date && parsedAmount > 0);
+      const duplicateCheck = canCheckDuplicate
+        ? await ExpenseService.checkDuplicateExpense(
+            user.email,
+            serie || '',
+            noinvoice || '',
+            formatDate(date),
+            parsedAmount || 0
+          )
+        : { isDuplicate: false, existingExpense: undefined, inLiquidation: false };
 
       if (duplicateCheck.isDuplicate && duplicateCheck.existingExpense) {
         console.log('⚠️ AddExpense: Factura duplicada detectada');
@@ -802,7 +897,7 @@ export default function AddExpenseScreen() {
         expenseStatus: 'draft', // Estado inicial en el flujo de liquidación
         satStatus: validationStatus === 'valid' ? 'VALIDADO_SAT' : 'PENDIENTE_VALIDACION_SAT',
         satValidationCause: validationStatus === 'valid' ? 'NINGUNA' : satValidationCause,
-        fiscalStatus: 'PENDIENTE',
+        fiscalStatus: fiscalStatus || 'PENDIENTE',
         satValidatedAt: validationStatus === 'valid' ? satValidatedAt : undefined,
         satValidationSource: validationStatus === 'valid' ? 'SAT_INTERNO' : undefined,
         satValidationFingerprint: validationStatus === 'valid'
@@ -823,6 +918,8 @@ export default function AddExpenseScreen() {
           : undefined,
         satFacturaId: validationStatus === 'valid' ? satFacturaId : undefined,
         satInvoiceSnapshot: validationStatus === 'valid' ? satInvoiceSnapshot : undefined,
+        fiscalValidatedAt,
+        fiscalValidityDaysApplied,
         supplier: supplier || 'Proveedor Desconocido',
         vat_number: vat_number || '',
         department,
@@ -2797,6 +2894,14 @@ const findFinalTotal = (allWords: Word[]): string | null => {
               <ActivityIndicator size="small" color="white" style={{ marginLeft: 6 }} />
             )}
           </TouchableOpacity>
+          {!!validationMessage && (
+            <Text style={[
+              styles.validationMessage,
+              fiscalStatus === 'BLOQUEADO_ANTIGUEDAD' && styles.validationMessageBlocked,
+            ]}>
+              {validationMessage}
+            </Text>
+          )}
           {false && (
             <TouchableOpacity 
               style={[
@@ -3169,6 +3274,16 @@ const styles = StyleSheet.create({
   },
   validateButtonValidating: {
     backgroundColor: '#64748b'
+  },
+  validationMessage: {
+    marginTop: 8,
+    color: '#166534',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  validationMessageBlocked: {
+    color: '#b91c1c',
+    fontWeight: '600',
   },
   validateButtonDisabled: {
     backgroundColor: '#a78bfa'

@@ -68,6 +68,22 @@ const normalizeSatValidationState = (expense: Expense): Expense => {
     };
   }
 
+  if (
+    expense.satStatus === 'PENDIENTE_VALIDACION_SAT' &&
+    expense.satValidationCause === 'NO_ENCONTRADO_D_PLUS_1' &&
+    expense.fiscalStatus === 'BLOQUEADO_ANTIGUEDAD'
+  ) {
+    return {
+      ...expense,
+      satValidatedAt: undefined,
+      satValidationSource: undefined,
+      satValidationFingerprint: undefined,
+      satFacturaId: undefined,
+      satInvoiceSnapshot: undefined,
+      imageValidationFingerprint: undefined,
+    };
+  }
+
   return {
     ...expense,
     satStatus: 'PENDIENTE_VALIDACION_SAT',
@@ -463,20 +479,32 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
         await initDB();
     }
     
-    if (!hasAccountingSnapshot(expense)) {
+    if (!hasAttachedDocument(expense)) {
+      throw new Error('Debe adjuntar un documento o imagen antes de guardar el borrador.');
+    }
+
+    if (!isDraftExpense(expense) && !hasAccountingSnapshot(expense)) {
       throw new Error('El gasto debe guardar categoría, sociedad, centro, cuenta y orden CO antes de registrarse.');
     }
 
     const normalizedExpense = normalizeSatValidationState(expense);
 
     // VALIDACIÓN DE DUPLICADOS
-    const duplicateCheck = await checkDuplicateExpense(
-      userEmail,
-      normalizedExpense.serie || '',
-      normalizedExpense.noinvoice || '',
-      normalizedExpense.date,
-      normalizedExpense.amount
+    const canCheckDuplicate = Boolean(
+      normalizedExpense.serie?.trim() &&
+      normalizedExpense.noinvoice?.trim() &&
+      normalizedExpense.date &&
+      normalizedExpense.amount > 0
     );
+    const duplicateCheck = canCheckDuplicate
+      ? await checkDuplicateExpense(
+          userEmail,
+          normalizedExpense.serie || '',
+          normalizedExpense.noinvoice || '',
+          normalizedExpense.date,
+          normalizedExpense.amount
+        )
+      : { isDuplicate: false };
     
     if (duplicateCheck.isDuplicate) {
       const msg = duplicateCheck.inLiquidation
@@ -597,8 +625,12 @@ export const getExpenseById = async (id: string, userEmail: string): Promise<Exp
  * Actualiza un gasto existente.
  */
 export const updateExpense = async (expense: Expense, userEmail: string): Promise<void> => {
-    if (!hasAccountingSnapshot(expense)) {
-        throw new Error('El gasto debe conservar categoría, sociedad, centro, cuenta y orden CO válidos.');
+    if (!hasAttachedDocument(expense)) {
+      throw new Error('Debe conservar un documento o imagen adjunta en el borrador.');
+    }
+
+    if (!isDraftExpense(expense) && !hasAccountingSnapshot(expense)) {
+      throw new Error('El gasto debe conservar categoría, sociedad, centro, cuenta y orden CO válidos.');
     }
 
     const normalizedExpense = {
@@ -1015,6 +1047,9 @@ export const updateExpenseStatus = async (expenseId: string, newStatus: string):
     );
   }
 };
+
+const isDraftExpense = (expense: Expense): boolean => expense.status === 'BORRADOR';
+const hasAttachedDocument = (expense: Expense): boolean => Boolean(expense.imageuri?.trim());
 
 export const updateExpenseStatusesFromServer = async (
   expenseIds: string[],

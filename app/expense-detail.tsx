@@ -178,13 +178,17 @@ export default function ExpenseDetailScreen() {
             satStatus: 'PENDIENTE_VALIDACION_SAT',
             satValidationCause: 'NO_ENCONTRADO_D_PLUS_1',
             fiscalStatus: 'PENDIENTE',
-          });
+          }, 'SAT_QUERY');
           await ExpenseService.updateExpense(pendingExpense, user.email);
+          const validityMessage = pendingExpense.fiscalStatus === 'BLOQUEADO_ANTIGUEDAD'
+            ? `\n\nLa fecha registrada supera la vigencia de ${pendingExpense.fiscalValidityDaysApplied} días. El borrador se conserva, pero no puede liquidarse.`
+            : '';
+          Alert.alert(
+            'Factura no encontrada',
+            `${result.mensaje || 'No existen datos para esa factura.'}\n\n${result.disclaimer || 'Las facturas solo están disponibles para consulta 24 horas después de haber sido emitidas por el emisor.'}${validityMessage}`
+          );
+          return;
         }
-        Alert.alert(
-          'Factura no encontrada',
-          `${result.mensaje || 'No existen datos para esa factura.'}\n\n${result.disclaimer || 'Las facturas solo están disponibles para consulta 24 horas después de haber sido emitidas por el emisor.'}`
-        );
         return;
       }
 
@@ -248,10 +252,13 @@ export default function ExpenseDetailScreen() {
         throw new Error('No se encontró usuario activo');
       }
 
-      updatedExpense = await validateExpenseFiscal(updatedExpense);
+      updatedExpense = await validateExpenseFiscal(updatedExpense, 'SAT_QUERY');
       await ExpenseService.updateExpense(updatedExpense, user.email);
 
-      Alert.alert('Validación SAT completada', sections.join('\n\n'), [
+      const isExpired = updatedExpense.fiscalStatus === 'BLOQUEADO_ANTIGUEDAD';
+      Alert.alert(isExpired ? 'Factura vencida' : 'Validación SAT completada', isExpired
+        ? `${sections.join('\n\n')}\n\nLa factura fue encontrada en SAT, pero supera la vigencia de ${updatedExpense.fiscalValidityDaysApplied} días. El borrador se conserva, pero no puede liquidarse.`
+        : sections.join('\n\n'), [
         { text: 'OK', onPress: () => router.back() }
       ]);
     } catch (error) {

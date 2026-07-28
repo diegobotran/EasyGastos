@@ -28,14 +28,17 @@ const getToken = async () => {
   return login.token;
 };
 
-export const validateExpenseFiscal = async (expense: Expense): Promise<Expense> => {
+export const validateExpenseFiscal = async (
+  expense: Expense,
+  stage: 'SAVE' | 'SAT_QUERY' = 'SAVE',
+): Promise<Expense> => {
   const [baseUrl, token] = await Promise.all([getAPI_BASE_URL(), getToken()]);
   let response: Response;
   try {
     response = await fetch(`${baseUrl}/api/expenses/validate-fiscal`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ...expense, userEmail: expense.email }),
+      body: JSON.stringify({ ...expense, userEmail: expense.email, fiscalValidationStage: stage }),
     });
   } catch {
     throw new ExpenseFiscalValidationError('FISCAL_NETWORK_ERROR', 'No fue posible ejecutar la validación fiscal antes de guardar.');

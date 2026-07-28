@@ -10,6 +10,8 @@ const FiscalEligibility = require('../../services/FiscalEligibilityService');
 const SatFactura = require('../../models/SatFactura');
 const LiquidationFiscal = require('../../services/LiquidationFiscalValidationService');
 const liquidationRouter = require('../../routes/liquidations');
+const fs = require('node:fs');
+const path = require('node:path');
 
 test('día 55 está vigente y día 56 está vencido en America/Guatemala', () => {
   const policy = { enabled: true, allowedDays: 55 };
@@ -133,4 +135,80 @@ test('el Hard Stop se ejecuta antes de la llamada externa a SAP y existe retorno
   const handlerSource = sapRoute.route.stack.at(-1).handle.toString();
   assert.ok(handlerSource.indexOf('findExpiredExpenses') >= 0);
   assert.ok(handlerSource.indexOf('findExpiredExpenses') < handlerSource.indexOf('fetch(SAP_EA_DOCUMENT_URL'));
+});
+
+test('un borrador incompleto requiere documento adjunto', async () => {
+  await assert.rejects(
+    () => ExpenseFiscal.validateAndNormalize({
+      status: 'BORRADOR',
+      satStatus: 'PENDIENTE_VALIDACION_SAT'
+    }),
+    error => error.code === 'EXPENSE_DOCUMENT_REQUIRED'
+  );
+  await assert.doesNotReject(() => ExpenseFiscal.validateAndNormalize({
+    status: 'BORRADOR',
+    imageuri: 'file://factura.jpg',
+    satStatus: 'PENDIENTE_VALIDACION_SAT',
+    satValidationCause: 'NINGUNA'
+  }));
+});
+
+test('D+1 evalúa antigüedad y conserva el borrador bloqueado', async () => {
+  const originalValidity = Validity.validateWithActivePolicy;
+  try {
+    Validity.validateWithActivePolicy = async () => ({
+      enabled: true, valid: false, elapsedDays: 56, allowedDays: 55,
+      issueDate: '2026-06-02', referenceDate: '2026-07-28', reason: 'INVOICE_EXPIRED'
+    });
+    const result = await ExpenseFiscal.validateAndNormalize({
+      status: 'BORRADOR',
+      imageuri: 'file://factura.jpg',
+      date: '2026-06-02',
+      satStatus: 'PENDIENTE_VALIDACION_SAT',
+      satValidationCause: 'NO_ENCONTRADO_D_PLUS_1'
+    });
+    assert.equal(result.satStatus, 'PENDIENTE_VALIDACION_SAT');
+    assert.equal(result.fiscalStatus, 'BLOQUEADO_ANTIGUEDAD');
+    assert.equal(result.fiscalValidityDaysApplied, 55);
+  } finally {
+    Validity.validateWithActivePolicy = originalValidity;
+  }
+});
+
+test('factura encontrada pero vencida conserva VALIDADO_SAT en borrador', async () => {
+  const originalFindOne = SatFactura.findOne;
+  const originalValidity = Validity.validateWithActivePolicy;
+  try {
+    const factura = {
+      _id: '507f1f77bcf86cd799439011', serie: 'A', numeroDTE: '1', numeroAutorizacion: 'U',
+      nitEmisor: '123', nombreEmisor: 'P', idReceptor: '345377', nombreReceptor: 'R',
+      fechaEmision: '2026-01-27', granTotal: 180, moneda: 'GTQ', iva: 17
+    };
+    SatFactura.findOne = () => ({ sort: () => ({ lean: async () => factura }) });
+    Validity.validateWithActivePolicy = async () => ({
+      enabled: true, valid: false, elapsedDays: 182, allowedDays: 55,
+      issueDate: '2026-01-27', referenceDate: '2026-07-28', reason: 'INVOICE_EXPIRED'
+    });
+    const expense = {
+      status: 'BORRADOR', imageuri: 'file://factura.jpg', imageValidationFingerprint: 'file://factura.jpg',
+      satStatus: 'VALIDADO_SAT', serie: 'A', noinvoice: '1', uuid: 'U', vat_number: '123',
+      supplier: 'P', date: '2026-01-27', amount: 180, currency: 'GTQ', category: '', sociedad: ''
+    };
+    expense.satValidationFingerprint = Fingerprint.build(expense);
+    const result = await ExpenseFiscal.validateAndNormalize(expense);
+    assert.equal(result.satStatus, 'VALIDADO_SAT');
+    assert.equal(result.fiscalStatus, 'BLOQUEADO_ANTIGUEDAD');
+  } finally {
+    SatFactura.findOne = originalFindOne;
+    Validity.validateWithActivePolicy = originalValidity;
+  }
+});
+
+test('la extracción remota queda desactivada y las descargas conservan UUID', () => {
+  const mobileSource = fs.readFileSync(path.join(__dirname, '../../../app/add-expense.tsx'), 'utf8');
+  const expenseRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/expenses.js'), 'utf8');
+  const syncRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/sync.js'), 'utf8');
+  assert.match(mobileSource, /const useAIExtraction = false/);
+  assert.match(expenseRouteSource, /uuid: expense\.uuid/);
+  assert.match(syncRouteSource, /uuid: expense\.uuid/);
 });

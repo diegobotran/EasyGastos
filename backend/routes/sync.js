@@ -18,6 +18,8 @@ const hasAccountingSnapshot = (expenseData = {}) => {
     String(expenseData.ordenco || '').trim()
   );
 };
+const isDraft = expenseData => expenseData.status === 'BORRADOR';
+const hasAttachment = expenseData => Boolean(String(expenseData.imageuri || '').trim());
 
 const normalizeSatValidationState = ExpenseFiscalValidationService.validateAndNormalize;
 
@@ -117,6 +119,7 @@ router.post('/full-sync', authenticateToken, [
       notes: expense.notes,
       noinvoice: expense.noinvoice,
       serie: expense.serie,
+      uuid: expense.uuid,
       centro: expense.centro,
       cuenta: expense.cuenta,
       ordenco: expense.ordenco,
@@ -265,7 +268,10 @@ router.post('/upload', authenticateToken, [
     // Procesar gastos
     for (const expenseData of expenses) {
       try {
-        if (!hasAccountingSnapshot(expenseData)) {
+        if (!hasAttachment(expenseData)) {
+          throw new Error('El borrador debe incluir un documento o imagen adjunta.');
+        }
+        if (!isDraft(expenseData) && !hasAccountingSnapshot(expenseData)) {
           throw new Error('El gasto no incluye snapshot contable completo (categoría, sociedad, centro, cuenta y orden CO).');
         }
 
