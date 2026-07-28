@@ -79,7 +79,7 @@ const applyValidity = (expense, validity, satFields = {}) => ({
 });
 
 const validateAndNormalize = async expense => {
-  if (!hasAttachment(expense)) {
+  if (expense.fiscalValidationStage !== 'SAT_QUERY' && !hasAttachment(expense)) {
     throw new ExpenseFiscalError(
       'EXPENSE_DOCUMENT_REQUIRED',
       'Debe adjuntar un documento o imagen antes de guardar el borrador.'

@@ -151,6 +151,12 @@ test('un borrador incompleto requiere documento adjunto', async () => {
     satStatus: 'PENDIENTE_VALIDACION_SAT',
     satValidationCause: 'NINGUNA'
   }));
+  await assert.doesNotReject(() => ExpenseFiscal.validateAndNormalize({
+    status: 'BORRADOR',
+    fiscalValidationStage: 'SAT_QUERY',
+    satStatus: 'PENDIENTE_VALIDACION_SAT',
+    satValidationCause: 'NINGUNA'
+  }));
 });
 
 test('D+1 evalúa antigüedad y conserva el borrador bloqueado', async () => {
@@ -209,6 +215,7 @@ test('la extracción remota queda desactivada y las descargas conservan UUID', (
   const expenseRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/expenses.js'), 'utf8');
   const syncRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/sync.js'), 'utf8');
   assert.match(mobileSource, /const useAIExtraction = false/);
+  assert.doesNotMatch(mobileSource, /¿Desea continuar y crear un gasto duplicado/);
   assert.match(expenseRouteSource, /uuid: expense\.uuid/);
   assert.match(syncRouteSource, /uuid: expense\.uuid/);
 });

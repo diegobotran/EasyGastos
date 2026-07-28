@@ -471,10 +471,6 @@ export default function AddExpenseScreen() {
   // Función para validar la factura con el servicio de la SAT
   const handleValidateSAT = async () => {
     try {
-      if (!file?.uri) {
-        Alert.alert('Documento requerido', 'Adjunta primero la imagen o documento de la factura.');
-        return;
-      }
       const missingFields = [];
       if (!noinvoice.trim()) missingFields.push('No. Factura');
       if (!serie.trim()) missingFields.push('Serie');
@@ -849,40 +845,11 @@ export default function AddExpenseScreen() {
           message += `No se permite agregar facturas duplicadas que ya estén en liquidaciones.`;
         } else {
           message += `Gasto existente: ${duplicateCheck.existingExpense.description}\n\n`;
-          message += `¿Desea continuar y crear un gasto duplicado de todas formas?`;
+          message += `Para registrar nuevamente esta factura debe anular primero el gasto existente.`;
         }
 
-        // Si está en liquidación, no permitir continuar
-        if (duplicateCheck.inLiquidation) {
-          Alert.alert('Factura Duplicada', message);
-          return;
-        }
-
-        // Si no está en liquidación, preguntar si desea continuar
-        const shouldContinue = await new Promise<boolean>((resolve) => {
-          Alert.alert(
-            'Factura Duplicada',
-            message,
-            [
-              {
-                text: 'Cancelar',
-                style: 'cancel',
-                onPress: () => resolve(false)
-              },
-              {
-                text: 'Continuar',
-                onPress: () => resolve(true)
-              }
-            ]
-          );
-        });
-
-        if (!shouldContinue) {
-          console.log('❌ AddExpense: Usuario canceló creación de duplicado');
-          return;
-        }
-        
-        console.log('⚠️ AddExpense: Usuario decidió continuar con duplicado');
+        Alert.alert('Factura Duplicada', message, [{ text: 'Entendido' }]);
+        return;
       }
 
       // CREAR OBJETO DEL GASTO
