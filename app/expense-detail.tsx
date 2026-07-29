@@ -162,6 +162,7 @@ export default function ExpenseDetailScreen() {
         serie: expense.serie,
         noinvoice: expense.noinvoice,
         nitEmisor: expense.vat_number,
+        nitReceptor: expense.receiver_vat_number,
         supplier: expense.supplier,
         date: expense.date,
         amount: expense.amount,
@@ -218,6 +219,12 @@ export default function ExpenseDetailScreen() {
         serie: String(result.campos.serie || expense.serie || ''),
         noinvoice: String(result.campos.noinvoice || expense.noinvoice || ''),
         vat_number: String(result.campos.vat_number || expense.vat_number || ''),
+        receiver_vat_number: String(
+          result.campos.receiver_vat_number ||
+          result.snapshot?.idReceptor ||
+          expense.receiver_vat_number ||
+          ''
+        ),
         supplier: String(result.campos.supplier || expense.supplier || ''),
         date: String(result.campos.date || expense.date),
         amount: result.campos.amount ?? expense.amount,
@@ -236,13 +243,17 @@ export default function ExpenseDetailScreen() {
           serie: String(result.campos.serie || expense.serie || ''),
           noinvoice: String(result.campos.noinvoice || expense.noinvoice || ''),
           vat_number: String(result.campos.vat_number || expense.vat_number || ''),
+          receiver_vat_number: String(
+            result.campos.receiver_vat_number ||
+            result.snapshot?.idReceptor ||
+            expense.receiver_vat_number ||
+            ''
+          ),
           supplier: String(result.campos.supplier || expense.supplier || ''),
           date: String(result.campos.date || expense.date),
           amount: result.campos.amount ?? expense.amount,
           uuid: String(result.campos.uuid || expense.uuid || ''),
           currency: String(result.campos.currency || expense.currency || 'GTQ'),
-          sociedad: expense.sociedad,
-          category: expense.category,
           imageuri: expense.imageuri,
           imageValidationFingerprint: expense.imageValidationFingerprint || expense.imageuri,
         }),
@@ -253,14 +264,48 @@ export default function ExpenseDetailScreen() {
         throw new Error('No se encontró usuario activo');
       }
 
+      const normalizeNit = (value?: string) =>
+        String(value || '').trim().toUpperCase().replace(/[-\s]/g, '');
+      const receiverNitChanged =
+        normalizeNit(updatedExpense.receiver_vat_number) !==
+        normalizeNit(expense.receiver_vat_number);
+      if (receiverNitChanged) {
+        updatedExpense = {
+          ...updatedExpense,
+          category: '',
+          sociedad: undefined,
+          centro: '',
+          cuenta: '',
+          ordenco: '',
+          fiscalStatus: 'PENDIENTE',
+          fiscalValidatedAt: undefined,
+        };
+      }
+
       updatedExpense = await validateExpenseFiscal(updatedExpense, 'SAT_QUERY');
-      await ExpenseService.updateExpense(updatedExpense, user.email);
+      if (!receiverNitChanged) {
+        if (
+          updatedExpense.fiscalStatus !== 'BLOQUEADO_ANTIGUEDAD' &&
+          updatedExpense.category
+        ) {
+          updatedExpense.fiscalStatus = 'APTO_PARA_LIQUIDAR';
+        }
+        await ExpenseService.updateExpense(updatedExpense, user.email);
+      }
 
       const isExpired = updatedExpense.fiscalStatus === 'BLOQUEADO_ANTIGUEDAD';
       Alert.alert(isExpired ? 'Factura vencida' : 'Validación SAT completada', isExpired
-        ? `${sections.join('\n\n')}\n\nLa factura fue encontrada en SAT, pero supera la vigencia de ${updatedExpense.fiscalValidityDaysApplied} días. El borrador se conserva, pero no puede liquidarse.`
-        : sections.join('\n\n'), [
-        { text: 'OK', onPress: () => router.back() }
+        ? `${sections.join('\n\n')}\n\nLa factura fue encontrada en SAT, pero supera la vigencia de ${updatedExpense.fiscalValidityDaysApplied} días.${receiverNitChanged ? '\n\nSAT modificó el NIT del receptor y la categoría fue removida. Debe seleccionar nuevamente una categoría antes de guardar.' : ' El borrador se conserva, pero no puede liquidarse.'}`
+        : `${sections.join('\n\n')}${receiverNitChanged ? '\n\nSAT modificó el NIT del receptor y la categoría fue removida. Debe seleccionar nuevamente la categoría correcta.' : ''}`, [
+        {
+          text: 'OK',
+          onPress: () => receiverNitChanged
+            ? router.replace({
+                pathname: '/add-expense',
+                params: { expense: JSON.stringify(updatedExpense) },
+              })
+            : router.back()
+        }
       ]);
     } catch (error) {
       if (error instanceof ExpenseFiscalValidationError) {
@@ -450,7 +495,8 @@ export default function ExpenseDetailScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Proveedor</Text>
           <DetailRow icon="storefront-outline" label="Nombre" value={expense.supplier} />
-          <DetailRow icon="card-outline" label="NIT" value={expense.vat_number} />
+          <DetailRow icon="card-outline" label="NIT del Emisor" value={expense.vat_number} />
+          <DetailRow icon="business-outline" label="NIT del Receptor" value={expense.receiver_vat_number || 'N/A'} />
         </View>
 
         {/* Factura */}

@@ -53,6 +53,7 @@ const validateExpense = [
   body('imageValidationFingerprint').optional({ nullable: true }).trim(),
   body('supplier').optional().trim(),
   body('vat_number').optional().trim(),
+  body('receiver_vat_number').optional().trim(),
   body('department').optional().trim(),
   body('notes').optional().trim(),
   body('noinvoice').optional().trim(),
@@ -303,6 +304,7 @@ router.get('/', authenticateToken, async (req, res) => {
       liquidationId: expense.liquidationId || '',
       supplier: expense.supplier,
       vat_number: expense.vat_number,
+      receiver_vat_number: expense.receiver_vat_number,
       department: expense.department,
       notes: expense.notes,
       noinvoice: expense.noinvoice,
@@ -403,6 +405,7 @@ router.patch('/:id', authenticateToken, [
   body('fiscalValidatedAt').optional({ nullable: true }).trim(),
   body('fiscalValidityDaysApplied').optional({ nullable: true }).isInt({ min: 1 }),
   body('imageValidationFingerprint').optional({ nullable: true }).trim(),
+  body('receiver_vat_number').optional().trim(),
   body('voidedAt').optional().trim(),
   body('voidedReason').optional().trim(),
   body('description').optional().trim().isLength({ min: 1 }),
@@ -486,7 +489,7 @@ router.patch('/:id', authenticateToken, [
       'satValidatedAt', 'satValidationSource', 'satValidationFingerprint',
       'satValidationCause', 'fiscalStatus', 'satFacturaId', 'satInvoiceSnapshot',
       'fiscalValidatedAt', 'fiscalValidityDaysApplied', 'imageValidationFingerprint',
-      'supplier', 'vat_number', 'department', 'notes', 'noinvoice', 'serie', 'uuid',
+      'supplier', 'vat_number', 'receiver_vat_number', 'department', 'notes', 'noinvoice', 'serie', 'uuid',
       'centro', 'cuenta', 'ordenco', 'imageuri', 'currency', 'totiva',
       'voidedAt', 'voidedReason', 'liquidationId'
     ];

@@ -7,6 +7,7 @@ const SAT = require('../../services/SATInternalValidationService');
 const ExpenseFiscal = require('../../services/ExpenseFiscalValidationService');
 const CatalogService = require('../../services/CatalogService');
 const FiscalEligibility = require('../../services/FiscalEligibilityService');
+const SocietyNitValidation = require('../../services/SocietyNitValidationService');
 const SatFactura = require('../../models/SatFactura');
 const LiquidationFiscal = require('../../services/LiquidationFiscalValidationService');
 const liquidationRouter = require('../../routes/liquidations');
@@ -33,13 +34,14 @@ test('una política inactiva omite la restricción de antigüedad', () => {
 
 test('el fingerprint cambia con imagen y no cambia con nota o descripción', () => {
   const base = {
-    serie: 'A', noinvoice: '1', uuid: 'U', vat_number: '123', supplier: 'P',
+    serie: 'A', noinvoice: '1', uuid: 'U', vat_number: '123', receiver_vat_number: '792500', supplier: 'P',
     date: '2026-07-21', amount: 10, currency: 'GTQ', sociedad: '4000',
     category: 'Gasolina', imageuri: 'file://uno.jpg', notes: 'uno', description: 'uno'
   };
   assert.equal(Fingerprint.build(base), Fingerprint.build({ ...base, notes: 'dos', description: 'dos' }));
   assert.notEqual(Fingerprint.build(base), Fingerprint.build({ ...base, imageuri: 'file://dos.jpg' }));
-  assert.notEqual(Fingerprint.build(base), Fingerprint.build({ ...base, sociedad: '5000' }));
+  assert.notEqual(Fingerprint.build(base), Fingerprint.build({ ...base, receiver_vat_number: '345377' }));
+  assert.equal(Fingerprint.build(base), Fingerprint.build({ ...base, sociedad: '5000', category: 'Hospedaje' }));
 });
 
 test('la búsqueda SAT oficial no incorpora NIT receptor', () => {
@@ -52,9 +54,11 @@ test('la búsqueda SAT oficial no incorpora NIT receptor', () => {
 test('la comparación SAT separa complementos y correcciones', () => {
   const result = SAT.compare({
     serie: 'A', numeroDTE: '1', nitEmisor: '123', nombreEmisor: 'Proveedor SAT',
-    fechaEmision: '2026-07-21', granTotal: 15, numeroAutorizacion: 'UUID', moneda: 'GTQ', iva: 1
+    idReceptor: '792500', fechaEmision: '2026-07-21', granTotal: 15,
+    numeroAutorizacion: 'UUID', moneda: 'GTQ', iva: 1
   }, { serie: 'A', noinvoice: '1', supplier: 'Proveedor OCR', amount: 15 });
   assert.ok(result.complementados.some(item => item.field === 'vat_number'));
+  assert.ok(result.complementados.some(item => item.field === 'receiver_vat_number'));
   assert.ok(result.corregidos.some(item => item.field === 'supplier'));
   assert.equal(result.corregidos.some(item => item.field === 'amount'), false);
 });
@@ -90,6 +94,8 @@ test('un borrador completo con NIT receptor de otra sociedad no puede guardarse'
   const originalFindOne = SatFactura.findOne;
   const originalEligibility = FiscalEligibility.evaluate;
   const originalValidity = Validity.validateWithActivePolicy;
+  const originalFindByCode = SocietyNitValidation.findActiveByCode;
+  const originalFindByNit = SocietyNitValidation.findActiveByNit;
   try {
     const factura = {
       _id: '507f1f77bcf86cd799439011', serie: 'A', numeroDTE: '1', numeroAutorizacion: 'U',
@@ -97,6 +103,8 @@ test('un borrador completo con NIT receptor de otra sociedad no puede guardarse'
       fechaEmision: '2026-07-21', granTotal: 10, moneda: 'GTQ', iva: 1
     };
     CatalogService.assertActiveReferences = async () => true;
+    SocietyNitValidation.findActiveByCode = async () => ({ codigo: '4000', nit: 'OTRO-NIT' });
+    SocietyNitValidation.findActiveByNit = async () => ({ codigo: '5000', nit: '792500' });
     SatFactura.findOne = () => ({ sort: () => ({ lean: async () => factura }) });
     Validity.validateWithActivePolicy = async () => ({
       enabled: true, valid: true, elapsedDays: 7, allowedDays: 55
@@ -112,9 +120,9 @@ test('un borrador completo con NIT receptor de otra sociedad no puede guardarse'
       status: 'BORRADOR', imageuri: 'file://factura.jpg',
       imageValidationFingerprint: 'file://factura.jpg',
       satStatus: 'VALIDADO_SAT', serie: 'A', noinvoice: '1', uuid: 'U',
-      vat_number: '123', supplier: 'P', date: '2026-07-21', amount: 10,
+      vat_number: '123', receiver_vat_number: '792500', supplier: 'P', date: '2026-07-21', amount: 10,
       currency: 'GTQ', sociedad: '4000', category: 'C',
-      centro: '1', cuenta: '2', ordenco: '3'
+      centro: '1', cuenta: '2', ordenco: '3', department: 'Ventas'
     };
     expense.satValidationFingerprint = Fingerprint.build(expense);
     await assert.rejects(
@@ -126,6 +134,40 @@ test('un borrador completo con NIT receptor de otra sociedad no puede guardarse'
     SatFactura.findOne = originalFindOne;
     FiscalEligibility.evaluate = originalEligibility;
     Validity.validateWithActivePolicy = originalValidity;
+    SocietyNitValidation.findActiveByCode = originalFindByCode;
+    SocietyNitValidation.findActiveByNit = originalFindByNit;
+  }
+});
+
+test('la categorÃ­a y el NIT receptor se validan aunque SAT permanezca pendiente', async () => {
+  const originalCatalogValidation = CatalogService.assertActiveReferences;
+  const originalFindByCode = SocietyNitValidation.findActiveByCode;
+  const originalFindByNit = SocietyNitValidation.findActiveByNit;
+  try {
+    CatalogService.assertActiveReferences = async () => true;
+    SocietyNitValidation.findActiveByCode = async () => ({ codigo: '4000', nit: '345377' });
+    SocietyNitValidation.findActiveByNit = async () => ({ codigo: '5000', nit: '792500' });
+    await assert.rejects(() => ExpenseFiscal.validateAndNormalize({
+      status: 'BORRADOR',
+      imageuri: 'file://factura.jpg',
+      noinvoice: '1',
+      serie: 'A',
+      vat_number: '123',
+      receiver_vat_number: '792500',
+      amount: 10,
+      category: 'C',
+      sociedad: '4000',
+      centro: '1',
+      cuenta: '2',
+      ordenco: '3',
+      department: 'Ventas',
+      satStatus: 'PENDIENTE_VALIDACION_SAT',
+      satValidationCause: 'NINGUNA'
+    }), error => error.code === 'EXPENSE_NIT_SOCIETY_MISMATCH');
+  } finally {
+    CatalogService.assertActiveReferences = originalCatalogValidation;
+    SocietyNitValidation.findActiveByCode = originalFindByCode;
+    SocietyNitValidation.findActiveByNit = originalFindByNit;
   }
 });
 
@@ -182,6 +224,13 @@ test('el Hard Stop se ejecuta antes de la llamada externa a SAP y existe retorno
 });
 
 test('un borrador incompleto requiere documento adjunto', async () => {
+  const originalCatalogValidation = CatalogService.assertActiveReferences;
+  const originalFindByCode = SocietyNitValidation.findActiveByCode;
+  const originalFindByNit = SocietyNitValidation.findActiveByNit;
+  CatalogService.assertActiveReferences = async () => true;
+  SocietyNitValidation.findActiveByCode = async () => ({ codigo: '5000', nit: '792500' });
+  SocietyNitValidation.findActiveByNit = async () => ({ codigo: '5000', nit: '792500' });
+  try {
   await assert.rejects(
     () => ExpenseFiscal.validateAndNormalize({
       status: 'BORRADOR',
@@ -189,9 +238,26 @@ test('un borrador incompleto requiere documento adjunto', async () => {
     }),
     error => error.code === 'EXPENSE_DOCUMENT_REQUIRED'
   );
+  await assert.rejects(() => ExpenseFiscal.validateAndNormalize({
+    status: 'BORRADOR',
+    imageuri: 'file://factura.jpg',
+    satStatus: 'PENDIENTE_VALIDACION_SAT',
+    satValidationCause: 'NINGUNA'
+  }), error => error.code === 'EXPENSE_DRAFT_REQUIRED_FIELDS');
   await assert.doesNotReject(() => ExpenseFiscal.validateAndNormalize({
     status: 'BORRADOR',
     imageuri: 'file://factura.jpg',
+    noinvoice: '1',
+    serie: 'A',
+    vat_number: '123',
+    receiver_vat_number: '792500',
+    amount: 10,
+    category: 'C',
+    sociedad: '5000',
+    centro: '1',
+    cuenta: '2',
+    ordenco: '3',
+    department: 'Ventas',
     satStatus: 'PENDIENTE_VALIDACION_SAT',
     satValidationCause: 'NINGUNA'
   }));
@@ -201,11 +267,22 @@ test('un borrador incompleto requiere documento adjunto', async () => {
     satStatus: 'PENDIENTE_VALIDACION_SAT',
     satValidationCause: 'NINGUNA'
   }));
+  } finally {
+    CatalogService.assertActiveReferences = originalCatalogValidation;
+    SocietyNitValidation.findActiveByCode = originalFindByCode;
+    SocietyNitValidation.findActiveByNit = originalFindByNit;
+  }
 });
 
 test('D+1 evalúa antigüedad y conserva el borrador bloqueado', async () => {
   const originalValidity = Validity.validateWithActivePolicy;
+  const originalCatalogValidation = CatalogService.assertActiveReferences;
+  const originalFindByCode = SocietyNitValidation.findActiveByCode;
+  const originalFindByNit = SocietyNitValidation.findActiveByNit;
   try {
+    CatalogService.assertActiveReferences = async () => true;
+    SocietyNitValidation.findActiveByCode = async () => ({ codigo: '5000', nit: '792500' });
+    SocietyNitValidation.findActiveByNit = async () => ({ codigo: '5000', nit: '792500' });
     Validity.validateWithActivePolicy = async () => ({
       enabled: true, valid: false, elapsedDays: 56, allowedDays: 55,
       issueDate: '2026-06-02', referenceDate: '2026-07-28', reason: 'INVOICE_EXPIRED'
@@ -213,6 +290,17 @@ test('D+1 evalúa antigüedad y conserva el borrador bloqueado', async () => {
     const result = await ExpenseFiscal.validateAndNormalize({
       status: 'BORRADOR',
       imageuri: 'file://factura.jpg',
+      noinvoice: '1',
+      serie: 'A',
+      vat_number: '123',
+      receiver_vat_number: '792500',
+      amount: 10,
+      category: 'C',
+      sociedad: '5000',
+      centro: '1',
+      cuenta: '2',
+      ordenco: '3',
+      department: 'Ventas',
       date: '2026-06-02',
       satStatus: 'PENDIENTE_VALIDACION_SAT',
       satValidationCause: 'NO_ENCONTRADO_D_PLUS_1'
@@ -222,12 +310,18 @@ test('D+1 evalúa antigüedad y conserva el borrador bloqueado', async () => {
     assert.equal(result.fiscalValidityDaysApplied, 55);
   } finally {
     Validity.validateWithActivePolicy = originalValidity;
+    CatalogService.assertActiveReferences = originalCatalogValidation;
+    SocietyNitValidation.findActiveByCode = originalFindByCode;
+    SocietyNitValidation.findActiveByNit = originalFindByNit;
   }
 });
 
 test('factura encontrada pero vencida conserva VALIDADO_SAT en borrador', async () => {
   const originalFindOne = SatFactura.findOne;
   const originalValidity = Validity.validateWithActivePolicy;
+  const originalCatalogValidation = CatalogService.assertActiveReferences;
+  const originalFindByCode = SocietyNitValidation.findActiveByCode;
+  const originalFindByNit = SocietyNitValidation.findActiveByNit;
   try {
     const factura = {
       _id: '507f1f77bcf86cd799439011', serie: 'A', numeroDTE: '1', numeroAutorizacion: 'U',
@@ -235,6 +329,9 @@ test('factura encontrada pero vencida conserva VALIDADO_SAT en borrador', async 
       fechaEmision: '2026-01-27', granTotal: 180, moneda: 'GTQ', iva: 17
     };
     SatFactura.findOne = () => ({ sort: () => ({ lean: async () => factura }) });
+    CatalogService.assertActiveReferences = async () => true;
+    SocietyNitValidation.findActiveByCode = async () => ({ codigo: '5000', nit: '345377' });
+    SocietyNitValidation.findActiveByNit = async () => ({ codigo: '5000', nit: '345377' });
     Validity.validateWithActivePolicy = async () => ({
       enabled: true, valid: false, elapsedDays: 182, allowedDays: 55,
       issueDate: '2026-01-27', referenceDate: '2026-07-28', reason: 'INVOICE_EXPIRED'
@@ -242,7 +339,9 @@ test('factura encontrada pero vencida conserva VALIDADO_SAT en borrador', async 
     const expense = {
       status: 'BORRADOR', imageuri: 'file://factura.jpg', imageValidationFingerprint: 'file://factura.jpg',
       satStatus: 'VALIDADO_SAT', serie: 'A', noinvoice: '1', uuid: 'U', vat_number: '123',
-      supplier: 'P', date: '2026-01-27', amount: 180, currency: 'GTQ', category: '', sociedad: ''
+      receiver_vat_number: '345377', supplier: 'P', date: '2026-01-27', amount: 180,
+      currency: 'GTQ', category: 'C', department: 'Ventas', sociedad: '5000',
+      centro: '1', cuenta: '2', ordenco: '3'
     };
     expense.satValidationFingerprint = Fingerprint.build(expense);
     const result = await ExpenseFiscal.validateAndNormalize(expense);
@@ -251,6 +350,9 @@ test('factura encontrada pero vencida conserva VALIDADO_SAT en borrador', async 
   } finally {
     SatFactura.findOne = originalFindOne;
     Validity.validateWithActivePolicy = originalValidity;
+    CatalogService.assertActiveReferences = originalCatalogValidation;
+    SocietyNitValidation.findActiveByCode = originalFindByCode;
+    SocietyNitValidation.findActiveByNit = originalFindByNit;
   }
 });
 

@@ -29,6 +29,7 @@
     ],
     "expense": [
       "EXPENSE_DOCUMENT_REQUIRED",
+      "EXPENSE_DRAFT_REQUIRED_FIELDS",
       "EXPENSE_NIT_SOCIETY_MISMATCH",
       "CATEGORY_WITHOUT_SOCIETY",
       "SOCIETY_NOT_FOUND",
@@ -66,6 +67,7 @@
     "optionalRequestFields": [
       "uuid",
       "nitEmisor",
+      "nitReceptor",
       "supplier",
       "date",
       "amount",

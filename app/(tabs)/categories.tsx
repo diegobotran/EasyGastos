@@ -350,8 +350,8 @@ export default function CategoryScreen() {
     cuentaOptions.some(item => item.codigo === category.cuenta) &&
     ordenCOOptions.some(item => item.codigo === category.ordenco);
 
-  return (
-    <View style={styles.container}>
+  const categoryListHeader = (
+    <View>
       <Text style={styles.title}>Categorías</Text>
       <View style={styles.catalogStatus}>
         <View style={styles.catalogStatusText}>
@@ -423,11 +423,17 @@ export default function CategoryScreen() {
           <Text style={styles.addButtonText}>Agregar Categoría</Text>
         </TouchableOpacity>
       </View>
+    </View>
+  );
 
-      {/* List of Categories */}
+  return (
+    <View style={styles.container}>
       <FlatList
+        style={styles.categoryList}
+        contentContainerStyle={styles.categoryListContent}
         data={categories}
         keyExtractor={item => item.id}
+        ListHeaderComponent={categoryListHeader}
         renderItem={({ item }) => (
         <View style={styles.categoryItem}>
           {/* 1. A new container for all the text info */}
@@ -519,6 +525,8 @@ export default function CategoryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: 'white' },
+  categoryList: { flex: 1 },
+  categoryListContent: { paddingBottom: 32 },
   title: { fontSize: 28, fontWeight: 'bold', marginBottom: 20, color: '#1e293b' },
   catalogStatus: { flexDirection: 'row', alignItems: 'center', padding: 12, marginBottom: 16, borderRadius: 8, backgroundColor: '#eff6ff' },
   catalogStatusText: { flex: 1, marginRight: 10 },

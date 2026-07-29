@@ -115,6 +115,7 @@ router.post('/full-sync', authenticateToken, [
       liquidationId: expense.liquidationId || '',
       supplier: expense.supplier,
       vat_number: expense.vat_number,
+      receiver_vat_number: expense.receiver_vat_number,
       department: expense.department,
       notes: expense.notes,
       noinvoice: expense.noinvoice,

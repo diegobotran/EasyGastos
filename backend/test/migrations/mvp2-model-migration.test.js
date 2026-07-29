@@ -11,7 +11,17 @@ test('conserva VALIDADO_SAT únicamente con evidencia completa', () => {
     satStatus: 'VALIDADO_SAT',
     satValidatedAt: '2026-07-17T12:00:00.000Z',
     satValidationSource: 'SAT_INTERNO',
-    satValidationFingerprint: 'fingerprint'
+    satValidationFingerprint: 'fingerprint',
+    satInvoiceSnapshot: { idReceptor: '792500' },
+    serie: 'A',
+    noinvoice: '1',
+    uuid: 'U',
+    vat_number: '123',
+    supplier: 'Proveedor',
+    date: '2026-07-17',
+    amount: 10,
+    currency: 'GTQ',
+    imageuri: 'file://factura.jpg'
   };
   const result = normalizeLegacyExpense(source);
 
@@ -19,6 +29,8 @@ test('conserva VALIDADO_SAT únicamente con evidencia completa', () => {
   assert.equal(result.satStatus, 'VALIDADO_SAT');
   assert.equal(result.satValidationCause, 'NINGUNA');
   assert.equal(result.fiscalStatus, 'PENDIENTE');
+  assert.equal(result.receiver_vat_number, '792500');
+  assert.notEqual(result.satValidationFingerprint, 'fingerprint');
 });
 
 test('degrada VALIDADO_SAT sin evidencia a pendiente', () => {

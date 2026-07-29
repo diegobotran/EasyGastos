@@ -9,12 +9,11 @@ const buildSource = expense => [
   expense.noinvoice,
   expense.uuid,
   expense.vat_number || expense.nitEmisor,
+  expense.receiver_vat_number || expense.nitReceptor,
   expense.supplier,
   expense.date,
   expense.amount,
   expense.currency,
-  expense.sociedad,
-  expense.category,
   expense.imageValidationFingerprint || expense.imageuri
 ].map(normalize).join('|');
 

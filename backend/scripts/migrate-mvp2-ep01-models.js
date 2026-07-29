@@ -29,7 +29,8 @@ const comparableFields = [
   'satInvoiceSnapshot',
   'fiscalValidatedAt',
   'fiscalValidityDaysApplied',
-  'imageValidationFingerprint'
+  'imageValidationFingerprint',
+  'receiver_vat_number'
 ];
 
 const changed = (before, after) => comparableFields.some(

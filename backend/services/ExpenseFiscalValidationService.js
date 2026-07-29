@@ -5,6 +5,7 @@ const FiscalEligibilityService = require('./FiscalEligibilityService');
 const Fingerprint = require('./FiscalFingerprintService');
 const InvoiceValidityService = require('./InvoiceValidityService');
 const SATInternalValidationService = require('./SATInternalValidationService');
+const SocietyNitValidationService = require('./SocietyNitValidationService');
 
 class ExpenseFiscalError extends Error {
   constructor(code, message, details) {
@@ -58,6 +59,55 @@ const hasAccountingSnapshot = expense => Boolean(
 
 const isDraft = expense => expense.status === 'BORRADOR';
 
+const getMissingDraftFields = expense => {
+  const missing = [];
+  if (!String(expense.noinvoice || '').trim()) missing.push('No. de Factura');
+  if (!String(expense.serie || '').trim()) missing.push('Serie');
+  if (!String(expense.vat_number || '').trim()) missing.push('NIT del Emisor');
+  if (!String(expense.receiver_vat_number || '').trim()) missing.push('NIT del Receptor');
+  if (!(Number(expense.amount) > 0)) missing.push('Monto');
+  if (!String(expense.category || '').trim()) missing.push('Categoría');
+  if (!String(expense.department || '').trim()) missing.push('Departamento');
+  return missing;
+};
+
+const assertCategoryMatchesReceiverNit = async expense => {
+  await CatalogService.assertActiveReferences(expense);
+  const society = await SocietyNitValidationService.findActiveByCode(expense.sociedad);
+  if (!society) {
+    throw new ExpenseFiscalError(
+      'SOCIETY_NOT_FOUND',
+      `La sociedad ${expense.sociedad} no existe o está inactiva.`
+    );
+  }
+  if (!society.nit) {
+    throw new ExpenseFiscalError(
+      'SOCIETY_WITHOUT_NIT',
+      `La sociedad ${expense.sociedad} no tiene NIT configurado.`
+    );
+  }
+  if (
+    SocietyNitValidationService.normalizeNit(society.nit) ===
+    SocietyNitValidationService.normalizeNit(expense.receiver_vat_number)
+  ) {
+    return;
+  }
+  const actualSociety = await SocietyNitValidationService.findActiveByNit(expense.receiver_vat_number);
+  if (!actualSociety) {
+    throw new ExpenseFiscalError(
+      'RECEIVER_NIT_WITHOUT_SOCIETY',
+      `El NIT receptor ${expense.receiver_vat_number} no está vinculado con ninguna sociedad. Seleccione una categoría correcta o solicite la configuración de la sociedad.`
+    );
+  }
+  if (actualSociety.codigo !== society.codigo) {
+    throw new ExpenseFiscalError(
+      'EXPENSE_NIT_SOCIETY_MISMATCH',
+      `El NIT receptor ${expense.receiver_vat_number} corresponde a la sociedad ${actualSociety.codigo}, no a la sociedad ${society.codigo} (NIT ${society.nit}) asociada a la categoría. Seleccione la categoría correcta antes de guardar.`,
+      { society, actualSociety, receiverNit: expense.receiver_vat_number }
+    );
+  }
+};
+
 const messageForEligibility = (expense, snapshot, eligibility) => {
   const actual = eligibility.actualSociety;
   const messages = {
@@ -84,6 +134,24 @@ const validateAndNormalize = async expense => {
       'EXPENSE_DOCUMENT_REQUIRED',
       'Debe adjuntar un documento o imagen antes de guardar el borrador.'
     );
+  }
+
+  if (expense.fiscalValidationStage !== 'SAT_QUERY' && isDraft(expense)) {
+    const missingDraftFields = getMissingDraftFields(expense);
+    if (missingDraftFields.length > 0) {
+      throw new ExpenseFiscalError(
+        'EXPENSE_DRAFT_REQUIRED_FIELDS',
+        `Para guardar el borrador debe completar: ${missingDraftFields.join(', ')}.`,
+        { missingFields: missingDraftFields }
+      );
+    }
+    if (!hasAccountingSnapshot(expense)) {
+      throw new ExpenseFiscalError(
+        'CATEGORY_WITHOUT_SOCIETY',
+        'La categoría debe contener Sociedad, Centro, Cuenta y Orden CO antes de guardar el borrador.'
+      );
+    }
+    await assertCategoryMatchesReceiverNit(expense);
   }
 
   if (expense.satStatus !== 'VALIDADO_SAT') {
@@ -121,6 +189,16 @@ const validateAndNormalize = async expense => {
   }
 
   const snapshot = SATInternalValidationService.buildSnapshot(factura);
+  if (
+    SATInternalValidationService.normalizeNit(expense.receiver_vat_number) !==
+    SATInternalValidationService.normalizeNit(snapshot.idReceptor)
+  ) {
+    throw new ExpenseFiscalError(
+      'SAT_CORRECTIONS_REQUIRED',
+      'El NIT del receptor cambió o no coincide con SAT. Consulta SAT nuevamente.',
+      { expectedReceiverNit: snapshot.idReceptor }
+    );
+  }
   const validity = await InvoiceValidityService.validateWithActivePolicy(snapshot.fechaEmision);
   const validatedSatFields = {
     satStatus: 'VALIDADO_SAT',
@@ -130,6 +208,7 @@ const validateAndNormalize = async expense => {
     satValidationFingerprint: expectedFingerprint,
     satFacturaId: String(factura._id),
     satInvoiceSnapshot: snapshot,
+    receiver_vat_number: snapshot.idReceptor,
     imageValidationFingerprint: expense.imageValidationFingerprint || Fingerprint.normalize(expense.imageuri)
   };
 
@@ -162,7 +241,7 @@ const validateAndNormalize = async expense => {
   await CatalogService.assertActiveReferences(expense);
   const eligibility = await FiscalEligibilityService.evaluate({
     sociedad: expense.sociedad,
-    receiverNit: snapshot.idReceptor,
+    receiverNit: expense.receiver_vat_number,
     issueDate: snapshot.fechaEmision
   });
   if (!eligibility.valid) {
@@ -182,6 +261,7 @@ const validateAndNormalize = async expense => {
     satValidationFingerprint: expectedFingerprint,
     satFacturaId: String(factura._id),
     satInvoiceSnapshot: snapshot,
+    receiver_vat_number: snapshot.idReceptor,
     fiscalValidatedAt: new Date().toISOString(),
     fiscalValidityDaysApplied: validity.enabled ? validity.allowedDays : null,
     imageValidationFingerprint: expense.imageValidationFingerprint || Fingerprint.normalize(expense.imageuri)

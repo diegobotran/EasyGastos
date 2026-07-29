@@ -122,6 +122,7 @@ const expenseSchema = new mongoose.Schema({
   voidedReason: { type: String, default: null }, // Razón de anulación
   supplier: { type: String, default: null },
   vat_number: { type: String, default: null },
+  receiver_vat_number: { type: String, default: null },
   department: { type: String, default: null },
   notes: { type: String, default: null },
   noinvoice: { type: String, default: null },

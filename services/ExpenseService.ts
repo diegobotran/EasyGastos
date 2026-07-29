@@ -20,7 +20,7 @@ export type DraftExpenseCategoryLink = {
 type SatFingerprintExpense = Pick<
   Expense,
   'serie' | 'noinvoice' | 'vat_number' | 'supplier' | 'date' | 'amount' | 'uuid'
-> & Partial<Pick<Expense, 'currency' | 'sociedad' | 'category' | 'imageuri' | 'imageValidationFingerprint'>>;
+> & Partial<Pick<Expense, 'receiver_vat_number' | 'currency' | 'imageuri' | 'imageValidationFingerprint'>>;
 
 const normalizeSatValue = (value: unknown): string => {
   if (value === null || value === undefined) {
@@ -40,12 +40,11 @@ export const buildSatValidationFingerprint = (expense: SatFingerprintExpense): s
     normalizeSatValue(expense.noinvoice),
     normalizeSatValue(expense.uuid),
     normalizeSatValue(expense.vat_number),
+    normalizeSatValue(expense.receiver_vat_number),
     normalizeSatValue(expense.supplier),
     normalizeSatValue(expense.date),
     normalizeSatValue(expense.amount),
     normalizeSatValue(expense.currency),
-    normalizeSatValue(expense.sociedad),
-    normalizeSatValue(expense.category),
     normalizeSatValue(expense.imageValidationFingerprint || expense.imageuri),
   ].join('|');
 };
@@ -214,6 +213,7 @@ export const initDB = async (): Promise<void> => {
           imageValidationFingerprint TEXT,
           supplier TEXT,
           vat_number TEXT,
+          receiver_vat_number TEXT,
           department TEXT,
           notes TEXT,
           noinvoice TEXT,
@@ -326,6 +326,7 @@ export const initDB = async (): Promise<void> => {
         ['fiscalValidatedAt', 'TEXT'],
         ['fiscalValidityDaysApplied', 'INTEGER'],
         ['imageValidationFingerprint', 'TEXT'],
+        ['receiver_vat_number', 'TEXT'],
       ] as const;
 
       for (const [columnName, columnType] of fiscalColumns) {
@@ -364,6 +365,37 @@ export const initDB = async (): Promise<void> => {
             fiscalStatus = COALESCE(fiscalStatus, 'PENDIENTE')
         WHERE satValidationCause IS NULL OR fiscalStatus IS NULL;
       `);
+
+      const validatedRows = await db.getAllAsync<Record<string, any>>(
+        `SELECT * FROM expenses WHERE satStatus = 'VALIDADO_SAT'`
+      );
+      for (const row of validatedRows) {
+        const snapshot = parseSatInvoiceSnapshot(row.satInvoiceSnapshot);
+        const receiverVatNumber = row.receiver_vat_number || snapshot?.idReceptor;
+        if (!receiverVatNumber) {
+          await db.runAsync(
+            `UPDATE expenses
+             SET satStatus = 'PENDIENTE_VALIDACION_SAT',
+                 satValidationCause = 'DATOS_FISCALES_MODIFICADOS',
+                 satValidatedAt = NULL,
+                 satValidationSource = NULL,
+                 satValidationFingerprint = NULL
+             WHERE id = ?`,
+            [row.id]
+          );
+          continue;
+        }
+        const migratedExpense = {
+          ...mapFiscalFieldsFromRow(row),
+          receiver_vat_number: receiverVatNumber,
+        } as Expense;
+        await db.runAsync(
+          `UPDATE expenses
+           SET receiver_vat_number = ?, satValidationFingerprint = ?
+           WHERE id = ?`,
+          [receiverVatNumber, buildSatValidationFingerprint(migratedExpense), row.id]
+        );
+      }
       
       console.log("✅ ExpenseService: Tabla 'expenses' verificada/creada con éxito.");
       isDBInitialized = true;
@@ -484,6 +516,11 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
       throw new Error('Debe adjuntar un documento o imagen antes de guardar el borrador.');
     }
 
+    const missingDraftFields = getMissingDraftFields(expense);
+    if (isDraftExpense(expense) && missingDraftFields.length > 0) {
+      throw new Error(`Para guardar el borrador debe completar: ${missingDraftFields.join(', ')}.`);
+    }
+
     if (!isDraftExpense(expense) && !hasAccountingSnapshot(expense)) {
       throw new Error('El gasto debe guardar categoría, sociedad, centro, cuenta y orden CO antes de registrarse.');
     }
@@ -528,12 +565,12 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
         
         await db.runAsync(
             `INSERT INTO expenses 
-             (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, 
+             (id, userEmail, description, amount, date, category, status, expenseStatus, supplier, vat_number, receiver_vat_number,
                 sociedad, satStatus, satValidatedAt, satValidationSource, satValidationFingerprint,
                 satValidationCause, fiscalStatus, satFacturaId, satInvoiceSnapshot, fiscalValidatedAt, fiscalValidityDaysApplied, imageValidationFingerprint,
                 department, notes, noinvoice, serie, uuid, centro, cuenta, ordenco, managerEmail,
                 createdAt, updatedAt, needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 normalizedExpense.id, 
                 userEmail, 
@@ -545,6 +582,7 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
                 normalizedExpense.expenseStatus || 'draft',
                 normalizedExpense.supplier || null, 
                 normalizedExpense.vat_number || null, 
+                normalizedExpense.receiver_vat_number || null,
                 normalizedExpense.sociedad || null,
                 normalizedExpense.satStatus || 'PENDIENTE_VALIDACION_SAT',
                 normalizedExpense.satValidatedAt || null,
@@ -628,6 +666,11 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
       throw new Error('Debe conservar un documento o imagen adjunta en el borrador.');
     }
 
+    const missingDraftFields = getMissingDraftFields(expense);
+    if (isDraftExpense(expense) && missingDraftFields.length > 0) {
+      throw new Error(`Para guardar el borrador debe completar: ${missingDraftFields.join(', ')}.`);
+    }
+
     if (!isDraftExpense(expense) && !hasAccountingSnapshot(expense)) {
       throw new Error('El gasto debe conservar categoría, sociedad, centro, cuenta y orden CO válidos.');
     }
@@ -665,7 +708,7 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         if (!db) throw new Error("La base de datos no está inicializada.");
         
         await db.runAsync(
-            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, satValidationCause = ?, fiscalStatus = ?, satFacturaId = ?, satInvoiceSnapshot = ?, fiscalValidatedAt = ?, fiscalValidityDaysApplied = ?, imageValidationFingerprint = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ?, imageuri = ?, totiva = ?, currency = ?, updatedAt = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
+            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, satValidationCause = ?, fiscalStatus = ?, satFacturaId = ?, satInvoiceSnapshot = ?, fiscalValidatedAt = ?, fiscalValidityDaysApplied = ?, imageValidationFingerprint = ?, supplier = ?, vat_number = ?, receiver_vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ?, imageuri = ?, totiva = ?, currency = ?, updatedAt = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
             [
                 normalizedExpense.description, 
                 normalizedExpense.amount, 
@@ -687,6 +730,7 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
                 normalizedExpense.imageValidationFingerprint || null,
                 normalizedExpense.supplier, 
                 normalizedExpense.vat_number, 
+                normalizedExpense.receiver_vat_number || null,
                 normalizedExpense.department, 
                 normalizedExpense.notes || null, 
                 normalizedExpense.noinvoice, 
@@ -807,6 +851,7 @@ export const syncDraftExpensesWithCategoryUpdate = async (
         centro: updatedCategory.centro || '',
         cuenta: updatedCategory.cuenta || '',
         ordenco: updatedCategory.ordenco || '',
+        fiscalStatus: 'PENDIENTE',
         updatedAt: now,
         needsSync: true,
       };
@@ -825,6 +870,7 @@ export const syncDraftExpensesWithCategoryUpdate = async (
          centro = ?,
          cuenta = ?,
          ordenco = ?,
+         fiscalStatus = 'PENDIENTE',
          updatedAt = ?,
          needsSync = 1
      WHERE userEmail = ?
@@ -975,6 +1021,7 @@ export const getExpensesNeedingSync = async (
       imageValidationFingerprint: row.imageValidationFingerprint || undefined,
       supplier: row.supplier,
       vat_number: row.vat_number,
+      receiver_vat_number: row.receiver_vat_number,
       department: row.department,
       notes: row.notes,
       noinvoice: row.noinvoice,
@@ -1069,6 +1116,17 @@ export const updateExpenseStatus = async (expenseId: string, newStatus: string):
 
 const isDraftExpense = (expense: Expense): boolean => expense.status === 'BORRADOR';
 const hasAttachedDocument = (expense: Expense): boolean => Boolean(expense.imageuri?.trim());
+const getMissingDraftFields = (expense: Expense): string[] => {
+  const missing: string[] = [];
+  if (!expense.noinvoice?.trim()) missing.push('No. de Factura');
+  if (!expense.serie?.trim()) missing.push('Serie');
+  if (!expense.vat_number?.trim()) missing.push('NIT del Emisor');
+  if (!expense.receiver_vat_number?.trim()) missing.push('NIT del Receptor');
+  if (!(Number(expense.amount) > 0)) missing.push('Monto');
+  if (!expense.category?.trim()) missing.push('Categoría');
+  if (!expense.department?.trim()) missing.push('Departamento');
+  return missing;
+};
 
 export const updateExpenseStatusesFromServer = async (
   expenseIds: string[],
@@ -1145,11 +1203,11 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
     await db.runAsync(
       `INSERT OR REPLACE INTO expenses 
        (id, userEmail, description, amount, date, category, sociedad, status, expenseStatus, satStatus, satValidatedAt, satValidationSource, satValidationFingerprint,
-        satValidationCause, fiscalStatus, satFacturaId, satInvoiceSnapshot, fiscalValidatedAt, fiscalValidityDaysApplied, imageValidationFingerprint, supplier, vat_number,
+        satValidationCause, fiscalStatus, satFacturaId, satInvoiceSnapshot, fiscalValidatedAt, fiscalValidityDaysApplied, imageValidationFingerprint, supplier, vat_number, receiver_vat_number,
         department, notes, noinvoice, serie, centro, cuenta, ordenco, managerEmail, liquidationId,
         voidedAt, voidedReason, createdAt, updatedAt,
         needsSync, lastSync, serverUpdatedAt, imageuri, totiva, currency, synced, uuid) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         normalizedExpense.id,
         normalizedExpense.email,
@@ -1173,6 +1231,7 @@ export const upsertExpenseFromServer = async (serverExpense: Expense): Promise<v
         normalizedExpense.imageValidationFingerprint || null,
         normalizedExpense.supplier || null,
         normalizedExpense.vat_number || null,
+        normalizedExpense.receiver_vat_number || null,
         normalizedExpense.department || null,
         normalizedExpense.notes || null,
         normalizedExpense.noinvoice || null,
@@ -1251,6 +1310,7 @@ export const getExpensesForApproval = async (managerEmail: string): Promise<Expe
       imageValidationFingerprint: row.imageValidationFingerprint || undefined,
       supplier: row.supplier,
       vat_number: row.vat_number,
+      receiver_vat_number: row.receiver_vat_number,
       department: row.department,
       notes: row.notes,
       noinvoice: row.noinvoice,

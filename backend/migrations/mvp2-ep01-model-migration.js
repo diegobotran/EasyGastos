@@ -3,6 +3,7 @@ const {
   SAT_VALIDATION_CAUSE,
   FISCAL_STATUS
 } = require('../contracts/fiscal-contracts');
+const Fingerprint = require('../services/FiscalFingerprintService');
 
 const hasValidSatEvidence = (expense = {}) => Boolean(
   expense.satValidatedAt &&
@@ -11,11 +12,19 @@ const hasValidSatEvidence = (expense = {}) => Boolean(
 );
 
 const normalizeLegacyExpense = (expense = {}) => {
-  const keepValidated = expense.satStatus === SAT_STATUS.VALIDADO_SAT &&
+  const hasValidatedState = expense.satStatus === SAT_STATUS.VALIDADO_SAT &&
     hasValidSatEvidence(expense);
+  const receiverVatNumber = expense.receiver_vat_number ||
+    expense.satInvoiceSnapshot?.idReceptor ||
+    null;
+  const keepValidated = hasValidatedState && Boolean(receiverVatNumber);
+  const expenseWithReceiver = {
+    ...expense,
+    receiver_vat_number: receiverVatNumber
+  };
 
   return {
-    ...expense,
+    ...expenseWithReceiver,
     satStatus: keepValidated
       ? SAT_STATUS.VALIDADO_SAT
       : SAT_STATUS.PENDIENTE_VALIDACION_SAT,
@@ -27,7 +36,9 @@ const normalizeLegacyExpense = (expense = {}) => {
       : FISCAL_STATUS.PENDIENTE,
     satValidatedAt: keepValidated ? expense.satValidatedAt : null,
     satValidationSource: keepValidated ? expense.satValidationSource : null,
-    satValidationFingerprint: keepValidated ? expense.satValidationFingerprint : null,
+    satValidationFingerprint: keepValidated
+      ? Fingerprint.build(expenseWithReceiver)
+      : null,
     satFacturaId: keepValidated ? (expense.satFacturaId || null) : null,
     satInvoiceSnapshot: keepValidated ? (expense.satInvoiceSnapshot || null) : null,
     fiscalValidatedAt: expense.fiscalValidatedAt || null,

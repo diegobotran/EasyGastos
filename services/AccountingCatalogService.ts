@@ -8,6 +8,7 @@ import {
   AccountingCatalogRecord,
   AccountingCatalogType,
   CatalogSyncResult,
+  SociedadCatalogItem,
 } from '../models/AccountingCatalog';
 
 const CATALOG_TYPES: AccountingCatalogType[] = ['sociedades', 'centros', 'cuentas', 'ordenesCO'];
@@ -322,19 +323,23 @@ export const getActiveCentros = () => getCatalogOptions('centros');
 export const getActiveCuentas = () => getCatalogOptions('cuentas');
 export const getActiveOrdenesCO = () => getCatalogOptions('ordenesCO');
 
-export const getActiveSociedadRecord = async (codigo: string) => {
+export const getActiveSociedadRecord = async (codigo: string): Promise<SociedadCatalogItem | undefined> => {
   const normalized = String(codigo || '').trim().toUpperCase();
   const sociedades = await readCatalog('sociedades');
-  return sociedades.find(item =>
-    item.active && item.codigo.trim().toUpperCase() === normalized
+  return sociedades.find((item): item is SociedadCatalogItem =>
+    item.type === 'sociedades' &&
+    item.active &&
+    item.codigo.trim().toUpperCase() === normalized
   );
 };
 
-export const getActiveSociedadByNit = async (nit: string) => {
+export const getActiveSociedadByNit = async (nit: string): Promise<SociedadCatalogItem | undefined> => {
   const normalized = String(nit || '').trim().toUpperCase();
   const sociedades = await readCatalog('sociedades');
-  return sociedades.find(item =>
-    item.active && 'nit' in item && item.nit.trim().toUpperCase() === normalized
+  return sociedades.find((item): item is SociedadCatalogItem =>
+    item.type === 'sociedades' &&
+    item.active &&
+    item.nit.trim().toUpperCase() === normalized
   );
 };
 

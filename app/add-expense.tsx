@@ -60,6 +60,7 @@ export default function AddExpenseScreen() {
   const [serie, setSerie] = useState('');
   const [noinvoice, setNoinvoice] = useState('');
   const [vat_number, setVatNumber] = useState('');
+  const [receiver_vat_number, setReceiverVatNumber] = useState('');
   const [supplier, setSupplier] = useState('');
   const [expenseSociedad, setExpenseSociedad] = useState('');
   const [centro, setCentro] = useState('');
@@ -106,6 +107,7 @@ export default function AddExpenseScreen() {
     setSerie(editingExpense.serie || '');
     setNoinvoice(editingExpense.noinvoice || '');
     setVatNumber(editingExpense.vat_number || '');
+    setReceiverVatNumber(editingExpense.receiver_vat_number || '');
     setSupplier(editingExpense.supplier || '');
     setExpenseSociedad(editingExpense.sociedad || '');
     setCentro(editingExpense.centro || '');
@@ -243,20 +245,84 @@ export default function AddExpenseScreen() {
     }, []);
 
       // On category change
-      const handleCategoryChange = (value: string) => {
-        setCategory(value);
-        const selectedCategory = categories.find(cat => cat.name === value);
-        if (selectedCategory) {
-          setExpenseSociedad(selectedCategory.sociedad || '');
-          setCentro(selectedCategory.centro || '');
-          setCuenta(selectedCategory.cuenta || '');
-          setOrdenco(selectedCategory.ordenco || '');
-        } else {
-          setExpenseSociedad('');
-          setCentro('');
-          setCuenta('');
-          setOrdenco('');
+      const clearCategorySelection = () => {
+        setCategory('');
+        setExpenseSociedad('');
+        setCentro('');
+        setCuenta('');
+        setOrdenco('');
+        setFiscalStatus('PENDIENTE');
+        setFiscalValidatedAt(undefined);
+      };
+
+      const normalizeNitForComparison = (value: string) =>
+        String(value || '').trim().toUpperCase().replace(/[-\s]/g, '');
+
+      const handleReceiverNitChange = (value: string) => {
+        const changed = normalizeNitForComparison(value) !== normalizeNitForComparison(receiver_vat_number);
+        setReceiverVatNumber(value);
+        if (changed && category) {
+          clearCategorySelection();
+          Alert.alert(
+            'Categoría removida',
+            'El NIT del receptor fue modificado. Debe seleccionar nuevamente una categoría para validar la sociedad.',
+          );
         }
+      };
+
+      const handleCategoryChange = async (value: string) => {
+        if (!value) {
+          clearCategorySelection();
+          return;
+        }
+        if (!receiver_vat_number.trim()) {
+          clearCategorySelection();
+          Alert.alert(
+            'NIT del receptor requerido',
+            'Complete primero el NIT del receptor antes de seleccionar una categoría.',
+          );
+          return;
+        }
+
+        const selectedCategory = categories.find(cat => cat.name === value);
+        if (!selectedCategory?.sociedad) {
+          clearCategorySelection();
+          Alert.alert('Categoría inválida', 'La categoría seleccionada no tiene una sociedad asociada.');
+          return;
+        }
+
+        const society = await AccountingCatalogService.getActiveSociedadRecord(selectedCategory.sociedad);
+        if (!society?.nit) {
+          clearCategorySelection();
+          Alert.alert(
+            'Sociedad sin NIT',
+            `La sociedad ${selectedCategory.sociedad} no tiene un NIT activo configurado.`,
+          );
+          return;
+        }
+
+        if (normalizeNitForComparison(society.nit) !== normalizeNitForComparison(receiver_vat_number)) {
+          clearCategorySelection();
+          Alert.alert(
+            'Categoría no corresponde',
+            `El NIT receptor ${receiver_vat_number} no corresponde a la sociedad ${selectedCategory.sociedad} (NIT ${society.nit}). Seleccione la categoría correcta.`,
+          );
+          return;
+        }
+
+        setCategory(value);
+        setExpenseSociedad(selectedCategory.sociedad || '');
+        setCentro(selectedCategory.centro || '');
+        setCuenta(selectedCategory.cuenta || '');
+        setOrdenco(selectedCategory.ordenco || '');
+        if (validationStatus === 'valid' && fiscalStatus !== 'BLOQUEADO_ANTIGUEDAD') {
+          setFiscalStatus('APTO_PARA_LIQUIDAR');
+          setFiscalValidatedAt(new Date().toISOString());
+        }
+        Alert.alert(
+          'Categoría validada',
+          `El NIT receptor coincide con la sociedad ${selectedCategory.sociedad} asociada a la categoría.`,
+        );
       };
 
 
@@ -287,13 +353,12 @@ export default function AddExpenseScreen() {
       serie,
       noinvoice,
       vat_number,
+      receiver_vat_number,
       supplier,
       date: formatDate(date),
       amount: amount ? parseFloat(amount) : 0,
       uuid,
       currency,
-      sociedad: expenseSociedad,
-      category,
       imageuri: file?.uri || '',
       imageValidationFingerprint,
     });
@@ -318,7 +383,7 @@ export default function AddExpenseScreen() {
       setFiscalValidatedAt(undefined);
       setFiscalValidityDaysApplied(undefined);
     }
-  }, [serie, noinvoice, vat_number, supplier, date, amount, uuid, currency, expenseSociedad, category, file?.uri, imageValidationFingerprint, validationStatus, satValidationFingerprint]);
+  }, [serie, noinvoice, vat_number, receiver_vat_number, supplier, date, amount, uuid, currency, file?.uri, imageValidationFingerprint, validationStatus, satValidationFingerprint]);
 
   // Función helper para sincronizar en segundo plano
   const syncExpenseInBackground = async (userEmail: string, userData: any) => {
@@ -476,6 +541,7 @@ export default function AddExpenseScreen() {
             setSerie('');
             setNoinvoice('');
             setVatNumber('');
+            setReceiverVatNumber('');
             setSupplier('');
             setExpenseSociedad('');
             setCentro('');
@@ -519,6 +585,7 @@ export default function AddExpenseScreen() {
       fiscalStatus,
       supplier: supplier || 'Proveedor Desconocido',
       vat_number,
+      receiver_vat_number,
       department,
       notes,
       noinvoice,
@@ -558,6 +625,7 @@ export default function AddExpenseScreen() {
         serie,
         noinvoice,
         nitEmisor: vat_number,
+        nitReceptor: receiver_vat_number,
         supplier,
         date: formatDate(date),
         amount: amount ? parseFloat(amount) : undefined,
@@ -616,23 +684,39 @@ export default function AddExpenseScreen() {
         return;
       }
 
+      const correctedReceiverNit = String(
+        result.campos.receiver_vat_number || result.snapshot?.idReceptor || receiver_vat_number
+      );
+      const receiverNitChanged =
+        normalizeNitForComparison(correctedReceiverNit) !==
+        normalizeNitForComparison(receiver_vat_number);
+      const categoryRemovedBySAT = receiverNitChanged && Boolean(category);
+
       const corrected = {
         serie: String(result.campos.serie || serie),
         noinvoice: String(result.campos.noinvoice || noinvoice),
         vat_number: String(result.campos.vat_number || vat_number),
+        receiver_vat_number: correctedReceiverNit,
         supplier: String(result.campos.supplier || supplier),
         date: String(result.campos.date || formatDate(date)),
         amount: result.campos.amount ?? (amount ? parseFloat(amount) : 0),
         uuid: String(result.campos.uuid || uuid),
         currency: String(result.campos.currency || currency),
         imageuri: file?.uri || '',
-        sociedad: expenseSociedad,
-        category,
+        sociedad: categoryRemovedBySAT ? '' : expenseSociedad,
+        category: categoryRemovedBySAT ? '' : category,
+        centro: categoryRemovedBySAT ? '' : centro,
+        cuenta: categoryRemovedBySAT ? '' : cuenta,
+        ordenco: categoryRemovedBySAT ? '' : ordenco,
       };
       skipNextFingerprintInvalidation.current = true;
       setSerie(corrected.serie);
       setNoinvoice(corrected.noinvoice);
       setVatNumber(corrected.vat_number);
+      setReceiverVatNumber(corrected.receiver_vat_number);
+      if (categoryRemovedBySAT) {
+        clearCategorySelection();
+      }
       setSupplier(corrected.supplier);
       setUuid(corrected.uuid);
       handleAmountChange(String(corrected.amount));
@@ -664,7 +748,12 @@ export default function AddExpenseScreen() {
       setSatValidationCause('NINGUNA');
       setSatFacturaId(evaluatedExpense.satFacturaId || result.facturaId);
       setSatInvoiceSnapshot(evaluatedExpense.satInvoiceSnapshot || result.snapshot);
-      setFiscalStatus(evaluatedExpense.fiscalStatus || 'PENDIENTE');
+      const resultingFiscalStatus = evaluatedExpense.fiscalStatus === 'BLOQUEADO_ANTIGUEDAD'
+        ? 'BLOQUEADO_ANTIGUEDAD'
+        : corrected.category
+          ? 'APTO_PARA_LIQUIDAR'
+          : 'PENDIENTE';
+      setFiscalStatus(resultingFiscalStatus);
       setFiscalValidatedAt(evaluatedExpense.fiscalValidatedAt);
       setFiscalValidityDaysApplied(evaluatedExpense.fiscalValidityDaysApplied);
       setValidationStatus('valid');
@@ -676,8 +765,8 @@ export default function AddExpenseScreen() {
       Alert.alert(
         isExpired ? 'Factura vencida' : 'Validación SAT completada',
         isExpired
-          ? `${sections.join('\n\n')}\n\nLa factura fue encontrada en SAT, pero supera la vigencia de ${evaluatedExpense.fiscalValidityDaysApplied} días. Puede conservarse como borrador, pero no liquidarse.`
-          : sections.join('\n\n')
+          ? `${sections.join('\n\n')}\n\nLa factura fue encontrada en SAT, pero supera la vigencia de ${evaluatedExpense.fiscalValidityDaysApplied} días. Puede conservarse como borrador, pero no liquidarse.${categoryRemovedBySAT ? '\n\nLa categoría fue removida porque SAT modificó el NIT del receptor. Selecciónela nuevamente.' : ''}`
+          : `${sections.join('\n\n')}${categoryRemovedBySAT ? '\n\nLa categoría fue removida porque SAT modificó el NIT del receptor. Seleccione nuevamente la categoría correcta.' : ''}`
       );
       return;
 
@@ -815,6 +904,22 @@ export default function AddExpenseScreen() {
 
     const isDraftSave = status === 'BORRADOR';
 
+    const minimumFields: string[] = [];
+    if (!noinvoice.trim()) minimumFields.push('No. de Factura');
+    if (!serie.trim()) minimumFields.push('Serie');
+    if (!vat_number.trim()) minimumFields.push('NIT del Emisor');
+    if (!receiver_vat_number.trim()) minimumFields.push('NIT del Receptor');
+    if (!(parseFloat(amount) > 0)) minimumFields.push('Monto');
+    if (!category.trim()) minimumFields.push('Categoría');
+    if (!department.trim()) minimumFields.push('Departamento');
+    if (minimumFields.length > 0) {
+      Alert.alert(
+        'Datos mínimos requeridos',
+        `Para guardar el gasto debe completar:\n\n- ${minimumFields.join('\n- ')}`,
+      );
+      return;
+    }
+
     if (!isDraftSave && categories.length === 0) {
       Alert.alert(
         'Categorías requeridas',
@@ -839,7 +944,7 @@ export default function AddExpenseScreen() {
       return;
     }
 
-    if (!isDraftSave && (!expenseSociedad || !centro || !cuenta || !ordenco)) {
+    if (!expenseSociedad || !centro || !cuenta || !ordenco) {
       Alert.alert(
         'Categoría incompleta',
         'La categoría seleccionada no tiene completo el snapshot contable requerido. Edita o recrea la categoría antes de guardar el gasto.'
@@ -963,13 +1068,12 @@ export default function AddExpenseScreen() {
               serie: serie || '',
               noinvoice: noinvoice || '',
               vat_number: vat_number || '',
+              receiver_vat_number: receiver_vat_number || '',
               supplier: supplier || 'Proveedor Desconocido',
               date: formatDate(date),
               amount: parsedAmount || 0,
               uuid: uuid || '',
               currency: currency || 'GTQ',
-              sociedad: expenseSociedad,
-              category,
               imageuri: file?.uri || '',
               imageValidationFingerprint,
             })
@@ -980,6 +1084,7 @@ export default function AddExpenseScreen() {
         fiscalValidityDaysApplied,
         supplier: supplier || 'Proveedor Desconocido',
         vat_number: vat_number || '',
+        receiver_vat_number: receiver_vat_number || '',
         department,
         notes: notes || '',
         noinvoice: noinvoice || '',
@@ -1008,15 +1113,7 @@ export default function AddExpenseScreen() {
           'FISCAL_NETWORK_REQUIRED',
           'Se requiere conexión al backend para enviar el gasto.',
         );
-      } else if (
-        newExpense.satStatus === 'VALIDADO_SAT' &&
-        newExpense.satInvoiceSnapshot?.idReceptor &&
-        newExpense.category &&
-        newExpense.sociedad &&
-        newExpense.centro &&
-        newExpense.cuenta &&
-        newExpense.ordenco
-      ) {
+      } else {
         const references = await AccountingCatalogService.areActiveReferences(newExpense);
         if (!references.valid) {
           throw new ExpenseFiscalValidationError(
@@ -1025,8 +1122,8 @@ export default function AddExpenseScreen() {
           );
         }
         const [selectedSociety, actualSociety] = await Promise.all([
-          AccountingCatalogService.getActiveSociedadRecord(newExpense.sociedad),
-          AccountingCatalogService.getActiveSociedadByNit(newExpense.satInvoiceSnapshot.idReceptor),
+          AccountingCatalogService.getActiveSociedadRecord(newExpense.sociedad || ''),
+          AccountingCatalogService.getActiveSociedadByNit(newExpense.receiver_vat_number || ''),
         ]);
         if (!selectedSociety) {
           throw new ExpenseFiscalValidationError(
@@ -1040,10 +1137,13 @@ export default function AddExpenseScreen() {
             : 'ninguna sociedad configurada';
           throw new ExpenseFiscalValidationError(
             'EXPENSE_NIT_SOCIETY_MISMATCH',
-            `El NIT receptor ${newExpense.satInvoiceSnapshot.idReceptor} corresponde a ${actualText}, no a la sociedad ${selectedSociety.codigo} asociada a la categoría.`,
+            `El NIT receptor ${newExpense.receiver_vat_number} corresponde a ${actualText}, no a la sociedad ${selectedSociety.codigo} asociada a la categoría.`,
           );
         }
-        if (newExpense.fiscalStatus !== 'BLOQUEADO_ANTIGUEDAD') {
+        if (
+          newExpense.satStatus === 'VALIDADO_SAT' &&
+          newExpense.fiscalStatus !== 'BLOQUEADO_ANTIGUEDAD'
+        ) {
           newExpense = {
             ...newExpense,
             fiscalStatus: 'APTO_PARA_LIQUIDAR',
@@ -3083,6 +3183,16 @@ const findFinalTotal = (allWords: Word[]): string | null => {
             keyboardType="default"
           />
 
+          <Text style={styles.label}>NIT del Receptor *</Text>
+          <TextInput
+            style={styles.input}
+            value={receiver_vat_number}
+            onChangeText={handleReceiverNitChange}
+            placeholder="Ej: 792500"
+            keyboardType="default"
+            autoCapitalize="characters"
+          />
+
           <Text style={styles.label}>Monto</Text>
           <TextInput
             style={styles.input}
@@ -3094,7 +3204,11 @@ const findFinalTotal = (allWords: Word[]): string | null => {
 
           <Text style={styles.label}>Categoría *</Text>
           <View style={styles.pickerContainer}>
-            <Picker selectedValue={category} onValueChange={handleCategoryChange} style={styles.picker}>
+            <Picker
+              selectedValue={category}
+              onValueChange={(value) => { void handleCategoryChange(value); }}
+              style={styles.picker}
+            >
               <Picker.Item label="Seleccionar categoría" value="" />
               {categories.map((cat) => <Picker.Item key={cat.id} label={cat.name} value={cat.name} />)}
             </Picker>

@@ -78,6 +78,7 @@ export interface SATInternalValidationResult {
     serie?: string;
     noinvoice?: string;
     vat_number?: string;
+    receiver_vat_number?: string;
     supplier?: string;
     date?: string;
     amount?: number;
@@ -266,6 +267,7 @@ const buildValidationResultFromFactura = (
     serie: string;
     noinvoice: string;
     nitEmisor?: string;
+    nitReceptor?: string;
     supplier?: string;
     date?: string;
     amount?: number;
@@ -279,6 +281,7 @@ const buildValidationResultFromFactura = (
     serie: factura.serie || payload.serie,
     noinvoice: factura.numeroDTE || payload.noinvoice,
     vat_number: factura.nitEmisor || payload.nitEmisor,
+    receiver_vat_number: factura.idReceptor || payload.nitReceptor,
     supplier: factura.nombreEmisor || payload.supplier,
     date: formatSATDateForField(factura.fechaEmision) || payload.date,
     amount: typeof factura.granTotal === 'number' ? factura.granTotal : payload.amount,
@@ -291,6 +294,7 @@ const buildValidationResultFromFactura = (
     serie: payload.serie,
     noinvoice: payload.noinvoice,
     vat_number: payload.nitEmisor,
+    receiver_vat_number: payload.nitReceptor,
     supplier: payload.supplier,
     date: payload.date,
     amount: payload.amount,
@@ -303,6 +307,7 @@ const buildValidationResultFromFactura = (
     serie: 'Serie',
     noinvoice: 'No. Factura',
     vat_number: 'NIT del Emisor',
+    receiver_vat_number: 'NIT del Receptor',
     supplier: 'Proveedor',
     date: 'Fecha',
     amount: 'Monto',
@@ -410,6 +415,7 @@ export const validarFacturaInternaSAT = async (payload: {
   serie: string;
   noinvoice: string;
   nitEmisor?: string;
+  nitReceptor?: string;
   supplier?: string;
   date?: string;
   amount?: number;

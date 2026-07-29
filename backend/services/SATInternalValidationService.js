@@ -9,6 +9,7 @@ const fieldMap = factura => [
   ['serie', 'Serie', factura.serie],
   ['noinvoice', 'No. Factura', factura.numeroDTE],
   ['vat_number', 'NIT del Emisor', factura.nitEmisor],
+  ['receiver_vat_number', 'NIT del Receptor', factura.idReceptor],
   ['supplier', 'Proveedor', factura.nombreEmisor],
   ['date', 'Fecha del Documento', formatDate(factura.fechaEmision)],
   ['amount', 'Monto', factura.granTotal],
@@ -24,7 +25,9 @@ const compare = (factura, current = {}) => {
   for (const [field, label, newValue] of fieldMap(factura)) {
     campos[field] = newValue;
     if (newValue === null || newValue === undefined || newValue === '') continue;
-    const previousValue = current[field] ?? (field === 'vat_number' ? current.nitEmisor : undefined);
+    const previousValue = current[field] ??
+      (field === 'vat_number' ? current.nitEmisor :
+        field === 'receiver_vat_number' ? current.nitReceptor : undefined);
     if (!normalizeComparable(previousValue)) {
       complementados.push({ field, label, newValue });
     } else if (normalizeComparable(previousValue) !== normalizeComparable(newValue)) {

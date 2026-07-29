@@ -43,6 +43,7 @@ export interface Expense extends FiscalValidationMetadata {
   imageValidationFingerprint?: string;
   supplier: string;
   vat_number: string;
+  receiver_vat_number?: string;
   department: string;
   notes?: string;
   noinvoice: string;
