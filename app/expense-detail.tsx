@@ -168,6 +168,7 @@ export default function ExpenseDetailScreen() {
         uuid: expense.uuid,
         currency: expense.currency,
         totiva: expense.totiva,
+        excludeExpenseId: expense.id,
       });
 
       if (!result.encontrada || !result.validada || !result.campos) {
@@ -324,6 +325,12 @@ export default function ExpenseDetailScreen() {
           return {
             title: 'Acceso denegado',
             userMessage: 'La sesión actual no tiene permisos para consultar SAT.',
+            technicalMessage,
+          };
+        case 'EXPENSE_DUPLICATE':
+          return {
+            title: 'Factura duplicada',
+            userMessage: error.message,
             technicalMessage,
           };
         case 'SAT_BACKEND_ERROR':
@@ -541,6 +548,19 @@ export default function ExpenseDetailScreen() {
           >
             <Ionicons name="close-circle-outline" size={20} color="white" />
             <Text style={styles.voidButtonText}>Anular Gasto</Text>
+          </TouchableOpacity>
+        )}
+
+        {expense.expenseStatus === 'draft' && !expense.liquidationId && (
+          <TouchableOpacity
+            style={styles.editButton}
+            onPress={() => router.push({
+              pathname: '/add-expense',
+              params: { expense: JSON.stringify(expense) },
+            })}
+          >
+            <Ionicons name="create-outline" size={20} color="white" />
+            <Text style={styles.editButtonText}>Editar Gasto</Text>
           </TouchableOpacity>
         )}
 
@@ -778,6 +798,24 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   voidButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  editButton: {
+    flexDirection: 'row',
+    backgroundColor: '#2563eb',
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 12,
+    marginHorizontal: 4,
+  },
+  editButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '700',

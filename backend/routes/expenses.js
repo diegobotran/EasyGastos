@@ -4,6 +4,7 @@ const { models } = require('../database/init');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
 const { authenticateToken, canAccessUserData, requireManager } = require('../middleware/auth');
 const ExpenseFiscalValidationService = require('../services/ExpenseFiscalValidationService');
+const ExpenseDuplicateService = require('../services/ExpenseDuplicateService');
 const router = express.Router();
 
 const { Expense, User, SyncLog } = models;
@@ -87,6 +88,30 @@ router.post('/validate-fiscal', authenticateToken, async (req, res) => {
   }
 });
 
+// Verificación global de identidad de factura.
+router.post('/check-duplicate', authenticateToken, async (req, res) => {
+  try {
+    const { serie, noinvoice, excludeId } = req.body || {};
+    if (!ExpenseDuplicateService.normalizeInvoiceKey(serie) || !ExpenseDuplicateService.normalizeInvoiceKey(noinvoice)) {
+      return res.status(400).json({
+        error: 'Se requiere serie y número de factura para verificar duplicidad.'
+      });
+    }
+
+    const duplicate = await ExpenseDuplicateService.findActiveDuplicate({ serie, noinvoice, excludeId });
+    return res.json({
+      isDuplicate: Boolean(duplicate),
+      inLiquidation: Boolean(
+        duplicate?.liquidationId &&
+        ['in_liquidation', 'approved'].includes(duplicate.expenseStatus)
+      )
+    });
+  } catch (error) {
+    console.error('Error verificando duplicidad global:', error);
+    return res.status(500).json({ error: 'No fue posible verificar la duplicidad global.' });
+  }
+});
+
 // Crear nuevo gasto (requiere autenticación)
 router.post('/', authenticateToken, validateExpense, async (req, res) => {
   try {
@@ -114,24 +139,15 @@ router.post('/', authenticateToken, validateExpense, async (req, res) => {
       return res.status(409).json({ error: 'Ya existe un gasto con ese ID' });
     }
 
-    // VALIDACIÓN DE DUPLICADOS: Verificar factura duplicada (serie + noinvoice + fecha + monto)
+    // VALIDACIÓN GLOBAL: la identidad se determina únicamente por serie + número.
     if (expenseData.serie && expenseData.noinvoice) {
       console.log('🔍 Backend: Verificando duplicado de factura:', {
         serie: expenseData.serie,
-        noinvoice: expenseData.noinvoice,
-        date: expenseData.date,
-        amount: expenseData.amount
+        noinvoice: expenseData.noinvoice
       });
 
       // IMPORTANTE: Ignorar gastos anulados para permitir re-crear facturas anuladas
-      const duplicateExpense = await Expense.findOne({
-        userEmail: expenseData.userEmail,
-        serie: expenseData.serie,
-        noinvoice: expenseData.noinvoice,
-        date: expenseData.date,
-        amount: { $gte: expenseData.amount - 0.01, $lte: expenseData.amount + 0.01 }, // Tolerancia de 0.01
-        expenseStatus: { $ne: 'voided' } // Excluir gastos anulados
-      });
+      const duplicateExpense = await ExpenseDuplicateService.findActiveDuplicate(expenseData);
 
       if (duplicateExpense) {
         console.log('⚠️ Backend: Factura duplicada detectada:', duplicateExpense.id);
@@ -141,7 +157,7 @@ router.post('/', authenticateToken, validateExpense, async (req, res) => {
                              (duplicateExpense.expenseStatus === 'in_liquidation' || 
                               duplicateExpense.expenseStatus === 'approved');
         
-        let errorMsg = `Factura duplicada: Ya existe una factura con Serie "${expenseData.serie}", No. "${expenseData.noinvoice}", Fecha ${expenseData.date} y Monto ${expenseData.amount}.`;
+        let errorMsg = `Factura duplicada: Ya existe un gasto activo con Serie "${expenseData.serie}" y No. "${expenseData.noinvoice}".`;
         
         if (inLiquidation) {
           errorMsg += ` Esta factura está incluida en la liquidación #${duplicateExpense.liquidationId}.`;
@@ -428,6 +444,24 @@ router.patch('/:id', authenticateToken, [
     // Verificar permisos: solo el dueño puede actualizar
     if (expense.userEmail !== updateData.userEmail && expense.userEmail !== req.user.email) {
       return res.status(403).json({ error: 'No tiene permisos para actualizar este gasto' });
+    }
+
+    if (updateData.serie && updateData.noinvoice) {
+      const duplicateExpense = await ExpenseDuplicateService.findActiveDuplicate({
+        serie: updateData.serie,
+        noinvoice: updateData.noinvoice,
+        excludeId: expense.id
+      });
+      if (duplicateExpense) {
+        return res.status(409).json({
+          error: `Factura duplicada: Ya existe otro gasto activo con Serie "${updateData.serie}" y No. "${updateData.noinvoice}".`,
+          duplicateExpenseId: duplicateExpense.id,
+          inLiquidation: Boolean(
+            duplicateExpense.liquidationId &&
+            ['in_liquidation', 'approved'].includes(duplicateExpense.expenseStatus)
+          )
+        });
+      }
     }
 
     // Si no tiene managerEmail, buscarlo en ManagerEmployeeLink o en el usuario

@@ -54,7 +54,7 @@
     },
     "expected": {
       "code": "EXPENSE_NIT_SOCIETY_MISMATCH",
-      "canSaveDraft": true,
+      "canSaveDraft": false,
       "canAdvance": false
     }
   },

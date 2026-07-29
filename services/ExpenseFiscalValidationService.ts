@@ -53,3 +53,36 @@ export const validateExpenseFiscal = async (
   }
   return { ...expense, ...payload.expense, email: expense.email };
 };
+
+export const checkGlobalExpenseDuplicate = async (
+  serie: string,
+  noinvoice: string,
+  excludeId?: string,
+): Promise<{ isDuplicate: boolean; inLiquidation: boolean }> => {
+  const [baseUrl, token] = await Promise.all([getAPI_BASE_URL(), getToken()]);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/expenses/check-duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ serie, noinvoice, excludeId }),
+    });
+  } catch {
+    throw new ExpenseFiscalValidationError(
+      'DUPLICATE_CHECK_NETWORK_ERROR',
+      'No fue posible ejecutar la verificación global de factura duplicada.',
+    );
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ExpenseFiscalValidationError(
+      payload.code || 'DUPLICATE_CHECK_ERROR',
+      payload.error || 'No fue posible verificar si la factura ya está registrada.',
+    );
+  }
+  return {
+    isDuplicate: Boolean(payload.isDuplicate),
+    inLiquidation: Boolean(payload.inLiquidation),
+  };
+};

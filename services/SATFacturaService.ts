@@ -8,6 +8,7 @@ export type SATValidationErrorCode =
   | 'SAT_NETWORK_ERROR'
   | 'SAT_UNAUTHORIZED'
   | 'SAT_FORBIDDEN'
+  | 'EXPENSE_DUPLICATE'
   | 'SAT_BACKEND_ERROR'
   | 'SAT_INVALID_RESPONSE';
 
@@ -125,19 +126,19 @@ const normalizeSATError = (error: unknown, fallbackMessage: string): SATValidati
   });
 };
 
-const parseErrorResponseMessage = async (response: Response): Promise<string> => {
+const parseErrorResponse = async (response: Response): Promise<{ message: string; code?: string }> => {
   const rawText = await response.text();
-  if (!rawText) return '';
+  if (!rawText) return { message: '' };
 
   try {
     const parsed = JSON.parse(rawText);
-    if (parsed?.mensaje) return String(parsed.mensaje);
-    if (parsed?.error) return String(parsed.error);
+    return {
+      message: String(parsed?.mensaje || parsed?.error || rawText),
+      code: parsed?.code ? String(parsed.code) : undefined,
+    };
   } catch {
-    return rawText;
+    return { message: rawText };
   }
-
-  return rawText;
 };
 
 const formatSATDateForField = (value?: string): string | undefined => {
@@ -220,7 +221,8 @@ const executeSATPost = async <T>(path: string, body: unknown): Promise<T> => {
   }
 
   if (!response.ok) {
-    const errorMessage = await parseErrorResponseMessage(response);
+    const errorPayload = await parseErrorResponse(response);
+    const errorMessage = errorPayload.message;
 
     if (response.status === 401) {
       throw new SATValidationError('SAT_UNAUTHORIZED', 'La sesión no es válida para consultar SAT', {
@@ -233,6 +235,13 @@ const executeSATPost = async <T>(path: string, body: unknown): Promise<T> => {
       throw new SATValidationError('SAT_FORBIDDEN', 'La sesión no tiene permisos para consultar SAT', {
         status: response.status,
         technicalDetails: errorMessage || 'El backend respondió 403 Forbidden',
+      });
+    }
+
+    if (response.status === 409 && errorPayload.code === 'EXPENSE_DUPLICATE') {
+      throw new SATValidationError('EXPENSE_DUPLICATE', errorMessage, {
+        status: response.status,
+        technicalDetails: `HTTP ${response.status} | Verificación global de duplicidad`,
       });
     }
 
@@ -407,6 +416,7 @@ export const validarFacturaInternaSAT = async (payload: {
   uuid?: string;
   currency?: string;
   totiva?: number;
+  excludeExpenseId?: string;
 }): Promise<SATInternalValidationResult> => {
   try {
     return await executeSATPost<SATInternalValidationResult>('/api/sat/validar-interno', payload);

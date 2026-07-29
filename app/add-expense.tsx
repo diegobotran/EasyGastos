@@ -5,7 +5,7 @@ import { Picker } from '@react-native-picker/picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import DocumentScanner from 'react-native-document-scanner-plugin';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,6 +14,7 @@ import { Expense, STATUSES } from '../models/Expense';
 import type { SatInvoiceSnapshot, SatValidationCause } from '../models/FiscalValidation';
 import { getExpenseAmountErrorMessage, isExpenseAmountValid } from '../models/Settings';
 import * as AuthService from '../services/AuthService';
+import * as AccountingCatalogService from '../services/AccountingCatalogService';
 import { BackendSyncService } from '../services/BackendSyncService';
 import * as CategoryService from '../services/CategoryService';
 import * as ExpenseService from '../services/ExpenseService';
@@ -23,7 +24,11 @@ import { preprocessImageForOCR, extractFullText, extractCleanLines, extractWords
 import { validateInvoiceWithSAT, formatNIT, formatDateForSAT, canValidateWithSAT, openSATValidationInBrowser, formatSATDataForCopy } from '../services/SATValidationService';
 import { buildSatValidationFingerprint } from '../services/ExpenseService';
 import { SATValidationError, validarFacturaInternaSAT } from '../services/SATFacturaService';
-import { ExpenseFiscalValidationError, validateExpenseFiscal } from '../services/ExpenseFiscalValidationService';
+import {
+  checkGlobalExpenseDuplicate,
+  ExpenseFiscalValidationError,
+  validateExpenseFiscal,
+} from '../services/ExpenseFiscalValidationService';
 
 interface CustomAsset {
   uri: string;
@@ -33,6 +38,16 @@ interface CustomAsset {
 
 export default function AddExpenseScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ expense?: string }>();
+  const [editingExpense] = useState<Expense | null>(() => {
+    if (!params.expense) return null;
+    try {
+      return JSON.parse(params.expense) as Expense;
+    } catch {
+      return null;
+    }
+  });
+  const isEditing = Boolean(editingExpense);
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState<Date | null>(null);
@@ -41,6 +56,7 @@ export default function AddExpenseScreen() {
   const [department, setDepartment] = useState('');
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState<{ name: string; uri: string } | null>(null);
+  const [imageValidationFingerprint, setImageValidationFingerprint] = useState<string | undefined>(undefined);
   const [serie, setSerie] = useState('');
   const [noinvoice, setNoinvoice] = useState('');
   const [vat_number, setVatNumber] = useState('');
@@ -71,6 +87,46 @@ export default function AddExpenseScreen() {
 
 
   const [categories, setCategories] = useState<Category[]>([]);
+
+  useEffect(() => {
+    if (!editingExpense) return;
+
+    setDescription(editingExpense.description || '');
+    setAmount(editingExpense.amount ? String(editingExpense.amount) : '');
+    setDate(editingExpense.date ? new Date(`${editingExpense.date}T00:00:00`) : null);
+    setCategory(editingExpense.category || '');
+    setDepartment(editingExpense.department || '');
+    setNotes(editingExpense.notes || '');
+    setFile(editingExpense.imageuri
+      ? { name: 'Comprobante actual', uri: editingExpense.imageuri }
+      : null);
+    setImageValidationFingerprint(
+      editingExpense.imageValidationFingerprint || editingExpense.imageuri || undefined
+    );
+    setSerie(editingExpense.serie || '');
+    setNoinvoice(editingExpense.noinvoice || '');
+    setVatNumber(editingExpense.vat_number || '');
+    setSupplier(editingExpense.supplier || '');
+    setExpenseSociedad(editingExpense.sociedad || '');
+    setCentro(editingExpense.centro || '');
+    setCuenta(editingExpense.cuenta || '');
+    setOrdenco(editingExpense.ordenco || '');
+    setTotiva(editingExpense.totiva ? String(editingExpense.totiva) : '');
+    setCurrency(editingExpense.currency || 'GTQ');
+    setUuid(editingExpense.uuid || '');
+    setValidationStatus(editingExpense.satStatus === 'VALIDADO_SAT' ? 'valid' : 'idle');
+    setValidationMessage(
+      editingExpense.satStatus === 'VALIDADO_SAT' ? 'Factura validada por SAT' : ''
+    );
+    setSatValidatedAt(editingExpense.satValidatedAt);
+    setSatValidationFingerprint(editingExpense.satValidationFingerprint);
+    setSatValidationCause(editingExpense.satValidationCause || 'NINGUNA');
+    setSatFacturaId(editingExpense.satFacturaId);
+    setSatInvoiceSnapshot(editingExpense.satInvoiceSnapshot);
+    setFiscalStatus(editingExpense.fiscalStatus || 'PENDIENTE');
+    setFiscalValidatedAt(editingExpense.fiscalValidatedAt);
+    setFiscalValidityDaysApplied(editingExpense.fiscalValidityDaysApplied);
+  }, [editingExpense]);
 
   const getSATErrorPresentation = (error: unknown): { title: string; userMessage: string; technicalMessage: string } => {
     if (error instanceof SATValidationError) {
@@ -105,6 +161,12 @@ export default function AddExpenseScreen() {
           return {
             title: 'Acceso denegado',
             userMessage: 'La sesión actual no tiene permisos para consultar SAT.',
+            technicalMessage,
+          };
+        case 'EXPENSE_DUPLICATE':
+          return {
+            title: 'Factura duplicada',
+            userMessage: error.message,
             technicalMessage,
           };
         case 'SAT_BACKEND_ERROR':
@@ -233,6 +295,7 @@ export default function AddExpenseScreen() {
       sociedad: expenseSociedad,
       category,
       imageuri: file?.uri || '',
+      imageValidationFingerprint,
     });
 
     if (skipNextFingerprintInvalidation.current) {
@@ -255,7 +318,7 @@ export default function AddExpenseScreen() {
       setFiscalValidatedAt(undefined);
       setFiscalValidityDaysApplied(undefined);
     }
-  }, [serie, noinvoice, vat_number, supplier, date, amount, uuid, currency, expenseSociedad, category, file?.uri, validationStatus, satValidationFingerprint]);
+  }, [serie, noinvoice, vat_number, supplier, date, amount, uuid, currency, expenseSociedad, category, file?.uri, imageValidationFingerprint, validationStatus, satValidationFingerprint]);
 
   // Función helper para sincronizar en segundo plano
   const syncExpenseInBackground = async (userEmail: string, userData: any) => {
@@ -325,6 +388,7 @@ export default function AddExpenseScreen() {
         const fileName = asset.name ?? asset.fileName ?? 'factura.jpg';
         const newFile = { name: fileName, uri: asset.uri };
         setFile(newFile);
+        setImageValidationFingerprint(asset.uri);
         await extractDataFromImage(asset.uri);
       }
       return;
@@ -342,6 +406,7 @@ export default function AddExpenseScreen() {
         const fileName = 'factura_escaneada.jpg';
         const newFile = { name: fileName, uri: scannedUri };
         setFile(newFile);
+        setImageValidationFingerprint(scannedUri);
         
         console.log('📸 Scanner: Imagen escaneada:', scannedUri);
         await extractDataFromImage(scannedUri);
@@ -367,6 +432,7 @@ export default function AddExpenseScreen() {
         const fileName = asset.name ?? asset.fileName ?? 'factura.jpg';
         const newFile = { name: fileName, uri: asset.uri };
         setFile(newFile);
+        setImageValidationFingerprint(asset.uri);
         await extractDataFromImage(asset.uri);
       }
     }
@@ -378,6 +444,7 @@ export default function AddExpenseScreen() {
       const asset = result.assets[0] as CustomAsset;
       const fileName = asset.name ?? 'default.jpg';
       setFile({ name: fileName, uri: asset.uri });
+      setImageValidationFingerprint(asset.uri);
       await extractDataFromImage(asset.uri);
     }
 
@@ -405,6 +472,7 @@ export default function AddExpenseScreen() {
             setDepartment('');
             setNotes('');
             setFile(null);
+            setImageValidationFingerprint(undefined);
             setSerie('');
             setNoinvoice('');
             setVatNumber('');
@@ -460,7 +528,7 @@ export default function AddExpenseScreen() {
       cuenta,
       ordenco,
       imageuri: file?.uri || '',
-      imageValidationFingerprint: file?.uri || undefined,
+      imageValidationFingerprint,
       totiva: parseFloat(totiva) || 0,
       currency,
       email: user.email,
@@ -496,6 +564,7 @@ export default function AddExpenseScreen() {
         uuid,
         currency,
         totiva: totiva ? parseFloat(totiva) : undefined,
+        excludeExpenseId: editingExpense?.id,
       });
 
       if (!result.encontrada || !result.validada || !result.campos) {
@@ -573,7 +642,7 @@ export default function AddExpenseScreen() {
 
       const validatedFingerprint = buildSatValidationFingerprint({
         ...corrected,
-        imageValidationFingerprint: file?.uri || '',
+        imageValidationFingerprint,
       });
 
       const evaluatedExpense = await validateExpenseFiscal(await buildDraftExpenseForFiscal({
@@ -587,7 +656,7 @@ export default function AddExpenseScreen() {
         satValidationFingerprint: validatedFingerprint,
         satFacturaId: result.facturaId,
         satInvoiceSnapshot: result.snapshot,
-        imageValidationFingerprint: file?.uri || '',
+        imageValidationFingerprint,
       }), 'SAT_QUERY');
 
       setSatValidatedAt(evaluatedExpense.satValidatedAt);
@@ -709,6 +778,10 @@ export default function AddExpenseScreen() {
       );
 
     } catch (error: any) {
+      if (error instanceof ExpenseFiscalValidationError) {
+        Alert.alert('No se puede consultar SAT', `${error.message}\n\nCódigo: ${error.code}`);
+        return;
+      }
       const presentation = getSATErrorPresentation(error);
       console.error('Error al validar con SAT:', {
         title: presentation.title,
@@ -815,17 +888,19 @@ export default function AddExpenseScreen() {
       }
 
       console.log('✅ AddExpense: Usuario encontrado:', user.email);
+      const backendConnected = await BackendSyncService.checkConnection();
 
       // VALIDACIÓN DE DUPLICADOS (ANTES DE CREAR EL GASTO)
       console.log('🔍 AddExpense: Verificando duplicados de factura...');
-      const canCheckDuplicate = Boolean(serie && noinvoice && date && parsedAmount > 0);
+      const canCheckDuplicate = Boolean(serie.trim() && noinvoice.trim());
       const duplicateCheck = canCheckDuplicate
         ? await ExpenseService.checkDuplicateExpense(
             user.email,
             serie || '',
             noinvoice || '',
             formatDate(date),
-            parsedAmount || 0
+            parsedAmount || 0,
+            editingExpense?.id,
           )
         : { isDuplicate: false, existingExpense: undefined, inLiquidation: false };
 
@@ -852,16 +927,32 @@ export default function AddExpenseScreen() {
         return;
       }
 
+      if (canCheckDuplicate && backendConnected) {
+        const globalDuplicate = await checkGlobalExpenseDuplicate(
+          serie,
+          noinvoice,
+          editingExpense?.id,
+        );
+        if (globalDuplicate.isDuplicate) {
+          Alert.alert(
+            'Factura duplicada',
+            'Ya existe un gasto activo en el sistema con la misma serie y número. Para registrarla nuevamente debe anular primero el gasto existente.',
+            [{ text: 'Entendido' }],
+          );
+          return;
+        }
+      }
+
       // CREAR OBJETO DEL GASTO
       let newExpense: Expense = {
-        id: Date.now().toString(),
+        id: editingExpense?.id || Date.now().toString(),
         description: finalDescription,
         amount: parsedAmount || 0,
         date: formatDate(date),
         category,
         sociedad: expenseSociedad || undefined,
         status,
-        expenseStatus: 'draft', // Estado inicial en el flujo de liquidación
+        expenseStatus: editingExpense?.expenseStatus || 'draft',
         satStatus: validationStatus === 'valid' ? 'VALIDADO_SAT' : 'PENDIENTE_VALIDACION_SAT',
         satValidationCause: validationStatus === 'valid' ? 'NINGUNA' : satValidationCause,
         fiscalStatus: fiscalStatus || 'PENDIENTE',
@@ -880,7 +971,7 @@ export default function AddExpenseScreen() {
               sociedad: expenseSociedad,
               category,
               imageuri: file?.uri || '',
-              imageValidationFingerprint: file?.uri || '',
+              imageValidationFingerprint,
             })
           : undefined,
         satFacturaId: validationStatus === 'valid' ? satFacturaId : undefined,
@@ -896,11 +987,11 @@ export default function AddExpenseScreen() {
         uuid: uuid || '', // Número de Autorización FEL
         centro: centro || '',
         cuenta: cuenta || '',
-        createdAt: Date.now(),
+        createdAt: editingExpense?.createdAt || Date.now(),
         updatedAt: Date.now(),
         ordenco: ordenco || '',
         imageuri: file?.uri || '',
-        imageValidationFingerprint: validationStatus === 'valid' ? file?.uri || '' : undefined,
+        imageValidationFingerprint: validationStatus === 'valid' ? imageValidationFingerprint : undefined,
         totiva: parseFloat(totiva) || 0,
         currency: currency || 'GTQ',
         email: user.email
@@ -908,13 +999,67 @@ export default function AddExpenseScreen() {
 
       console.log('📋 AddExpense: Objeto del gasto creado');
 
-      // Hard Stop fiscal: el backend verifica evidencia SAT, Sociedad–NIT y vigencia antes de persistir localmente.
-      newExpense = await validateExpenseFiscal(newExpense);
+      // Con conexión, el backend es autoritativo. Sin conexión, el borrador usa
+      // catálogos cacheados y queda sujeto a revalidación al sincronizar.
+      if (backendConnected) {
+        newExpense = await validateExpenseFiscal(newExpense);
+      } else if (status !== 'BORRADOR') {
+        throw new ExpenseFiscalValidationError(
+          'FISCAL_NETWORK_REQUIRED',
+          'Se requiere conexión al backend para enviar el gasto.',
+        );
+      } else if (
+        newExpense.satStatus === 'VALIDADO_SAT' &&
+        newExpense.satInvoiceSnapshot?.idReceptor &&
+        newExpense.category &&
+        newExpense.sociedad &&
+        newExpense.centro &&
+        newExpense.cuenta &&
+        newExpense.ordenco
+      ) {
+        const references = await AccountingCatalogService.areActiveReferences(newExpense);
+        if (!references.valid) {
+          throw new ExpenseFiscalValidationError(
+            'INACTIVE_ACCOUNTING_REFERENCE',
+            `La categoría contiene referencias inactivas o no disponibles localmente: ${references.inactive.join(', ')}.`,
+          );
+        }
+        const [selectedSociety, actualSociety] = await Promise.all([
+          AccountingCatalogService.getActiveSociedadRecord(newExpense.sociedad),
+          AccountingCatalogService.getActiveSociedadByNit(newExpense.satInvoiceSnapshot.idReceptor),
+        ]);
+        if (!selectedSociety) {
+          throw new ExpenseFiscalValidationError(
+            'SOCIETY_NOT_FOUND',
+            `La sociedad ${newExpense.sociedad} no está disponible en el catálogo local.`,
+          );
+        }
+        if (!actualSociety || actualSociety.codigo !== selectedSociety.codigo) {
+          const actualText = actualSociety
+            ? `la sociedad ${actualSociety.codigo}`
+            : 'ninguna sociedad configurada';
+          throw new ExpenseFiscalValidationError(
+            'EXPENSE_NIT_SOCIETY_MISMATCH',
+            `El NIT receptor ${newExpense.satInvoiceSnapshot.idReceptor} corresponde a ${actualText}, no a la sociedad ${selectedSociety.codigo} asociada a la categoría.`,
+          );
+        }
+        if (newExpense.fiscalStatus !== 'BLOQUEADO_ANTIGUEDAD') {
+          newExpense = {
+            ...newExpense,
+            fiscalStatus: 'APTO_PARA_LIQUIDAR',
+            fiscalValidatedAt: new Date().toISOString(),
+          };
+        }
+      }
 
       // PASO 1: GUARDAR LOCALMENTE (RÁPIDO - OFFLINE FIRST)
       console.log('📱 AddExpense: Guardando gasto localmente...');
       try {
-        await ExpenseService.addExpense(newExpense, user.email);
+        if (editingExpense) {
+          await ExpenseService.updateExpense(newExpense, user.email);
+        } else {
+          await ExpenseService.addExpense(newExpense, user.email);
+        }
         console.log('✅ AddExpense: Gasto guardado localmente exitosamente');
       } catch (dbError: any) {
         console.error('❌ AddExpense: Error al guardar en base de datos:', dbError);
@@ -922,8 +1067,12 @@ export default function AddExpenseScreen() {
       }
 
       // PASO 2: NOTIFICAR AL USUARIO INMEDIATAMENTE
-      alert('✅ Gasto guardado exitosamente!');
-      router.back();
+      alert(editingExpense ? '✅ Gasto actualizado exitosamente!' : '✅ Gasto guardado exitosamente!');
+      if (editingExpense) {
+        router.replace('/(tabs)/expenses');
+      } else {
+        router.back();
+      }
 
       // PASO 3: SINCRONIZAR EN SEGUNDO PLANO SI HAY CONEXIÓN
       console.log('🔄 AddExpense: Iniciando sincronización automática en segundo plano...');
@@ -2792,7 +2941,7 @@ const findFinalTotal = (allWords: Word[]): string | null => {
         showsVerticalScrollIndicator={true}
         keyboardDismissMode="on-drag"
       >
-        <Text style={styles.title}>Nuevo Gasto</Text>
+        <Text style={styles.title}>{isEditing ? 'Editar Gasto' : 'Nuevo Gasto'}</Text>
 
         {/* === BOTÓN PRINCIPAL DE FOTO/ESCANEO === */}
         <View style={styles.scanContainer}>
@@ -3059,7 +3208,7 @@ const findFinalTotal = (allWords: Word[]): string | null => {
         </TouchableOpacity>
         <TouchableOpacity style={[styles.baseButton,styles.draftButton]} onPress={() => handleSave('BORRADOR')}>
           <Ionicons name="save-outline" size={20} color="white" />
-          <Text style={styles.baseButtonText}>Borrador</Text>
+          <Text style={styles.baseButtonText}>{isEditing ? 'Guardar' : 'Borrador'}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.baseButton, styles.submitButton]} onPress={() => handleSave('ENVIADO_JEFE')}>
           <Ionicons name="paper-plane-outline" size={20} color="white" />

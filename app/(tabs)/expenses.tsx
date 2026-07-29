@@ -65,6 +65,17 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
 
   const handlePress = () => {
     if (liquidationMode) {
+      if (!canBeSelected) {
+        const reason = item.satStatus !== 'VALIDADO_SAT'
+          ? 'Debe consultar y validar la factura por SAT.'
+          : item.fiscalStatus === 'BLOQUEADO_NIT_SOCIEDAD'
+            ? 'El NIT receptor no coincide con la sociedad de la categoría.'
+            : item.fiscalStatus === 'BLOQUEADO_ANTIGUEDAD'
+              ? 'La factura está bloqueada por antigüedad.'
+              : 'La evaluación fiscal está pendiente. Edite el gasto y guárdelo con una categoría válida.';
+        Alert.alert('Gasto no disponible para liquidación', reason);
+        return;
+      }
       onToggleSelect(item.id);
     } else {
       handleViewDetails();
@@ -72,7 +83,10 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
   };
 
   // Determinar si el gasto puede ser seleccionado (solo si está en draft)
-  const canBeSelected = item.expenseStatus === 'draft' && item.satStatus === 'VALIDADO_SAT';
+  const canBeSelected =
+    item.expenseStatus === 'draft' &&
+    item.satStatus === 'VALIDADO_SAT' &&
+    item.fiscalStatus === 'APTO_PARA_LIQUIDAR';
 
   // Truncar proveedor para que no sea muy largo
   const shortSupplier = item.supplier.length > 25 
@@ -87,7 +101,7 @@ const ExpenseListItem = ({ item, liquidationMode, isSelected, onToggleSelect }: 
         liquidationMode && !canBeSelected && styles.expenseItemDisabled
       ]} 
       onPress={handlePress}
-      disabled={liquidationMode && !canBeSelected}
+      disabled={false}
     >
       <View style={styles.expenseRow}>
         {/* Checkbox en modo liquidación */}

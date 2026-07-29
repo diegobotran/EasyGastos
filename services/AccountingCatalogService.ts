@@ -322,6 +322,22 @@ export const getActiveCentros = () => getCatalogOptions('centros');
 export const getActiveCuentas = () => getCatalogOptions('cuentas');
 export const getActiveOrdenesCO = () => getCatalogOptions('ordenesCO');
 
+export const getActiveSociedadRecord = async (codigo: string) => {
+  const normalized = String(codigo || '').trim().toUpperCase();
+  const sociedades = await readCatalog('sociedades');
+  return sociedades.find(item =>
+    item.active && item.codigo.trim().toUpperCase() === normalized
+  );
+};
+
+export const getActiveSociedadByNit = async (nit: string) => {
+  const normalized = String(nit || '').trim().toUpperCase();
+  const sociedades = await readCatalog('sociedades');
+  return sociedades.find(item =>
+    item.active && 'nit' in item && item.nit.trim().toUpperCase() === normalized
+  );
+};
+
 export const areActiveReferences = async (references: {
   sociedad?: string;
   centro?: string;

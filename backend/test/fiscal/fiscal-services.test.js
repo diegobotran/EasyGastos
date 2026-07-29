@@ -85,6 +85,50 @@ test('un estado VALIDADO_SAT forjado por el cliente es rechazado', async () => {
   }
 });
 
+test('un borrador completo con NIT receptor de otra sociedad no puede guardarse', async () => {
+  const originalCatalogValidation = CatalogService.assertActiveReferences;
+  const originalFindOne = SatFactura.findOne;
+  const originalEligibility = FiscalEligibility.evaluate;
+  const originalValidity = Validity.validateWithActivePolicy;
+  try {
+    const factura = {
+      _id: '507f1f77bcf86cd799439011', serie: 'A', numeroDTE: '1', numeroAutorizacion: 'U',
+      nitEmisor: '123', nombreEmisor: 'P', idReceptor: '792500', nombreReceptor: 'R',
+      fechaEmision: '2026-07-21', granTotal: 10, moneda: 'GTQ', iva: 1
+    };
+    CatalogService.assertActiveReferences = async () => true;
+    SatFactura.findOne = () => ({ sort: () => ({ lean: async () => factura }) });
+    Validity.validateWithActivePolicy = async () => ({
+      enabled: true, valid: true, elapsedDays: 7, allowedDays: 55
+    });
+    FiscalEligibility.evaluate = async () => ({
+      valid: false,
+      code: 'EXPENSE_NIT_SOCIETY_MISMATCH',
+      fiscalStatus: 'BLOQUEADO_NIT_SOCIEDAD',
+      society: { codigo: '4000', nit: 'OTRO-NIT' },
+      actualSociety: { codigo: '5000', nit: '792500' }
+    });
+    const expense = {
+      status: 'BORRADOR', imageuri: 'file://factura.jpg',
+      imageValidationFingerprint: 'file://factura.jpg',
+      satStatus: 'VALIDADO_SAT', serie: 'A', noinvoice: '1', uuid: 'U',
+      vat_number: '123', supplier: 'P', date: '2026-07-21', amount: 10,
+      currency: 'GTQ', sociedad: '4000', category: 'C',
+      centro: '1', cuenta: '2', ordenco: '3'
+    };
+    expense.satValidationFingerprint = Fingerprint.build(expense);
+    await assert.rejects(
+      () => ExpenseFiscal.validateAndNormalize(expense),
+      error => error.code === 'EXPENSE_NIT_SOCIETY_MISMATCH'
+    );
+  } finally {
+    CatalogService.assertActiveReferences = originalCatalogValidation;
+    SatFactura.findOne = originalFindOne;
+    FiscalEligibility.evaluate = originalEligibility;
+    Validity.validateWithActivePolicy = originalValidity;
+  }
+});
+
 test('D+1 permanece pendiente y elimina metadata fiscal previa', () => {
   const normalized = ExpenseFiscal.normalizePending({
     satStatus: 'PENDIENTE_VALIDACION_SAT', satValidationCause: 'NO_ENCONTRADO_D_PLUS_1',
@@ -216,6 +260,8 @@ test('la extracción remota queda desactivada y las descargas conservan UUID', (
   const syncRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/sync.js'), 'utf8');
   assert.match(mobileSource, /const useAIExtraction = false/);
   assert.doesNotMatch(mobileSource, /¿Desea continuar y crear un gasto duplicado/);
+  assert.match(expenseRouteSource, /router\.post\('\/check-duplicate'/);
+  assert.match(expenseRouteSource, /ExpenseDuplicateService\.findActiveDuplicate\(expenseData\)/);
   assert.match(expenseRouteSource, /uuid: expense\.uuid/);
   assert.match(syncRouteSource, /uuid: expense\.uuid/);
 });

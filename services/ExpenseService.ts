@@ -381,7 +381,7 @@ export const initDB = async (): Promise<void> => {
 const STORAGE_KEY_PREFIX = '@EasyGastos_Expenses_';
 
 /**
- * Verifica si existe un gasto duplicado (misma serie, noinvoice, fecha y monto)
+ * Verifica si existe un gasto duplicado local (misma serie y número).
  * Retorna el gasto duplicado si existe, o null si no hay duplicados
  */
 export const checkDuplicateExpense = async (
@@ -393,7 +393,7 @@ export const checkDuplicateExpense = async (
   excludeId?: string // Para excluir el gasto actual al editar
 ): Promise<{ isDuplicate: boolean; existingExpense?: Expense; inLiquidation?: boolean }> => {
   try {
-    console.log('🔍 Verificando duplicados:', { serie, noinvoice, date, amount });
+    console.log('🔍 Verificando duplicados:', { serie, noinvoice });
     
     if (!serie || !noinvoice) {
       console.log('⚠️ Serie o número de factura vacíos, no se verifica duplicado');
@@ -402,14 +402,15 @@ export const checkDuplicateExpense = async (
     
     const allExpenses = await getExpenses(userEmail);
     
-    // Buscar duplicado exacto: misma serie, noinvoice, fecha y monto
+    const normalizedSerie = normalizeSatValue(serie);
+    const normalizedNumber = normalizeSatValue(noinvoice);
+
+    // La identidad de la factura no depende de fecha ni monto editables.
     // IMPORTANTE: Ignorar gastos anulados (voided) que no estén en liquidación
     const duplicate = allExpenses.find(exp => 
       exp.id !== excludeId &&
-      exp.serie === serie &&
-      exp.noinvoice === noinvoice &&
-      exp.date === date &&
-      Math.abs(exp.amount - amount) < 0.01 && // Comparación de decimales con tolerancia
+      normalizeSatValue(exp.serie) === normalizedSerie &&
+      normalizeSatValue(exp.noinvoice) === normalizedNumber &&
       exp.expenseStatus !== 'voided' // Permitir re-crear gastos anulados
     );
     
@@ -492,9 +493,7 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
     // VALIDACIÓN DE DUPLICADOS
     const canCheckDuplicate = Boolean(
       normalizedExpense.serie?.trim() &&
-      normalizedExpense.noinvoice?.trim() &&
-      normalizedExpense.date &&
-      normalizedExpense.amount > 0
+      normalizedExpense.noinvoice?.trim()
     );
     const duplicateCheck = canCheckDuplicate
       ? await checkDuplicateExpense(
@@ -509,7 +508,7 @@ export const addExpense = async (expense: Expense, userEmail: string): Promise<v
     if (duplicateCheck.isDuplicate) {
       const msg = duplicateCheck.inLiquidation
         ? `Ya existe una factura con estos datos y está incluida en una liquidación (ID: ${duplicateCheck.existingExpense?.liquidationId?.slice(-6)}).`
-        : `Ya existe una factura con estos datos: Serie "${expense.serie}", No. "${expense.noinvoice}", Fecha ${expense.date}, Monto Q${expense.amount.toFixed(2)}.`;
+        : `Ya existe una factura con Serie "${expense.serie}" y No. "${expense.noinvoice}".`;
       throw new Error(msg);
     }
     
@@ -638,6 +637,22 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         needsSync: true,
     };
 
+    if (normalizedExpense.serie?.trim() && normalizedExpense.noinvoice?.trim()) {
+      const duplicateCheck = await checkDuplicateExpense(
+        userEmail,
+        normalizedExpense.serie,
+        normalizedExpense.noinvoice,
+        normalizedExpense.date,
+        normalizedExpense.amount,
+        normalizedExpense.id
+      );
+      if (duplicateCheck.isDuplicate) {
+        throw new Error(
+          `Ya existe otra factura activa con Serie "${normalizedExpense.serie}" y No. "${normalizedExpense.noinvoice}".`
+        );
+      }
+    }
+
     if (Platform.OS === 'web') {
         let expenses = await getExpenses(userEmail);
         const index = expenses.findIndex(exp => exp.id === expense.id);
@@ -650,7 +665,7 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
         if (!db) throw new Error("La base de datos no está inicializada.");
         
         await db.runAsync(
-            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, satValidationCause = ?, fiscalStatus = ?, satFacturaId = ?, satInvoiceSnapshot = ?, fiscalValidatedAt = ?, fiscalValidityDaysApplied = ?, imageValidationFingerprint = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
+            'UPDATE expenses SET description = ?, amount = ?, date = ?, category = ?, sociedad = ?, status = ?, expenseStatus = ?, satStatus = ?, satValidatedAt = ?, satValidationSource = ?, satValidationFingerprint = ?, satValidationCause = ?, fiscalStatus = ?, satFacturaId = ?, satInvoiceSnapshot = ?, fiscalValidatedAt = ?, fiscalValidityDaysApplied = ?, imageValidationFingerprint = ?, supplier = ?, vat_number = ?, department = ?, notes = ?, noinvoice = ?, serie = ?, uuid = ?, centro = ?, cuenta = ?, ordenco = ?, imageuri = ?, totiva = ?, currency = ?, updatedAt = ?, needsSync = 1 WHERE id = ? AND userEmail = ?',
             [
                 normalizedExpense.description, 
                 normalizedExpense.amount, 
@@ -680,6 +695,10 @@ export const updateExpense = async (expense: Expense, userEmail: string): Promis
                 normalizedExpense.centro, 
                 normalizedExpense.cuenta, 
                 normalizedExpense.ordenco, 
+                normalizedExpense.imageuri,
+                normalizedExpense.totiva,
+                normalizedExpense.currency,
+                normalizedExpense.updatedAt || Date.now(),
                 normalizedExpense.id, 
                 userEmail
             ]
@@ -1283,9 +1302,14 @@ export const validateExpenseForLiquidation = async (
     }
 
     if (expense.fiscalStatus !== 'APTO_PARA_LIQUIDAR') {
+      const fiscalReason = {
+        PENDIENTE: 'La evaluación fiscal está pendiente. Abra el gasto, complete una categoría válida y guárdelo nuevamente para ejecutar la validación Sociedad–NIT.',
+        BLOQUEADO_NIT_SOCIEDAD: 'El NIT receptor de la factura no coincide con la sociedad asociada a la categoría del gasto.',
+        BLOQUEADO_ANTIGUEDAD: `La factura está bloqueada por antigüedad${expense.fiscalValidityDaysApplied ? `; supera la vigencia de ${expense.fiscalValidityDaysApplied} días` : ''}.`,
+      }[expense.fiscalStatus || 'PENDIENTE'];
       return {
         valid: false,
-        error: 'Este gasto no está apto fiscalmente para incluirse en una liquidación.'
+        error: fiscalReason || `El estado fiscal actual es ${expense.fiscalStatus || 'PENDIENTE'}.`
       };
     }
 

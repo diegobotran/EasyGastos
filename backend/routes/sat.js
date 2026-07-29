@@ -15,6 +15,7 @@ const SatFactura = require('../models/SatFactura');
 const ArchivoSatProcesado = require('../models/ArchivoSatProcesado');
 const { authenticateToken, requireManager } = require('../middleware/auth');
 const SATInternalValidationService = require('../services/SATInternalValidationService');
+const ExpenseDuplicateService = require('../services/ExpenseDuplicateService');
 
 // Colecciones protegidas que NO deben ser afectadas
 const PROTECTED_COLLECTIONS = ['users', 'expenses', 'liquidations', 'categories', 'sync_logs', 'config', 'chat_conversations'];
@@ -421,6 +422,17 @@ router.post('/buscar-por-numero', authenticateToken, async (req, res) => {
 
 router.post('/validar-interno', authenticateToken, async (req, res) => {
   try {
+    const duplicate = await ExpenseDuplicateService.findActiveDuplicate({
+      serie: req.body?.serie,
+      noinvoice: req.body?.noinvoice,
+      excludeId: req.body?.excludeExpenseId
+    });
+    if (duplicate) {
+      return res.status(409).json({
+        code: 'EXPENSE_DUPLICATE',
+        error: 'Ya existe un gasto activo en el sistema con la misma serie y número. Debe anularse antes de registrar nuevamente la factura.'
+      });
+    }
     return res.json(await SATInternalValidationService.validate(req.body));
   } catch (error) {
     console.error('❌ Error validando factura SAT interna:', error);

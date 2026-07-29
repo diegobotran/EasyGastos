@@ -63,8 +63,8 @@ const messageForEligibility = (expense, snapshot, eligibility) => {
   const messages = {
     SOCIETY_NOT_FOUND: `La sociedad ${expense.sociedad} no existe o está inactiva.`,
     SOCIETY_WITHOUT_NIT: `La sociedad ${expense.sociedad} no tiene NIT configurado.`,
-    RECEIVER_NIT_WITHOUT_SOCIETY: `El NIT receptor ${snapshot.idReceptor} no está vinculado con ninguna sociedad.`,
-    EXPENSE_NIT_SOCIETY_MISMATCH: `La factura fue emitida para la sociedad ${actual?.codigo || 'no identificada'}, no para ${expense.sociedad}.`,
+    RECEIVER_NIT_WITHOUT_SOCIETY: `El NIT receptor ${snapshot.idReceptor} de la factura no está vinculado con ninguna sociedad. Seleccione una categoría correcta o solicite la configuración de la sociedad.`,
+    EXPENSE_NIT_SOCIETY_MISMATCH: `La factura fue emitida para la sociedad ${actual?.codigo || 'no identificada'} (NIT ${snapshot.idReceptor}), no para la sociedad ${expense.sociedad} (NIT ${eligibility.society?.nit || 'no configurado'}) asociada a la categoría. Seleccione la categoría correcta antes de guardar.`,
     EXPENSE_EXPIRED_AT_CAPTURE: `La factura tiene ${eligibility.validity?.elapsedDays} días y supera la vigencia de ${eligibility.validity?.allowedDays} días.`
   };
   return messages[eligibility.code] || 'El gasto no supera la validación fiscal.';
@@ -166,13 +166,6 @@ const validateAndNormalize = async expense => {
     issueDate: snapshot.fechaEmision
   });
   if (!eligibility.valid) {
-    if (isDraft(expense)) {
-      return {
-        ...applyValidity(expense, validity, validatedSatFields),
-        fiscalStatus: eligibility.fiscalStatus,
-        fiscalValidatedAt: new Date().toISOString()
-      };
-    }
     throw new ExpenseFiscalError(eligibility.code, messageForEligibility(expense, snapshot, eligibility), {
       ...eligibility,
       receiverNit: snapshot.idReceptor

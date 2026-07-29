@@ -23,6 +23,7 @@
       "SAT_INVOICE_FOUND",
       "SAT_NOT_FOUND_D_PLUS_1",
       "SAT_CORRECTIONS_REQUIRED",
+      "EXPENSE_DUPLICATE",
       "SAT_VALIDATION_TECHNICAL_ERROR",
       "SAT_INVALID_REQUEST"
     ],
@@ -69,7 +70,8 @@
       "date",
       "amount",
       "currency",
-      "totiva"
+      "totiva",
+      "excludeExpenseId"
     ],
     "foundResponseFields": [
       "code",
