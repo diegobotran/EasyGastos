@@ -55,8 +55,6 @@ router.post('/full-sync', authenticateToken, [
       firstName: user.firstName,
       lastName: user.lastName,
       lifnr: user.lifnr,
-      sociedad: user.sociedad,
-      nitEmpresa: user.nitEmpresa,
       department: user.department,
       managerEmail: user.managerEmail,
       isManager: user.isManager,

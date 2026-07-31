@@ -292,6 +292,9 @@ router.get('/stats', authenticateToken, async (req, res) => {
  */
 router.post('/buscar-factura', authenticateToken, async (req, res) => {
   try {
+    res.set('Deprecation', 'true');
+    res.set('Sunset', 'Thu, 31 Dec 2026 23:59:59 GMT');
+    res.set('Link', '</api/sat/validar-interno>; rel="successor-version"');
     const { nitEmisor, numeroDTE } = req.body;
 
     if (!nitEmisor || !numeroDTE) {
@@ -345,6 +348,9 @@ router.post('/buscar-factura', authenticateToken, async (req, res) => {
  */
 router.post('/buscar-por-numero', authenticateToken, async (req, res) => {
   try {
+    res.set('Deprecation', 'true');
+    res.set('Sunset', 'Thu, 31 Dec 2026 23:59:59 GMT');
+    res.set('Link', '</api/sat/validar-interno>; rel="successor-version"');
     const { serie, numeroDTE, nitReceptor } = req.body;
 
     if (!serie || !numeroDTE) {
@@ -363,20 +369,13 @@ router.post('/buscar-por-numero', authenticateToken, async (req, res) => {
     };
     
     // Determinar el NIT del receptor (empresa)
-    // Prioridad: 1) nitReceptor enviado, 2) nitEmpresa del usuario, 3) cualquiera
+    // El perfil del usuario no define la sociedad ni el NIT fiscal; solo se filtra por un NIT enviado explícitamente.
     let nitFiltro = null;
     
     if (nitReceptor) {
       // Si se proporciona NIT del receptor en el request, usarlo
       nitFiltro = nitReceptor.toString().replace(/[-\s]/g, '').trim();
       console.log(`   Usando NIT del request: ${nitFiltro}`);
-    } else if (req.user.nitEmpresa) {
-      // Si el usuario tiene NIT de empresa configurado, usarlo
-      nitFiltro = req.user.nitEmpresa.toString().replace(/[-\s]/g, '').trim();
-      console.log(`   Usando NIT de la empresa del usuario: ${nitFiltro}`);
-    } else {
-      console.log(`   ⚠️ Usuario sin NIT de empresa configurado - búsqueda sin filtro de NIT`);
-      console.log(`   💡 Recomendación: Configurar nitEmpresa en el perfil del usuario`);
     }
     
     // Agregar filtro de NIT si está disponible

@@ -67,8 +67,8 @@ export const generateLiquidationCSV = async (
         expense.totiva > 0 ? '12' : '0', // AFECTO IVA (si tiene IVA, marcar 12)
         expense.amount.toFixed(2), // MONTO
         '', // In.CME de destino (vacío)
-        expense.centro || '4001010001', // CENTRO DE COSTO
-        expense.ordenco || '2000002387', // ORDEN INTERNA
+        expense.centro || '', // CENTRO DE COSTO
+        expense.ordenco || '', // ORDEN INTERNA
         expense.serie || '0', // SERIE DE FACTURA
         expense.noinvoice || '', // NO. DE FACTURA
         'LG', // TP DOC (tipo documento - siempre LG para liquidaciones)

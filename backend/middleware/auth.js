@@ -31,8 +31,6 @@ const authenticateToken = async (req, res, next) => {
       firstName: user.firstName,
       lastName: user.lastName,
       department: user.department,
-      sociedad: user.sociedad,
-      nitEmpresa: user.nitEmpresa,
       isManager: Boolean(user.isManager),
       isAdmin: Boolean(user.isAdmin)
     };
@@ -70,8 +68,6 @@ const optionalAuth = async (req, res, next) => {
           firstName: user.firstName,
           lastName: user.lastName,
           department: user.department,
-          sociedad: user.sociedad,
-          nitEmpresa: user.nitEmpresa,
           isManager: Boolean(user.isManager),
           isAdmin: Boolean(user.isAdmin)
         };

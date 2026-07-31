@@ -4,7 +4,6 @@ const bcrypt = require('bcrypt');
 const { models } = require('../database/init');
 const { authenticateToken, generateToken, canAccessUserData, optionalAuth, requireManager } = require('../middleware/auth');
 const ManagerEmployeeLink = require('../models/ManagerEmployeeLink');
-const Sociedad = require('../models/Sociedad');
 const router = express.Router();
 
 const { User, SyncLog } = models;
@@ -17,8 +16,7 @@ const validateUserRegistration = [
   body('pin').isLength({ min: 4, max: 4 }).isNumeric(),
   body('lifnr').optional().trim().escape(),
   body('employeeCode').optional().trim().escape(),
-  body('department').optional().trim().escape(),
-  body('sociedad').optional().trim().escape()
+  body('department').optional().trim().escape()
 ];
 
 const validateUserProfile = [
@@ -36,7 +34,7 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { email, firstName, lastName, pin, lifnr, employeeCode, department, sociedad } = req.body;
+    const { email, firstName, lastName, pin, lifnr, employeeCode, department } = req.body;
 
     // Verificar si el usuario ya existe
     const existingUser = await User.findOne({ email });
@@ -72,16 +70,6 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       existingUser.lifnr = lifnr;
       existingUser.employeeCode = employeeCode;
       existingUser.department = department;
-      existingUser.sociedad = sociedad;
-      
-      // Asignar automáticamente el NIT de la empresa basado en el código de sociedad
-      if (sociedad) {
-        const nitEmpresa = await Sociedad.getNitByCodigo(sociedad);
-        if (nitEmpresa) {
-          existingUser.nitEmpresa = nitEmpresa;
-          console.log(`🏢 NIT de empresa asignado: ${nitEmpresa} (Sociedad: ${sociedad})`);
-        }
-      }
       
       existingUser.lastLoginAt = new Date();
 
@@ -139,7 +127,6 @@ router.post('/register', validateUserRegistration, async (req, res) => {
           lifnr,
           employeeCode,
           department,
-          sociedad,
           managerEmail: existingUser.managerEmail
         }
       });
@@ -183,15 +170,6 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       }
     }
 
-    // Asignar automáticamente el NIT de la empresa basado en el código de sociedad
-    let nitEmpresa = null;
-    if (sociedad) {
-      nitEmpresa = await Sociedad.getNitByCodigo(sociedad);
-      if (nitEmpresa) {
-        console.log(`🏢 NIT de empresa asignado: ${nitEmpresa} (Sociedad: ${sociedad})`);
-      }
-    }
-
     // Crear usuario
     const newUser = new User({
       email,
@@ -201,8 +179,6 @@ router.post('/register', validateUserRegistration, async (req, res) => {
       lifnr,
       employeeCode,
       department,
-      sociedad,
-      nitEmpresa,
       managerEmail,
       isManager,
       lastLoginAt: new Date()
@@ -234,7 +210,6 @@ router.post('/register', validateUserRegistration, async (req, res) => {
         lifnr,
         employeeCode,
         department,
-        sociedad,
         managerEmail
       }
     });
@@ -316,8 +291,6 @@ router.post('/login', [
         lastName: user.lastName,
         department: user.department,
         managerEmail: user.managerEmail,
-        sociedad: user.sociedad,
-        nitEmpresa: user.nitEmpresa,
         isManager: user.isManager,
         isAdmin: Boolean(user.isAdmin)
       }
@@ -467,63 +440,6 @@ router.put('/profile', validateUserProfile, async (req, res) => {
   }
 });
 
-// Autenticar usuario
-router.post('/login', [
-  body('email').isEmail().normalizeEmail(),
-  body('pin').isLength({ min: 4, max: 4 }).isNumeric()
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { email, pin } = req.body;
-
-    const user = await User.findOne({ email, isActive: true });
-    if (!user) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-
-    const pinMatch = await bcrypt.compare(pin, user.pin);
-    if (!pinMatch) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-
-    // Actualizar último login
-    user.lastLoginAt = new Date();
-    await user.save();
-
-    // Log de sincronización
-    const syncLog = new SyncLog({
-      userEmail: email,
-      entityType: 'USER',
-      entityId: email,
-      action: 'LOGIN',
-      success: true
-    });
-    await syncLog.save();
-
-    res.json({
-      message: 'Autenticación exitosa',
-      user: {
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        department: user.department,
-        managerEmail: user.managerEmail,
-        sociedad: user.sociedad,
-        nitEmpresa: user.nitEmpresa,
-        isManager: user.isManager,
-        isAdmin: Boolean(user.isAdmin)
-      }
-    });
-  } catch (error) {
-    console.error('Error en login:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
 // Obtener información de usuario (requiere autenticación y autorización)
 router.get('/profile/:email', authenticateToken, canAccessUserData, async (req, res) => {
   try {
@@ -543,8 +459,6 @@ router.get('/profile/:email', authenticateToken, canAccessUserData, async (req, 
         lastName: user.lastName,
         department: user.department,
         managerEmail: user.managerEmail,
-        sociedad: user.sociedad,
-        nitEmpresa: user.nitEmpresa,
         isManager: user.isManager,
         isAdmin: Boolean(user.isAdmin),
         createdAt: user.createdAt,

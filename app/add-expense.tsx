@@ -7,7 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Category } from '../models/Category';
 import { Expense, STATUSES } from '../models/Expense';
@@ -19,9 +19,7 @@ import { BackendSyncService } from '../services/BackendSyncService';
 import * as CategoryService from '../services/CategoryService';
 import * as ExpenseService from '../services/ExpenseService';
 import * as SettingsService from '../services/SettingsService';
-import { extractWithAI, extractWithGoogleVisionOCR, cleanAmount, parseInvoiceDate } from '../services/AIExtractionService';
-import { preprocessImageForOCR, extractFullText, extractCleanLines, extractWordsWithCoordinates, type Word } from '../utils/OCRUtils';
-import { validateInvoiceWithSAT, formatNIT, formatDateForSAT, canValidateWithSAT, openSATValidationInBrowser, formatSATDataForCopy } from '../services/SATValidationService';
+import { preprocessImageForOCR, extractFullText, type Word } from '../utils/OCRUtils';
 import { buildSatValidationFingerprint } from '../services/ExpenseService';
 import { SATValidationError, validarFacturaInternaSAT } from '../services/SATFacturaService';
 import {
@@ -69,7 +67,6 @@ export default function AddExpenseScreen() {
   const [totiva, setTotiva] = useState('');
   const [currency, setCurrency] = useState('GTQ');
   const [isLoading, setIsLoading] = useState(false);
-  const useAIExtraction = false; // MVP2: extracción remota desactivada; se usa exclusivamente OCR local.
   const [uuid, setUuid] = useState(''); // UUID de la factura FEL para validación SAT
   const [validationStatus, setValidationStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [validationMessage, setValidationMessage] = useState('');
@@ -605,6 +602,8 @@ export default function AddExpenseScreen() {
 
   // Función para validar la factura con el servicio de la SAT
   const handleValidateSAT = async () => {
+    const validationStatusBeforeQuery = validationStatus;
+    const validationMessageBeforeQuery = validationMessage;
     try {
       const missingFields = [];
       if (!noinvoice.trim()) missingFields.push('No. Factura');
@@ -768,106 +767,11 @@ export default function AddExpenseScreen() {
           ? `${sections.join('\n\n')}\n\nLa factura fue encontrada en SAT, pero supera la vigencia de ${evaluatedExpense.fiscalValidityDaysApplied} días. Puede conservarse como borrador, pero no liquidarse.${categoryRemovedBySAT ? '\n\nLa categoría fue removida porque SAT modificó el NIT del receptor. Selecciónela nuevamente.' : ''}`
           : `${sections.join('\n\n')}${categoryRemovedBySAT ? '\n\nLa categoría fue removida porque SAT modificó el NIT del receptor. Seleccione nuevamente la categoría correcta.' : ''}`
       );
-      return;
-
-      // Validar que tengamos todos los datos necesarios
-      const validationRequest = {
-        uuid: uuid,
-        nitEmisor: formatNIT(vat_number),
-        nitReceptor: 'CF', // Por defecto Consumidor Final, podrías agregar un campo para esto
-        fechaEmision: date ? formatDateForSAT(date || new Date()) : '',
-        monto: amount
-      };
-
-      // Verificar que todos los campos estén presentes
-      if (!canValidateWithSAT(validationRequest)) {
-        const missingFields = [];
-        if (!uuid) missingFields.push('UUID');
-        if (!vat_number) missingFields.push('NIT del Emisor');
-        if (!amount) missingFields.push('Monto');
-        
-        Alert.alert(
-          'Datos Incompletos',
-          `Para validar con la SAT se requieren los siguientes datos:\n\n${missingFields.join('\n')}\n\nEstos datos se extraen automáticamente de la factura al escanearla.`
-        );
-        return;
-      }
-
-      // Ofrecer dos opciones al usuario
-      Alert.alert(
-        'Validar Factura con SAT',
-        'El portal de la SAT requiere resolver un CAPTCHA. Seleccione cómo desea validar:',
-        [
-          {
-            text: 'Cancelar',
-            style: 'cancel'
-          },
-          {
-            text: 'Abrir Portal SAT',
-            onPress: async () => {
-              // Opción 1: Abrir el portal de la SAT en el navegador
-              const opened = await openSATValidationInBrowser(validationRequest);
-              if (opened) {
-                // Copiar datos al portapapeles para facilitar el llenado
-                const dataText = formatSATDataForCopy(validationRequest);
-                Alert.alert(
-                  'ℹ️ Portal Abierto',
-                  'Se ha abierto el portal de la SAT en su navegador.\n\nDatos de la factura:\n\n' + dataText + '\n\nComplete el CAPTCHA y verifique la factura.',
-                  [{ text: 'Entendido' }]
-                );
-              } else {
-                Alert.alert('Error', 'No se pudo abrir el navegador');
-              }
-            }
-          },
-          {
-            text: 'Intentar Automático',
-            onPress: async () => {
-              // Opción 2: Intentar validación automática (puede fallar por CAPTCHA)
-              setValidationStatus('validating');
-              setValidationMessage('Validando con la SAT...');
-
-              console.log('🔍 Validando factura con SAT:', validationRequest);
-
-              const result = await validateInvoiceWithSAT(validationRequest);
-
-              if (result.success) {
-                if (result.valid) {
-                  setValidationStatus('valid');
-                  setValidationMessage(result.mensaje || 'Factura válida');
-                  
-                  Alert.alert(
-                    '✅ Factura Válida',
-                    `La factura ha sido verificada exitosamente con la SAT.\n\n${result.mensaje}\n\nCódigo: ${result.codigo}`,
-                    [{ text: 'OK' }]
-                  );
-                } else {
-                  setValidationStatus('invalid');
-                  setValidationMessage(result.mensaje || 'Factura inválida');
-                  
-                  Alert.alert(
-                    '⚠️ Factura Inválida',
-                    `La factura NO es válida según la SAT.\n\n${result.mensaje}\n\nCódigo: ${result.codigo}`,
-                    [{ text: 'OK' }]
-                  );
-                }
-              } else {
-                setValidationStatus('idle');
-                setValidationMessage('');
-                
-                Alert.alert(
-                  '❌ Error de Validación',
-                  result.error || 'No se pudo conectar con el servicio de la SAT. Use "Abrir Portal SAT" para validar manualmente.',
-                  [{ text: 'OK' }]
-                );
-              }
-            }
-          }
-        ]
-      );
 
     } catch (error: any) {
       if (error instanceof ExpenseFiscalValidationError) {
+        setValidationStatus(validationStatusBeforeQuery === 'valid' ? 'valid' : 'idle');
+        setValidationMessage(validationStatusBeforeQuery === 'valid' ? validationMessageBeforeQuery : '');
         Alert.alert('No se puede consultar SAT', `${error.message}\n\nCódigo: ${error.code}`);
         return;
       }
@@ -877,10 +781,8 @@ export default function AddExpenseScreen() {
         userMessage: presentation.userMessage,
         technicalMessage: presentation.technicalMessage,
       });
-      if (validationStatus !== 'valid') {
-        setValidationStatus('idle');
-        setValidationMessage('');
-      }
+      setValidationStatus(validationStatusBeforeQuery === 'valid' ? 'valid' : 'idle');
+      setValidationMessage(validationStatusBeforeQuery === 'valid' ? validationMessageBeforeQuery : '');
       
       Alert.alert(
         presentation.title,
@@ -1228,7 +1130,6 @@ const extractDataFromImage = async (imageUri: string) => {
     
     // Buscar zona de datos del cliente/receptor/comprador
     let isClientCF = false;
-    let clientZoneStart = -1;
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].toLowerCase();
@@ -1236,7 +1137,6 @@ const extractDataFromImage = async (imageUri: string) => {
       // Detectar inicio de zona de cliente
       if (/\b(cliente|receptor|comprador|nombre)\s*:/i.test(line) || 
           /consumidor\s+final/i.test(line)) {
-        clientZoneStart = i;
         
         // Revisar las siguientes 3-5 líneas buscando CF
         for (let j = i; j < Math.min(i + 5, lines.length); j++) {
@@ -1283,206 +1183,6 @@ const extractDataFromImage = async (imageUri: string) => {
     // Log del texto que se mandará a la IA (primeras 500 caracteres)
     console.log('📄 OCR: Texto extraído (primeros 500 chars):', fullText.substring(0, 500));
     console.log('📄 OCR: Longitud total del texto:', fullText.length, 'caracteres');
-
-    // === INTENTO 1: EXTRACCIÓN CON IA (si está activada) ===
-    if (useAIExtraction) {
-      console.log('🤖 IA: Método Google Vision OCR activado');
-      console.log('📸 Enviando imagen directamente al servidor en la nube...');
-      
-      // NUEVO: Intentar con Google Vision OCR primero (envía la imagen directamente)
-      const googleOCRData = await extractWithGoogleVisionOCR(imageUri);
-      
-      if (googleOCRData) {
-        console.log('✅ Google Vision OCR: Datos extraídos exitosamente');
-        
-        // VALIDACIÓN CRÍTICA: Verificar NIT del RECEPTOR (cliente)
-        const nitReceptor = googleOCRData.nit_receptor;
-        if (nitReceptor && (nitReceptor.toUpperCase() === 'CF' || 
-                           nitReceptor.toUpperCase() === 'C/F' || 
-                           nitReceptor.toUpperCase() === 'C.F.')) {
-          console.log('❌ Google Vision OCR: Factura emitida a Consumidor Final (CF)');
-          setIsLoading(false);
-          Alert.alert(
-            '❌ Factura No Válida para Deducción',
-            'Esta factura fue emitida a "Consumidor Final" (CF).\n\n' +
-            '⚠️ Para que un gasto sea deducible, la factura debe estar emitida ' +
-            'AL NIT DE LA EMPRESA, no a consumidor final.\n\n' +
-            '📋 Solicite al proveedor que emita la factura con:\n' +
-            '• NIT de su empresa\n' +
-            '• Razón social completa\n\n' +
-            'Solo así tendrá validez fiscal.',
-            [{ text: 'Entendido', style: 'default' }]
-          );
-          return; // No llenar ningún dato
-        }
-        
-        // Extraer datos clave del OCR para buscar en SAT
-        const serieOCR = googleOCRData.serie;
-        const numeroDTE = googleOCRData.numero_factura || googleOCRData.invoiceNumber;
-        const nitEmisor = googleOCRData.nit_emisor;
-        // nitReceptor ya fue extraído antes para validar CF
-        
-        // === USAR DATOS DE GOOGLE VISION OCR DIRECTAMENTE ===
-        console.log('📝 Usando datos de Google Vision OCR...');
-        
-        // Actualizar NIT del EMISOR (proveedor)
-        if (nitEmisor) {
-          setVatNumber(nitEmisor);
-          console.log('📝 NIT del proveedor actualizado:', nitEmisor);
-        } else {
-          setVatNumber('');
-          console.log('⚠️ Google Vision OCR: No se detectó NIT del emisor, queda vacío para corrección manual');
-        }
-        
-        // Actualizar monto y recalcular IVA
-        const amountValue = googleOCRData.total || googleOCRData.amount || googleOCRData.monto;
-        if (amountValue) {
-          const cleaned = cleanAmount(amountValue);
-          if (cleaned) {
-            console.log('💰 Google Vision: Actualizando monto:', cleaned);
-            handleAmountChange(cleaned); // Recalcula IVA automáticamente
-          }
-        }
-        
-        // Actualizar fecha
-        const dateValue = googleOCRData.fecha || googleOCRData.date;
-        if (dateValue && typeof dateValue === 'string') {
-          const parsedDate = parseInvoiceDate(dateValue);
-          if (parsedDate) {
-            setDate(parsedDate);
-            console.log('📅 Fecha actualizada:', dateValue);
-          }
-        }
-        
-        // Actualizar proveedor (si el servicio lo extrae en el futuro)
-        const supplierValue = googleOCRData.supplier || googleOCRData.proveedor;
-        if (supplierValue) {
-          setSupplier(supplierValue);
-        }
-        
-        // Actualizar serie y número de factura (si el servicio lo extrae)
-        if (googleOCRData.serie) setSerie(googleOCRData.serie);
-        const invoiceNum = googleOCRData.numero_factura || googleOCRData.invoiceNumber;
-        if (invoiceNum) {
-          setNoinvoice(invoiceNum);
-        }
-        
-        // Actualizar UUID (FEL)
-        if (googleOCRData.uuid) {
-          setUuid(googleOCRData.uuid);
-        }
-        
-        // Actualizar moneda detectada
-        const detectedCurrency = googleOCRData.currency || googleOCRData.moneda;
-        if (detectedCurrency) {
-          const normalizedCurrency = detectedCurrency.toUpperCase();
-          // Validar que sea una moneda soportada
-          if (currencies.includes(normalizedCurrency)) {
-            setCurrency(normalizedCurrency);
-            console.log('💱 Moneda detectada y asignada:', normalizedCurrency);
-          } else {
-            console.log('⚠️ Moneda detectada no soportada:', detectedCurrency);
-          }
-        }
-        
-        // Llenar notas con info de la factura (proveedor, establecimiento, descripción de items)
-        const notesPartsOCR: string[] = [];
-        if (supplierValue) notesPartsOCR.push(supplierValue);
-        if (googleOCRData.establecimiento && googleOCRData.establecimiento !== supplierValue) notesPartsOCR.push(googleOCRData.establecimiento);
-        if (googleOCRData.descripcion) notesPartsOCR.push(googleOCRData.descripcion);
-        if (notesPartsOCR.length > 0) setNotes(notesPartsOCR.join(' | '));
-        
-        // Contar cuántos campos fueron extraídos exitosamente
-        let extractedFieldsCount = 0;
-        const totalFields = 9; // Total de campos importantes a extraer (agregado moneda)
-        const foundFields: string[] = [];
-        
-        if (nitEmisor) { extractedFieldsCount++; foundFields.push('NIT'); }
-        if (amountValue && cleanAmount(amountValue)) { extractedFieldsCount++; foundFields.push('Monto'); }
-        if (dateValue) { extractedFieldsCount++; foundFields.push('Fecha'); }
-        if (supplierValue) { extractedFieldsCount++; foundFields.push('Proveedor'); }
-        if (googleOCRData.serie) { extractedFieldsCount++; foundFields.push('Serie'); }
-        if (invoiceNum) { extractedFieldsCount++; foundFields.push('No. Factura'); }
-        if (googleOCRData.uuid) { extractedFieldsCount++; foundFields.push('UUID'); }
-        if (googleOCRData.establecimiento) { extractedFieldsCount++; foundFields.push('Establecimiento'); }
-        if (detectedCurrency) { extractedFieldsCount++; foundFields.push('Moneda'); }
-        
-        console.log(`📊 Google Vision OCR: ${extractedFieldsCount}/${totalFields} campos encontrados`);
-        console.log(`✅ Campos extraídos: ${foundFields.join(', ')}`);
-        
-        // Mensaje con información de campos encontrados
-        setShowMoreDetails(true);
-        Alert.alert(
-          '✅ Extracción Completada', 
-          `Los datos de la factura se han extraído exitosamente.\n\n` +
-          `📊 Campos encontrados: ${extractedFieldsCount}/${totalFields}\n` +
-          `✓ ${foundFields.join(', ')}\n\n` +
-          `Por favor, revisa que la información sea correcta.`
-        );
-        setIsLoading(false);
-        return; // Salir, datos ya extraídos
-      } else {
-        // Si Google Vision falla, intentar con método anterior (LLM)
-        console.log('⚠️ Google Vision OCR no disponible, intentando con LLM...');
-        const aiData = await extractWithAI(fullText);
-        
-        if (aiData) {
-          console.log('✅ IA (LLM): Datos extraídos exitosamente');
-          
-          // Actualizar NIT
-          if (aiData.nit) {
-            setVatNumber(aiData.nit);
-          }
-          
-          // Actualizar monto y recalcular IVA
-          const amountValue = aiData.total || aiData.amount || aiData.monto;
-          if (amountValue) {
-            const cleaned = cleanAmount(amountValue);
-            if (cleaned) {
-              console.log('💰 IA: Actualizando monto:', cleaned);
-              handleAmountChange(cleaned); // Recalcula IVA automáticamente
-            }
-          }
-          
-          // Actualizar proveedor
-          const supplierValue = aiData.supplier || aiData.proveedor;
-          if (supplierValue) {
-            setSupplier(supplierValue);
-          }
-          
-          // Actualizar fecha
-          const dateValue = aiData.fecha || aiData.date;
-          if (dateValue && typeof dateValue === 'string') {
-            const parsedDate = parseInvoiceDate(dateValue);
-            if (parsedDate) {
-              setDate(parsedDate);
-            }
-          }
-          
-          // Actualizar serie y número de factura
-          if (aiData.serie) setSerie(aiData.serie);
-          const invoiceNum = aiData.numero_factura || aiData.invoiceNumber;
-          if (invoiceNum) {
-            setNoinvoice(invoiceNum);
-          }
-          // Llenar notas con info de la factura (proveedor, establecimiento, descripción)
-          const supplierAI = aiData.supplier || aiData.proveedor;
-          const notesPartsAI: string[] = [];
-          if (supplierAI) notesPartsAI.push(supplierAI);
-          if (aiData.establecimiento && aiData.establecimiento !== supplierAI) notesPartsAI.push(aiData.establecimiento);
-          if (aiData.descripcion) notesPartsAI.push(aiData.descripcion);
-          if (notesPartsAI.length > 0) setNotes(notesPartsAI.join(' | '));
-          
-          setShowMoreDetails(true);
-          Alert.alert('✅ Extracción con IA', 'Datos extraídos exitosamente usando inteligencia artificial (método LLM)');
-          setIsLoading(false);
-          return; // Salir sin usar regex
-        } else {
-          console.log('⚠️ Todos los servicios de IA fallaron, usando método tradicional...');
-          Alert.alert('Usando método tradicional', 'Los servidores de IA no están disponibles, se usará el método de extracción local');
-        }
-      }
-    }
 
     // === INTENTO 2: EXTRACCIÓN TRADICIONAL (REGEX) ===
     console.log('📝 Usando extracción tradicional con Regex...');

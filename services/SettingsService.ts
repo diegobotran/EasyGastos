@@ -55,7 +55,6 @@ export const initDB = async (): Promise<void> => {
   
   return initPromise;
 };
-
 /**
  * Obtiene todas las configuraciones
  */
@@ -159,25 +158,4 @@ export const resetSettings = async (): Promise<void> => {
   }
   
   console.log("✅ Configuraciones restablecidas a valores por defecto");
-};
-
-/**
- * Obtiene la sociedad temporal configurada (para reportar gastos de otra sociedad)
- */
-export const getTemporarySociedad = async (): Promise<string | null> => {
-  const settings = await getSettings();
-  return settings.temporarySociedad;
-};
-
-/**
- * Establece la sociedad temporal (para reportar gastos de otra sociedad)
- * @param sociedad - Código de sociedad o null para usar la sociedad del usuario
- */
-export const setTemporarySociedad = async (sociedad: string | null): Promise<void> => {
-  await setSetting('temporarySociedad', sociedad);
-  if (sociedad) {
-    console.log(`✅ Sociedad temporal establecida: ${sociedad}`);
-  } else {
-    console.log(`✅ Sociedad temporal removida - usando sociedad del usuario`);
-  }
 };

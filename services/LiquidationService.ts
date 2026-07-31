@@ -821,7 +821,7 @@ export const generateCSVData = async (liquidationId: string, userId: string): Pr
     // Obtener datos del usuario para codigo_empleado y sociedad
     const user = await getUser();
     const codigoEmpleado = user?.employeeCode || '';
-    const sociedad = liquidation.sociedad || user?.sociedad || '';
+    const sociedad = liquidation.sociedad || '';
 
     const csvData = [];
 

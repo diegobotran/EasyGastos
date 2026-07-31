@@ -2,7 +2,7 @@ import { Category } from '../../models/Category';
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 import { useFocusEffect } from '@react-navigation/native';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Alert, FlatList, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useCategoryViewModel } from '../../hooks/useCategoryViewModel';
 import * as AuthService from '../../services/AuthService';
@@ -14,7 +14,6 @@ import * as AccountingCatalogService from '../../services/AccountingCatalogServi
 export default function CategoryScreen() {
   const { categories, isLoading, addCategory, removeCategory, updateCategory, countDraftExpensesUsingCategory, getDraftExpensesUsingCategory } = useCategoryViewModel();
   const [name, setName] = useState('');
-  const [defaultSociedad, setDefaultSociedad] = useState('');
   const [sociedad, setSociedad] = useState('');
   const [centro, setCentro] = useState('');
   const [cuenta, setCuenta] = useState('');
@@ -83,7 +82,7 @@ export default function CategoryScreen() {
 
   const resetForm = () => {
     setName('');
-    setSociedad(defaultSociedad);
+    setSociedad('');
     setCentro('');
     setCuenta('');
     setOrdenco('');
@@ -94,19 +93,6 @@ export default function CategoryScreen() {
     setEditingCategory(null);
     resetForm();
   };
-
-  useEffect(() => {
-    const loadUserSociedad = async () => {
-      const user = await AuthService.getLastLoggedInUser();
-      const defaultSociedad = user?.sociedad && sociedadOptions.some(item => item.codigo === user.sociedad && item.active)
-        ? user.sociedad
-        : '';
-      setDefaultSociedad(defaultSociedad);
-      setSociedad(defaultSociedad);
-    };
-
-    loadUserSociedad();
-  }, [sociedadOptions]);
 
   const validateActiveSelection = async () => {
     const result = await AccountingCatalogService.areActiveReferences({ sociedad, centro, cuenta, ordenco });

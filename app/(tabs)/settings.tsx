@@ -10,7 +10,6 @@ import * as ExpenseService from '../../services/ExpenseService';
 import * as UpdateService from '../../services/UpdateService';
 import * as SettingsService from '../../services/SettingsService';
 import { SETTINGS_CONSTRAINTS } from '../../models/Settings';
-import { SOCIEDADES } from '../../constants/Sociedades';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -30,8 +29,6 @@ export default function SettingsScreen() {
   const [adminPassword, setAdminPassword] = useState('');
   const [maxExpenseAmount, setMaxExpenseAmount] = useState('3500.00');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
-  const [userSociedad, setUserSociedad] = useState<string | null>(null);
-  const [temporarySociedad, setTemporarySociedad] = useState<string | null>(null);
   const [showResetPinModal, setShowResetPinModal] = useState(false);
   const [resetPinEmail, setResetPinEmail] = useState('');
   const [newResetPin, setNewResetPin] = useState('');
@@ -91,14 +88,6 @@ export default function SettingsScreen() {
       const maxAmount = await SettingsService.getMaxExpenseAmount();
       setMaxExpenseAmount(maxAmount.toFixed(2));
       
-      // Cargar sociedad del usuario
-      if (user) {
-        setUserSociedad(user.sociedad || null);
-      }
-      
-      // Cargar sociedad temporal configurada
-      const tempSociedad = await SettingsService.getTemporarySociedad();
-      setTemporarySociedad(tempSociedad);
     } catch (error) {
       console.error('Error cargando datos de usuario:', error);
     }
@@ -569,29 +558,6 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleSociedadChange = async (sociedad: string) => {
-    try {
-      const sociedadValue = sociedad === '' ? null : sociedad;
-      setTemporarySociedad(sociedadValue);
-      await SettingsService.setTemporarySociedad(sociedadValue);
-      
-      if (sociedadValue) {
-        Alert.alert(
-          '✅ Sociedad Temporal Configurada',
-          `Ahora reportarás gastos para la sociedad ${sociedadValue}.\n\nPuedes cambiarla en cualquier momento desde esta pantalla.`
-        );
-      } else {
-        Alert.alert(
-          '✅ Sociedad Restaurada',
-          `Volverás a reportar gastos con tu sociedad registrada${userSociedad ? ` (${userSociedad})` : ''}.`
-        );
-      }
-    } catch (error) {
-      console.error('Error al guardar sociedad temporal:', error);
-      Alert.alert('Error', 'No se pudo guardar la configuración de sociedad');
-    }
-  };
-
   const handleCheckUpdate = async () => {
     if (isCheckingUpdate) return;
     
@@ -900,56 +866,6 @@ export default function SettingsScreen() {
             </>
           )}
         </TouchableOpacity>
-      </View>
-
-      {/* SEPARADOR */}
-      <View style={styles.separator} />
-
-      {/* SECCIÓN: Sociedad para Reportar Gastos */}
-      <Text style={styles.sectionTitle}>🏢 Sociedad para Reportar Gastos</Text>
-      
-      <View style={styles.settingGroup}>
-        <Text style={styles.settingLabel}>Sociedad Registrada</Text>
-        <Text style={styles.settingValue}>
-          {userSociedad || 'No configurada'}
-        </Text>
-        
-        <Text style={[styles.settingLabel, { marginTop: 16 }]}>
-          Sociedad Temporal (Opcional)
-        </Text>
-        <Text style={styles.settingHint}>
-          Selecciona otra sociedad para reportar gastos temporalmente
-        </Text>
-        
-        <View style={styles.pickerContainer}>
-          <Ionicons name="business-outline" size={20} color="#64748b" style={{ marginRight: 10 }} />
-          <Picker
-            selectedValue={temporarySociedad || ''}
-            onValueChange={handleSociedadChange}
-            style={styles.picker}
-          >
-            <Picker.Item 
-              label={`Usar mi sociedad${userSociedad ? ` (${userSociedad})` : ''}`} 
-              value="" 
-            />
-            {SOCIEDADES.map((soc) => (
-              <Picker.Item 
-                key={soc.code} 
-                label={`${soc.label}${soc.code === userSociedad ? ' (Tu sociedad)' : ''}`} 
-                value={soc.code} 
-              />
-            ))}
-          </Picker>
-        </View>
-        
-        {temporarySociedad && temporarySociedad !== userSociedad && (
-          <View style={styles.warningBox}>
-            <Ionicons name="information-circle" size={20} color="#f59e0b" />
-            <Text style={styles.warningText}>
-              Los gastos se reportarán con la sociedad {temporarySociedad}
-            </Text>
-          </View>
-        )}
       </View>
 
       {/* SEPARADOR */}

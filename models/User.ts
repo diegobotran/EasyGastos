@@ -15,8 +15,6 @@ export interface User {
   employeeCode?: string;
   department?: string;
   managerEmail?: string;
-  sociedad?: string;
-  nitEmpresa?: string;
   isManager?: boolean;
   isAdmin?: boolean;
   pin?: string;

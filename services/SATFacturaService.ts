@@ -358,24 +358,6 @@ const buildValidationResultFromFactura = (
   };
 };
 
-export const buscarFacturaSAT = async (
-  nitEmisor: string,
-  numeroDTE: string
-): Promise<SATFactura | null> => {
-  try {
-    const nitLimpio = nitEmisor.replace(/[-\s]/g, '');
-    const data = await executeSATPost<SATFacturaResponse>('/api/sat/buscar-factura', {
-      nitEmisor: nitLimpio,
-      numeroDTE,
-    });
-
-    return data.encontrada && data.factura ? data.factura : null;
-  } catch (error) {
-    console.error('Verificador SAT: Error de conexión:', error);
-    return null;
-  }
-};
-
 export const formatearFechaSAT = (isoDate: string): string => {
   try {
     const date = new Date(isoDate);
@@ -385,29 +367,6 @@ export const formatearFechaSAT = (isoDate: string): string => {
     return `${day}/${month}/${year}`;
   } catch {
     return isoDate;
-  }
-};
-
-export const buscarFacturaPorNumero = async (
-  serie: string,
-  numeroDTE: string,
-  nitReceptor?: string
-): Promise<SATFactura | null> => {
-  try {
-    const body: { serie: string; numeroDTE: string; nitReceptor?: string } = {
-      serie,
-      numeroDTE,
-    };
-
-    if (nitReceptor) {
-      body.nitReceptor = nitReceptor;
-    }
-
-    const data = await executeSATPost<SATFacturaResponse>('/api/sat/buscar-por-numero', body);
-    return data.encontrada && data.factura ? data.factura : null;
-  } catch (error) {
-    console.error('Verificador SAT: Error de conexión:', error);
-    return null;
   }
 };
 

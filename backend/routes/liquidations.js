@@ -743,7 +743,7 @@ router.get('/:id/csv', authenticateToken, async (req, res) => {
     // Obtener datos del usuario para codigo_empleado y sociedad
     const user = await User.findOne({ email: liquidation.userId });
     const codigoEmpleado = user?.employeeCode || '';
-    const sociedad = liquidation.sociedad || user?.sociedad || '';
+    const sociedad = liquidation.sociedad || '';
 
     // Obtener los gastos de la liquidación
     const expenses = await Expense.find({ 

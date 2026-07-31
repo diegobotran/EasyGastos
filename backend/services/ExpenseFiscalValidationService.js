@@ -181,34 +181,45 @@ const validateAndNormalize = async expense => {
   if (!factura) {
     throw new ExpenseFiscalError('SAT_CORRECTIONS_REQUIRED', 'La evidencia SAT ya no puede resolverse. Consulta SAT nuevamente.');
   }
-  const expectedFingerprint = Fingerprint.build(expense);
-  if (expense.satValidationFingerprint !== expectedFingerprint) {
-    throw new ExpenseFiscalError('SAT_CORRECTIONS_REQUIRED', 'Los datos fiscales cambiaron después de consultar SAT.', {
-      expectedFingerprint
-    });
-  }
-
   const snapshot = SATInternalValidationService.buildSnapshot(factura);
+  const authoritativeSatFields = {
+    serie: snapshot.serie,
+    noinvoice: snapshot.numeroDTE,
+    uuid: snapshot.numeroAutorizacion,
+    vat_number: snapshot.nitEmisor,
+    receiver_vat_number: snapshot.idReceptor,
+    supplier: snapshot.nombreEmisor,
+    date: snapshot.fechaEmision,
+    amount: snapshot.granTotal,
+    currency: snapshot.moneda
+  };
+  const authoritativeExpense = { ...expense, ...authoritativeSatFields };
+  const currentFingerprint = Fingerprint.build(expense);
+  const authoritativeFingerprint = Fingerprint.build(authoritativeExpense);
+
   if (
-    SATInternalValidationService.normalizeNit(expense.receiver_vat_number) !==
-    SATInternalValidationService.normalizeNit(snapshot.idReceptor)
+    expense.fiscalValidationStage !== 'SAT_QUERY' &&
+    (
+      expense.satValidationFingerprint !== currentFingerprint ||
+      currentFingerprint !== authoritativeFingerprint
+    )
   ) {
     throw new ExpenseFiscalError(
       'SAT_CORRECTIONS_REQUIRED',
-      'El NIT del receptor cambió o no coincide con SAT. Consulta SAT nuevamente.',
-      { expectedReceiverNit: snapshot.idReceptor }
+      'Los datos fiscales cambiaron después de consultar SAT.',
+      { expectedFingerprint: authoritativeFingerprint }
     );
   }
   const validity = await InvoiceValidityService.validateWithActivePolicy(snapshot.fechaEmision);
   const validatedSatFields = {
+    ...authoritativeSatFields,
     satStatus: 'VALIDADO_SAT',
     satValidationCause: 'NINGUNA',
     satValidatedAt: expense.satValidatedAt || new Date().toISOString(),
     satValidationSource: 'SAT_INTERNO',
-    satValidationFingerprint: expectedFingerprint,
+    satValidationFingerprint: authoritativeFingerprint,
     satFacturaId: String(factura._id),
     satInvoiceSnapshot: snapshot,
-    receiver_vat_number: snapshot.idReceptor,
     imageValidationFingerprint: expense.imageValidationFingerprint || Fingerprint.normalize(expense.imageuri)
   };
 
@@ -258,10 +269,10 @@ const validateAndNormalize = async expense => {
     fiscalStatus: 'APTO_PARA_LIQUIDAR',
     satValidatedAt: expense.satValidatedAt || new Date().toISOString(),
     satValidationSource: 'SAT_INTERNO',
-    satValidationFingerprint: expectedFingerprint,
+    satValidationFingerprint: authoritativeFingerprint,
     satFacturaId: String(factura._id),
     satInvoiceSnapshot: snapshot,
-    receiver_vat_number: snapshot.idReceptor,
+    ...authoritativeSatFields,
     fiscalValidatedAt: new Date().toISOString(),
     fiscalValidityDaysApplied: validity.enabled ? validity.allowedDays : null,
     imageValidationFingerprint: expense.imageValidationFingerprint || Fingerprint.normalize(expense.imageuri)

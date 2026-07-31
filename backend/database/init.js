@@ -37,7 +37,7 @@ const userSchema = new mongoose.Schema({
   department: { type: String, default: null },
   managerEmail: { type: String, default: null },
   sociedad: { type: String, default: null }, // Código de sociedad (ej: "1000", "2000")
-  nitEmpresa: { type: String, default: null }, // NIT de la empresa/sociedad (para filtrar facturas SAT)
+  nitEmpresa: { type: String, default: null }, // Campo histÃ³rico dormido; no participa en decisiones fiscales.
   isManager: { type: Boolean, default: false },
   isAdmin: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },

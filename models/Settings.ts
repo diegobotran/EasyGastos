@@ -4,14 +4,12 @@
 
 export interface AppSettings {
   maxExpenseAmount: number;  // Monto máximo permitido por gasto individual (default: 3500)
-  temporarySociedad: string | null;  // Sociedad temporal para reportar gastos
   // Futuras configuraciones pueden agregarse aquí
 }
 
 // Valores por defecto
 export const DEFAULT_SETTINGS: AppSettings = {
   maxExpenseAmount: 3500.00,
-  temporarySociedad: null,
 };
 
 // Validaciones

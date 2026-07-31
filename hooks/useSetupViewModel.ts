@@ -24,7 +24,6 @@ export const useSetupViewModel = () => {
   const [confirmPin, setConfirmPin] = useState('');
   const [confirmEmail, setConfirmEmail] = useState('');
   const [lifnr, setLifnr] = useState('');
-  const [sociedad, setSociedad] = useState('');
   const [employeeCode, setEmployeeCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +34,7 @@ export const useSetupViewModel = () => {
   
   const handleSaveProfile = async () => {
     // VALIDACIÓN 1: Campos obligatorios
-    if (!profile.firstName || !profile.lastName || !profile.email || !confirmEmail || !pin || !confirmPin || !lifnr || !sociedad || !employeeCode) {
+    if (!profile.firstName || !profile.lastName || !profile.email || !confirmEmail || !pin || !confirmPin || !lifnr || !employeeCode) {
       setError("Por favor, llene todos los campos.");
       return;
     }
@@ -98,7 +97,6 @@ export const useSetupViewModel = () => {
         employeeCode: employeeCode,
         department: '',
         managerEmail: '',
-        sociedad: sociedad,
         needsSync: true,
         lastSync: Date.now()
       };
@@ -233,7 +231,6 @@ export const useSetupViewModel = () => {
     confirmPin,
     confirmEmail,
     lifnr,
-    sociedad,
     employeeCode,
     isLoading,
     error,
@@ -242,7 +239,6 @@ export const useSetupViewModel = () => {
     setConfirmPin,
     setConfirmEmail,
     setLifnr,
-    setSociedad,
     setEmployeeCode,
     handleSaveProfile,
   };

@@ -275,7 +275,6 @@ export class BackendSyncService {
         lifnr: user.lifnr,
         employeeCode: user.employeeCode,
         department: user.department,
-        sociedad: user.sociedad,
         pin: userPIN,
       };
       console.log(

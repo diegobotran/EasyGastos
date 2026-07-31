@@ -89,6 +89,53 @@ test('un estado VALIDADO_SAT forjado por el cliente es rechazado', async () => {
   }
 });
 
+test('SAT_QUERY construye el fingerprint desde el snapshot autoritativo', async () => {
+  const originalFindOne = SatFactura.findOne;
+  const originalValidity = Validity.validateWithActivePolicy;
+  try {
+    const factura = {
+      _id: '507f1f77bcf86cd799439011',
+      serie: 'A',
+      numeroDTE: '1',
+      numeroAutorizacion: 'U',
+      nitEmisor: '123',
+      nombreEmisor: 'Proveedor SAT',
+      idReceptor: '792500',
+      nombreReceptor: 'Receptor',
+      fechaEmision: '2026-07-21',
+      granTotal: 10,
+      moneda: 'GTQ',
+      iva: 1
+    };
+    SatFactura.findOne = () => ({ sort: () => ({ lean: async () => factura }) });
+    Validity.validateWithActivePolicy = async () => ({
+      enabled: true, valid: true, elapsedDays: 9, allowedDays: 55
+    });
+    const result = await ExpenseFiscal.validateAndNormalize({
+      fiscalValidationStage: 'SAT_QUERY',
+      status: 'BORRADOR',
+      satStatus: 'VALIDADO_SAT',
+      satValidationFingerprint: 'FINGERPRINT_CLIENTE_DIVERGENTE',
+      serie: 'A',
+      noinvoice: '1',
+      uuid: 'U',
+      vat_number: '123',
+      receiver_vat_number: '792500',
+      supplier: 'Proveedor OCR',
+      date: '2026-07-21',
+      amount: 10,
+      currency: 'GTQ',
+      imageuri: 'file://factura.jpg'
+    });
+    assert.equal(result.supplier, 'Proveedor SAT');
+    assert.equal(result.satValidationFingerprint, Fingerprint.build(result));
+    assert.equal(result.satStatus, 'VALIDADO_SAT');
+  } finally {
+    SatFactura.findOne = originalFindOne;
+    Validity.validateWithActivePolicy = originalValidity;
+  }
+});
+
 test('un borrador completo con NIT receptor de otra sociedad no puede guardarse', async () => {
   const originalCatalogValidation = CatalogService.assertActiveReferences;
   const originalFindOne = SatFactura.findOne;
@@ -358,12 +405,25 @@ test('factura encontrada pero vencida conserva VALIDADO_SAT en borrador', async 
 
 test('la extracción remota queda desactivada y las descargas conservan UUID', () => {
   const mobileSource = fs.readFileSync(path.join(__dirname, '../../../app/add-expense.tsx'), 'utf8');
+  const backendConfigSource = fs.readFileSync(path.join(__dirname, '../../../app/backend-config.tsx'), 'utf8');
+  const setupSource = fs.readFileSync(path.join(__dirname, '../../../app/setup.tsx'), 'utf8');
+  const expensesSource = fs.readFileSync(path.join(__dirname, '../../../app/(tabs)/expenses.tsx'), 'utf8');
   const expenseRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/expenses.js'), 'utf8');
+  const satRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/sat.js'), 'utf8');
+  const userRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/users.js'), 'utf8');
   const syncRouteSource = fs.readFileSync(path.join(__dirname, '../../routes/sync.js'), 'utf8');
-  assert.match(mobileSource, /const useAIExtraction = false/);
+  assert.doesNotMatch(mobileSource, /AIExtractionService|extractWithGoogleVisionOCR|extractWithAI|useAIExtraction/);
+  assert.doesNotMatch(backendConfigSource, /google_ocr_server_url|google_ocr_api_key|Google Vision/);
+  assert.match(mobileSource, /preprocessImageForOCR/);
   assert.doesNotMatch(mobileSource, /¿Desea continuar y crear un gasto duplicado/);
   assert.match(expenseRouteSource, /router\.post\('\/check-duplicate'/);
   assert.match(expenseRouteSource, /ExpenseDuplicateService\.findActiveDuplicate\(expenseData\)/);
   assert.match(expenseRouteSource, /uuid: expense\.uuid/);
   assert.match(syncRouteSource, /uuid: expense\.uuid/);
+  assert.doesNotMatch(setupSource, /sociedad/i);
+  assert.match(expensesSource, /AccountingCatalogService\.getActiveSociedades/);
+  assert.equal((userRouteSource.match(/router\.post\('\/login'/g) || []).length, 1);
+  assert.doesNotMatch(userRouteSource, /sociedad: user\.sociedad|nitEmpresa: user\.nitEmpresa/);
+  assert.match(satRouteSource, /res\.set\('Deprecation', 'true'\)/);
+  assert.doesNotMatch(satRouteSource, /req\.user\.nitEmpresa/);
 });

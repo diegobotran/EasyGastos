@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
+import { useFocusEffect } from '@react-navigation/native';
 import { Link, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,7 +18,8 @@ import { Expense, getExpenseStatusText, getExpenseStatusColor } from '../../mode
 import * as AuthService from '../../services/AuthService';
 import { createLiquidation } from '../../services/LiquidationService';
 import { formatDateToSpanish } from '../../utils/dateUtils';
-import { SOCIEDADES } from '../../constants/Sociedades';
+import { AccountingCatalogOption } from '../../models/AccountingCatalog';
+import * as AccountingCatalogService from '../../services/AccountingCatalogService';
 
 const LIQUIDATION_CURRENCIES = ['GTQ', 'USD', 'EUR'];
 
@@ -214,7 +216,12 @@ export default function ExpensesScreen() {
   const [selectedExpenseIds, setSelectedExpenseIds] = useState<string[]>([]); // Selected expenses for liquidation
   const [selectedSociedad, setSelectedSociedad] = useState('');
   const [selectedCurrency, setSelectedCurrency] = useState('');
+  const [sociedadOptions, setSociedadOptions] = useState<AccountingCatalogOption[]>([]);
   const router = useRouter();
+
+  useFocusEffect(useCallback(() => {
+    void AccountingCatalogService.getActiveSociedades().then(setSociedadOptions);
+  }, []));
 
   const filteredExpenses = expenses.filter(expense => {
     // Filtrar por búsqueda (descripción, proveedor, número de factura, fechas)
@@ -256,7 +263,7 @@ export default function ExpensesScreen() {
       try {
         const createdDate = formatDateToSpanish(new Date(expense.createdAt).toISOString().split('T')[0]);
         matchesCreatedDate = createdDate.includes(query);
-      } catch (e) {
+      } catch {
         matchesCreatedDate = false;
       }
     }
@@ -286,14 +293,7 @@ export default function ExpensesScreen() {
     setFilterStatus(value);
   };
 
-  const handleToggleLiquidationMode = async () => {
-    if (!liquidationMode) {
-      const user = await AuthService.getLastLoggedInUser();
-      if (user?.sociedad && !selectedSociedad) {
-        setSelectedSociedad(user.sociedad);
-      }
-    }
-
+  const handleToggleLiquidationMode = () => {
     setLiquidationMode(!liquidationMode);
     setSelectedExpenseIds([]); // Limpiar selección al cambiar de modo
     if (liquidationMode) {
@@ -467,8 +467,8 @@ export default function ExpensesScreen() {
                 style={styles.liquidationPicker}
               >
                 <Picker.Item label="Seleccionar sociedad" value="" />
-                {SOCIEDADES.map((sociedad) => (
-                  <Picker.Item key={sociedad.code} label={sociedad.label} value={sociedad.code} />
+                {sociedadOptions.map((sociedad) => (
+                  <Picker.Item key={sociedad.codigo} label={sociedad.label} value={sociedad.codigo} />
                 ))}
               </Picker>
             </View>

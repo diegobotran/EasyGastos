@@ -1,8 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import { 
   ActivityIndicator, 
-  Alert, 
   KeyboardAvoidingView,
   Platform,
   ScrollView, 
@@ -13,12 +11,9 @@ import {
   View 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Picker } from '@react-native-picker/picker';
 import { useSetupViewModel } from '../hooks/useSetupViewModel';
-import { SOCIEDADES } from '../constants/Sociedades';
 
 const SetupScreen = () => {
-  const router = useRouter();
   const viewModel = useSetupViewModel();
 
   return (
@@ -93,27 +88,6 @@ const SetupScreen = () => {
               autoCapitalize="characters"
               editable={!viewModel.isLoading}
             />
-          </View>
-        </View>
-
-        {/* Sección de Sociedad */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Sociedad</Text>
-          <Text style={styles.sectionSubtitle}>Selecciona tu código de sociedad</Text>
-          
-          <View style={styles.pickerContainer}>
-            <Ionicons name="business-outline" size={20} color="#64748b" style={styles.inputIcon} />
-            <Picker
-              selectedValue={viewModel.sociedad}
-              onValueChange={(itemValue) => viewModel.setSociedad(itemValue)}
-              style={styles.picker}
-              enabled={!viewModel.isLoading}
-            >
-              <Picker.Item label="Selecciona una sociedad..." value="" />
-              {SOCIEDADES.map((soc) => (
-                <Picker.Item key={soc.code} label={soc.label} value={soc.code} />
-              ))}
-            </Picker>
           </View>
         </View>
 

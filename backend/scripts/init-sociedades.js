@@ -27,7 +27,7 @@ const Sociedad = require('../models/Sociedad');
 // Configuración de MongoDB
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/easygastos';
 
-// Datos de sociedades (sincronizados con constants/Sociedades.ts)
+// Datos histÃ³ricos para la inicializaciÃ³n administrativa de sociedades.
 const SOCIEDADES_DATA = [
   { codigo: '500', nit: '46210555', nombre: 'Sociedad 500' },
   { codigo: '510', nit: '47324929', nombre: 'Sociedad 510' },

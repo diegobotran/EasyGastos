@@ -39,7 +39,7 @@ EasyGastos digitaliza el ciclo de caja chica y liquidación de gastos. El colabo
 Los objetivos principales son:
 
 - Registrar gastos con imagen o documento de respaldo.
-- Reducir la captura manual mediante escaneo, OCR y extracción asistida por IA.
+- Reducir la captura manual mediante escaneo y OCR local.
 - Mantener al usuario como responsable final de los campos críticos.
 - Clasificar gastos con sociedad, centro, cuenta contable, orden CO y categoría.
 - Trabajar con datos locales en el dispositivo y sincronizarlos con el servidor.
@@ -64,7 +64,7 @@ Los objetivos principales son:
 
 Los componentes no comparten un único proceso de instalación o compilación. Cada aplicación conserva su propio `package.json` y `package-lock.json`.
 
-Existe una copia de `EasyGastosBackoffice/` dentro de `EasyGastosMobile/EasyGastosBackoffice/`. Los archivos principales comparados son idénticos al momento de esta revisión. Para evitar divergencias, este documento considera `EasyGastosBackoffice/` en la raíz como la copia canónica y recomienda eliminar o automatizar la sincronización de la copia anidada después de confirmar el flujo de despliegue.
+El backoffice canónico se encuentra en `EasyGastosMobile/EasyGastosBackoffice/`, dentro del mismo repositorio que la app y el backend.
 
 ## Arquitectura
 
@@ -79,7 +79,7 @@ flowchart LR
     B --> F[Uploads / APK]
     B -->|Consulta interna| S[(Facturas SAT importadas)]
     B -->|HTTP con autenticación| SAP[API de integración SAP]
-    M --> OCR[ML Kit / servicios OCR e IA]
+    M --> OCR[ML Kit local]
 ```
 
 ### Flujo técnico general
@@ -89,6 +89,8 @@ flowchart LR
 3. La app inicializa SQLite y conserva localmente usuario, configuración, categorías, gastos, liquidaciones, catálogos e historial de chat.
 4. Las operaciones locales se marcan para sincronización.
 5. `BackendSyncService` sube cambios y descarga el estado consolidado del servidor.
+
+La sociedad no forma parte del registro, login ni perfil del usuario. Para operaciones nuevas, Sociedad–NIT, Centro, Cuenta y Orden CO se obtienen exclusivamente de los catálogos oficiales administrados en el backoffice y sincronizados en la caché móvil. Los campos históricos `sociedad` y `nitEmpresa` pueden permanecer en documentos antiguos de MongoDB, pero el backend y la app no los usan para tomar decisiones fiscales o contables.
 6. El backend valida identidad, permisos, estados, reglas fiscales y relaciones manager–empleado.
 7. MongoDB conserva la versión compartida de los registros.
 8. El backoffice mantiene los catálogos maestros que la app descarga y cachea.
@@ -187,12 +189,11 @@ La documentación original del MVP definía inicialmente una exportación estruc
 - Notas, comentarios de aprobación y motivo de anulación.
 - Estadísticas por usuario.
 
-### OCR, IA y asistencia conversacional
+### OCR local y asistencia conversacional
 
 - OCR local mediante ML Kit.
 - Procesamiento y manipulación de imágenes.
-- Extracción mediante servicios externos configurados en los servicios móviles.
-- Método tradicional de respaldo cuando el servicio de IA no está disponible.
+- Extracción mediante reglas locales; Google Vision y los servicios remotos de extracción no participan en captura.
 - Chat de asistencia para gastos.
 - Historial local de conversaciones y sincronización por lotes con el backend.
 
@@ -397,7 +398,7 @@ La documentación funcional utiliza además los nombres Borrador, BorradorRechaz
 | `categories` | Categorías personales y combinación contable |
 | `expense-chat` / `chat-history` | Asistente e historial |
 | `settings` | Perfil, PIN, sincronización y preferencias |
-| `backend-config` | URL del backend y configuración de servicios OCR |
+| `backend-config` | URL del backend |
 
 ### Servicios principales
 
@@ -411,7 +412,7 @@ La documentación funcional utiliza además los nombres Borrador, BorradorRechaz
 | `BackendSyncService` | Registro, login y sincronización integral |
 | `SATFacturaService` | Consulta SAT interna |
 | `ExpenseFiscalValidationService` | Evaluación fiscal del gasto |
-| `AIExtractionService` / `OCRUtils` | Extracción asistida |
+| `OCRUtils` | Preprocesamiento y extracción OCR local |
 | `ChatHistoryService` / `ChatHistorySyncService` | Historial conversacional |
 | `ExportService` | Exportación y compartición |
 | `UpdateService` | Versiones y APK |
@@ -623,7 +624,7 @@ SAP_EA_DOCUMENT_PASSWORD=<secreto>
 - Dispositivo físico: URL HTTPS o IP accesible dentro de la misma red/VPN.
 - Producción: dominio HTTPS administrado por infraestructura.
 
-Actualmente también existen endpoints externos de OCR/IA definidos en servicios móviles. Deben centralizarse por ambiente y sus API keys deben guardarse con un mecanismo seguro, no en código ni AsyncStorage sin protección.
+La captura fiscal no configura ni consume endpoints externos de OCR/IA. La pantalla de configuración administra únicamente la URL del backend.
 
 ### Backoffice
 
@@ -861,7 +862,7 @@ Antes de distribuir:
 
 - configure un keystore de producción externo al repositorio;
 - ajuste `version` y `versionCode`;
-- confirme URLs de backend y OCR;
+- confirme la URL del backend;
 - pruebe permisos, red y apertura de evidencia;
 - copie el APK aprobado a `backend/apks/` solo mediante el procedimiento de publicación controlado.
 
@@ -890,6 +891,24 @@ pm2 logs easygastos-backend
 No use sin revisión los secretos de ejemplo contenidos en la configuración PM2. Se recomienda que `ecosystem.config.js` no contenga credenciales y que PM2 reciba las variables desde un archivo protegido o un gestor de secretos.
 
 El procedimiento manual y los hallazgos de EC2 están documentados en `plans/mvp-sap-backend-ec2-despliegue-manual.md`.
+
+### Orden de actualización MVP2 EP-01
+
+1. Actualizar el backend conservando el `.env`, `uploads` y `logs` del servidor.
+2. Instalar únicamente dependencias de producción y reiniciar `easygastos-backend` con PM2.
+3. Verificar `/health` primero en `localhost:3000` y después a través de Nginx.
+4. Compilar `EasyGastosBackoffice` con la URL pública de la API y publicar únicamente su carpeta `dist/` en el directorio estático configurado en Nginx.
+5. Validar login administrativo y lectura de los cinco catálogos.
+6. Generar y distribuir la APK solo después de aprobar backend y backoffice.
+
+PM2 administra el proceso Node.js del backend; Nginx sirve los archivos estáticos del backoffice y actúa como punto público de entrada. No se debe iniciar el backoffice de producción mediante `vite preview`.
+
+### Reversa
+
+- Backend: restaurar la versión anterior del directorio publicado, ejecutar `npm install --omit=dev`, reiniciar PM2 y comprobar `/health`.
+- Backoffice: restaurar la carpeta `dist/` anterior y recargar Nginx; no requiere PM2.
+- Móvil: conservar disponible la APK aprobada anterior hasta completar la validación de la nueva.
+- Datos: las migraciones de EP-01 no se revierten eliminando colecciones. Cualquier reversa de datos debe ejecutarse desde el respaldo administrado por infraestructura.
 
 ### Base de datos
 
@@ -921,8 +940,7 @@ EasyGastos/
 │   ├── assets/                  # Imágenes y fuentes
 │   ├── android/                 # Proyecto nativo Android
 │   ├── backend/                 # API Express
-│   └── EasyGastosBackoffice/    # Copia anidada del backoffice
-├── EasyGastosBackoffice/        # Backoffice canónico
+│   └── EasyGastosBackoffice/    # Backoffice canónico
 ├── documentacion/               # Especificaciones y evidencias
 ├── plans/                       # Roadmap, acuerdos y bitácoras
 ├── pruebas unitarias/           # Escenarios YAML móviles
@@ -973,7 +991,7 @@ EasyGastos/
 - Restringir CORS en producción.
 - Migrar todo tráfico a HTTPS.
 - Retirar IP y URLs de servicios externas hardcodeadas.
-- Gestionar credenciales SAP/OCR mediante secretos del ambiente.
+- Gestionar credenciales SAP y de servicios externos mediante secretos del ambiente.
 - Usar firma Android de producción y rotación segura de llaves.
 - Revisar almacenamiento de PIN y asegurar que siempre se persista con hash adecuado.
 - Definir retención, cifrado y eliminación de comprobantes y datos fiscales.
